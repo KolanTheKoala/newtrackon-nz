@@ -5,7 +5,20 @@ info:
   description: |
     API for retrieving and submitting trackers to newTrackon (Wellington NZ mirror).
 
-    **Which list should I use?**
+    **Just want a tracker list? Pick where you are and copy the link into your torrent client:**
+
+    | You are in | For example | Copy this link |
+    |---|---|---|
+    | Asia or Oceania | China, Japan, Korea, India, Singapore, Australia, New Zealand | [https://newtrackon.co.nz/api/clean?fast_from=asia-pacific](https://newtrackon.co.nz/api/clean?fast_from=asia-pacific) |
+    | Europe, the Middle East or Africa | UK, Germany, Russia, Turkey, UAE, South Africa | [https://newtrackon.co.nz/api/clean?fast_from=europe](https://newtrackon.co.nz/api/clean?fast_from=europe) |
+    | North, Central or South America | USA, Canada, Mexico, Brazil, Chile | [https://newtrackon.co.nz/api/clean?fast_from=americas](https://newtrackon.co.nz/api/clean?fast_from=americas) |
+    | Anywhere / not sure | | [https://newtrackon.co.nz/api/clean](https://newtrackon.co.nz/api/clean) |
+
+    Each link gives the recommended clean list, limited to trackers that answer quickly from your part of the world.
+    Most torrent clients (qBittorrent, Transmission, Deluge...) can load trackers from a link like this, or you can
+    open it and paste the list. The [List page](https://newtrackon.co.nz/list) does the same with buttons.
+
+    **Which list should I use?** (for everyone else)
 
     | Endpoint | Status filter | Score | Min. days listed | One per operator | Use it for |
     |---|---|---|---|---|---|
