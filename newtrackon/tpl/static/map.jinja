@@ -1,0 +1,27 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"
+            integrity="sha512-vc58qvvBdrDR4etbxMdlTt4GBQk1qjvyORR2nrsPsFPyrs+/u5c3+1Ct6upOgdZoIl7eq6k3a1UPDSNAQi/32A=="
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"
+            integrity="sha512-F6LRbyw1ZdEE2Lfw8JXPeqsPkl4gl3ZdjxfQ+TA9CwJuZTB+N5DANb0qQtENki+X3IMAVJnRsc3NTgBH3zcorA=="
+            crossorigin="anonymous"></script>
+    <style>
+    #nt-map { position: relative; background: #0b1030; border-radius: 6px; overflow: hidden; }
+    #nt-map-tip { position: absolute; display: none; max-width: 280px; padding: 8px 10px; font-size: .85rem; line-height: 1.35;
+                  background: rgba(10, 14, 40, .95); border: 1px solid #3a4a8a; border-radius: 6px; color: #e8ecff; z-index: 5; word-break: break-all; }
+    #nt-map-tip a { color: #8ab4ff; }
+    </style>
+{% endblock head %}
+{% block body %}
+    <div class="container-fluid px-4">
+        <h2>Tracker map</h2>
+        <p class="mb-2"><span id="nt-map-count">Loading&hellip;</span> &middot; one flag per tracker, outlined
+            <span style="color:#00e676">green</span> if Up/Good, <span style="color:#ff9100">orange</span> if up with problems,
+            <span style="color:#9e9e9e">grey</span> if down. Hover a flag for details, click it to open the tracker in the table.
+            Scroll or pinch to zoom, drag to move.</p>
+        <div id="nt-map"><div id="nt-map-tip"></div></div>
+    </div>
+    <script src="/static/js/map.js"></script>
+{% endblock %}
+{% set title = "Tracker map - newTrackon" %}

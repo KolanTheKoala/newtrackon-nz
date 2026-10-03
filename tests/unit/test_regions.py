@@ -273,3 +273,21 @@ class TestQualityOptions:
 
     def test_list_page_shows_api_link(self, flask_client: FlaskClient) -> None:
         assert 'id="api-url"' in flask_client.get("/list").get_data(as_text=True)
+
+
+@pytest.mark.usefixtures("region_db")
+class TestMap:
+    def test_map_page_and_data(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/map").get_data(as_text=True)
+        assert 'id="nt-map"' in html and "/static/js/map.js" in html
+        for f in ("/static/js/map.js", "/static/data/countries-110m.json", "/static/data/iso-numeric.json"):
+            assert flask_client.get(f).status_code == 200, f
+        iso = flask_client.get("/static/data/iso-numeric.json").get_json()
+        assert iso["nz"] == "554" and iso["cn"] == "156" and all(c in iso for c in LIVE_CODES)
+
+    def test_details_country_codes(self, flask_client: FlaskClient) -> None:
+        d = {t["url"]: t for t in flask_client.get("/api/details").get_json()}
+        assert d["udp://akl.example:1/announce"]["country_codes"] == ["nz"]
+
+    def test_nav_has_map(self, flask_client: FlaskClient) -> None:
+        assert 'href="/map"' in flask_client.get("/").get_data(as_text=True)

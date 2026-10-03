@@ -264,6 +264,11 @@ def api_multiple():
     return resp
 
 
+@app.route("/map")
+def tracker_map() -> str:
+    return render_template("/static/map.jinja", active="Map")
+
+
 @app.route("/about")
 def about():
     return render_template("/static/about.jinja", active="About")

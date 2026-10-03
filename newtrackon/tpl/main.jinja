@@ -283,6 +283,8 @@ fmt();setInterval(fmt,1000)})();</script>
             wrap.children('.dt-layout-row').first().hide();
             function count() { $('#nt-count').text(dt.rows({search: 'applied'}).count() + ' of ' + dt.rows().count() + ' shown'); }
             dt.on('draw', count);
+            var hq = /^#q=(.+)/.exec(location.hash);
+            if (hq) { var q = decodeURIComponent(hq[1]); dt.search(q); bar.find('.dt-search input').val(q); }
             dt.draw();
         });
         </script>

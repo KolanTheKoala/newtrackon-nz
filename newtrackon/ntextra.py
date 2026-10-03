@@ -95,6 +95,7 @@ def _detail(t):
         "latency_ms": t.latency if up else None,
         "latency_by_region_ms": T.REGION_LAT.get(t.url) or {},
         "regions": sorted(regions_of(t.country_codes)),
+        "country_codes": list(dict.fromkeys(c.lower() for c in (t.country_codes or []) if c)),
         "families": _fams(t),
         "peer_test": {"latest": {True: "pass", False: "fail", None: "n/a"}[T.PEER_OK.get(t.url)] if up else "n/a",
                       "passed": sum(ph), "of": len(ph)},
