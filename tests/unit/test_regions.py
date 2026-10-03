@@ -52,10 +52,19 @@ class TestParse:
         f = R.parse_region_filter({"region": "Europe, asia-pacific"})
         assert f.located_in == {"europe", "asia-pacific"} and f.active
 
-    @pytest.mark.parametrize("args", [{"region": "oceania"}, {"region": "europe,mars"}, {"fast_from": "asia"}])
+    @pytest.mark.parametrize("args", [{"region": "oceania"}, {"region": "europe,mars"}, {"region": "asia"}])
     def test_unknown_region_rejected_with_valid_names(self, args: dict[str, str]) -> None:
         with pytest.raises(ValueError, match="Valid regions: americas, europe, asia-pacific"):
             R.parse_region_filter(args)
+
+    @pytest.mark.parametrize("value", ["mars", "north-america", "apac"])
+    def test_unknown_fast_from_rejected_with_valid_names(self, value: str) -> None:
+        with pytest.raises(ValueError, match="Valid: americas, europe, asia, oceania"):
+            R.parse_region_filter({"fast_from": value})
+
+    @pytest.mark.parametrize("value", ["americas", "europe", "asia", "oceania", "asia-pacific"])
+    def test_fast_from_values(self, value: str) -> None:
+        assert R.parse_region_filter({"fast_from": value}).fast_from == value
 
     @pytest.mark.parametrize("ms", ["abc", "0", "2001", "-5"])
     def test_bad_fast_from_ms(self, ms: str) -> None:
@@ -83,7 +92,15 @@ class TestMatches:
         assert f.matches("udp://ams.example:1/announce", [], LAT)
         assert not f.matches("udp://sgp.example:1/announce", [], LAT)  # 160 ms
 
-    def test_fast_from_asia_pacific_needs_both_points_250_default(self) -> None:
+    def test_fast_from_asia_and_oceania_are_separate(self) -> None:
+        asia, oce = R.parse_region_filter({"fast_from": "asia"}), R.parse_region_filter({"fast_from": "oceania"})
+        assert asia.matches("udp://sgp.example:1/announce", [], LAT) and oce.matches("udp://sgp.example:1/announce", [], LAT)
+        assert asia.matches("udp://akl.example:1/announce", [], LAT)  # 120 ms from Asia: under 150
+        assert not asia.matches("udp://ams.example:1/announce", [], LAT)  # 160 ms from Asia
+        assert oce.matches("udp://akl.example:1/announce", [], LAT)  # 3 ms from Oceania
+        assert not oce.matches("udp://ams.example:1/announce", [], LAT)  # 280 ms from Oceania
+
+    def test_legacy_asia_pacific_needs_both_points_250_default(self) -> None:
         f = R.parse_region_filter({"fast_from": "asia-pacific"})
         assert f.matches("udp://sgp.example:1/announce", [], LAT)  # Asia 5, Oceania 140
         assert f.matches("udp://akl.example:1/announce", [], LAT)  # Asia 120, Oceania 3

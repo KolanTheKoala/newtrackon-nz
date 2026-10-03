@@ -3,7 +3,7 @@
 Regions follow how the internet is wired rather than continents: the Middle East, Africa, Russia and Central Asia
 mostly exchange traffic in Europe (Marseille, Frankfurt, London, Amsterdam, Stockholm); South and Central America
 mostly reach the world through North America (Miami); Asia and Oceania share their hubs (Singapore, Hong Kong,
-Tokyo, Sydney). Latency is measured from probe points in four places, grouped into the same three regions.
+Tokyo, Sydney). "Fast from" uses the four places latency is measured from: americas, europe, asia, oceania.
 """
 
 from __future__ import annotations
@@ -17,17 +17,26 @@ REGIONS: dict[str, str] = {
     "asia-pacific": "Asia-Pacific",
 }
 
-# Latency probe points per region (keys of the per-tracker region latency data). "Fast from" a region means fast
-# from every probe point in it, so Asia-Pacific needs a fast answer from both Asia and Oceania.
+# "Fast from" uses the places latency is actually measured from (keys of the per-tracker region latency data).
+# Asia and Oceania are separate here: no tracker is close to both (NZ to Asia is 250+ ms), so one combined speed
+# list would either leave out NZ trackers or hand Asian users trackers that are slow for them.
+FAST_FROM: dict[str, str] = {
+    "americas": "Americas",
+    "europe": "Europe, Middle East & Africa",
+    "asia": "Asia",
+    "oceania": "Oceania",
+}
 MEASURED_FROM: dict[str, tuple[str, ...]] = {
     "americas": ("North America",),
     "europe": ("Europe",),
-    "asia-pacific": ("Asia", "Oceania"),
+    "asia": ("Asia",),
+    "oceania": ("Oceania",),
+    "asia-pacific": ("Asia", "Oceania"),  # legacy (first version): fast from both, 250 ms; kept so old links still work
 }
 
 # Default "fast" limit per region. Asia-Pacific spans the Pacific (Singapore-NZ ~130 ms, Tokyo-NZ ~170 ms), so almost
 # nothing is under 150 ms from both its probe points; 250 ms keeps the list useful. Override with fast_from_ms=.
-DEFAULT_FAST_FROM_MS: dict[str, int] = {"americas": 150, "europe": 150, "asia-pacific": 250}
+DEFAULT_FAST_FROM_MS: dict[str, int] = {"americas": 150, "europe": 150, "asia": 150, "oceania": 150, "asia-pacific": 250}
 
 _AMERICAS = """ag ai ar aw bb bl bm bo bq br bs bz ca cl co cr cu cw dm do ec fk gd gf gp gs gt gy hn ht jm kn ky lc
     mf mq ms mx ni pa pe pm pr py sr sv sx tc tt um us uy vc ve vg vi"""
@@ -96,8 +105,8 @@ def parse_region_filter(args: Mapping[str, str]) -> RegionFilter:
             raise ValueError(f"Unknown region '{part.strip()}'. Valid regions: {_valid()}")
         located.add(name)
     fast = (args.get("fast_from") or "").strip().lower() or None
-    if fast is not None and fast not in REGIONS:
-        raise ValueError(f"Unknown fast_from region '{args.get('fast_from', '').strip()}'. Valid regions: {_valid()}")
+    if fast is not None and fast not in MEASURED_FROM:
+        raise ValueError(f"Unknown fast_from '{args.get('fast_from', '').strip()}'. Valid: {', '.join(FAST_FROM)}")
     raw_ms = (args.get("fast_from_ms") or "").strip()
     try:
         ms = int(raw_ms) if raw_ms else None

@@ -60,7 +60,9 @@
         var eu = /^Asia\/(Dubai|Muscat|Riyadh|Qatar|Bahrain|Kuwait|Baghdad|Tehran|Jerusalem|Tel_Aviv|Gaza|Hebron|Amman|Beirut|Damascus|Aden|Nicosia|Famagusta|Istanbul|Tbilisi|Yerevan|Baku|Almaty|Qostanay|Qyzylorda|Aqtobe|Aqtau|Atyrau|Oral|Tashkent|Samarkand|Bishkek|Dushanbe|Ashgabat|Yekaterinburg|Omsk|Novosibirsk|Barnaul|Tomsk|Novokuznetsk|Krasnoyarsk|Irkutsk|Chita|Yakutsk|Khandyga|Vladivostok|Ust-Nera|Magadan|Sakhalin|Srednekolymsk|Kamchatka|Anadyr)$/;
         if (eu.test(tz) || /^Indian\/(Mauritius|Reunion|Mayotte|Comoro|Antananarivo|Mahe)$/.test(tz)) { return 'europe'; }
         if (/^Atlantic\/(Bermuda|Stanley|South_Georgia)$/.test(tz)) { return 'americas'; }
-        if (/^(Asia|Australia|Pacific|Indian)\//.test(tz)) { return 'asia-pacific'; }
+        if (/^Pacific\/(Honolulu|Johnston|Midway|Galapagos|Easter)$/.test(tz)) { return 'americas'; }
+        if (/^(Australia|Pacific)\//.test(tz)) { return 'oceania'; }
+        if (/^(Asia|Indian)\//.test(tz)) { return 'asia'; }
         if (/^(Europe|Africa|Atlantic)\//.test(tz)) { return 'europe'; }
         if (/^America\//.test(tz)) { return 'americas'; }
         return '';
@@ -99,7 +101,7 @@
             This is a list of trackers with a score of 90 or more and at least 7 days of history by default, considered stable.
             You can copy the list and add it to your torrents or directly to your BitTorrent client.
             Narrow it to trackers located in a region, or to trackers that answer quickly from a region
-            (under 150 ms from the Americas or Europe, under 250 ms from both Asia and Oceania for Asia-Pacific).
+            (under 150 ms, measured from North America, Europe, Asia or Wellington NZ).
         </p>
         <div class="row">
             <div class="col-lg-3">
@@ -156,7 +158,8 @@
                         <option value="" selected>Anywhere</option>
                         <option value="americas">Americas</option>
                         <option value="europe">Europe, Middle East &amp; Africa</option>
-                        <option value="asia-pacific">Asia-Pacific</option>
+                        <option value="asia">Asia</option>
+                        <option value="oceania">Australia, New Zealand &amp; Pacific</option>
                     </select>
                 </p>
             </div>

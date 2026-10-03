@@ -9,7 +9,8 @@ info:
 
     | You are in | For example | Copy this link |
     |---|---|---|
-    | Asia or Oceania | China, Japan, Korea, India, Singapore, Australia, New Zealand | [https://newtrackon.co.nz/api/clean?fast_from=asia-pacific](https://newtrackon.co.nz/api/clean?fast_from=asia-pacific) |
+    | Asia | China, Japan, Korea, India, Singapore, Thailand | [https://newtrackon.co.nz/api/clean?fast_from=asia](https://newtrackon.co.nz/api/clean?fast_from=asia) |
+    | Australia, New Zealand or the Pacific | Australia, New Zealand, Fiji | [https://newtrackon.co.nz/api/clean?fast_from=oceania](https://newtrackon.co.nz/api/clean?fast_from=oceania) |
     | Europe, the Middle East or Africa | UK, Germany, Russia, Turkey, UAE, South Africa | [https://newtrackon.co.nz/api/clean?fast_from=europe](https://newtrackon.co.nz/api/clean?fast_from=europe) |
     | North, Central or South America | USA, Canada, Mexico, Brazil, Chile | [https://newtrackon.co.nz/api/clean?fast_from=americas](https://newtrackon.co.nz/api/clean?fast_from=americas) |
     | Anywhere / not sure | | [https://newtrackon.co.nz/api/clean](https://newtrackon.co.nz/api/clean) |
@@ -376,17 +377,18 @@ components:
       in: query
       name: fast_from
       description: >-
-        Only trackers that answer quickly from this region: americas (measured from North America), europe (from Europe)
-        or asia-pacific (from both Asia and Oceania). Trackers not yet measured from every point are left out.
+        Only trackers that answer quickly from one of the four places latency is measured from: americas (North
+        America), europe, asia or oceania (Wellington NZ). Measured round trips, so they reflect real internet routing.
+        Trackers not yet measured from there are left out. (The older value asia-pacific still works: fast from both
+        Asia and Oceania, 250 ms by default.)
       schema:
         type: string
-        enum: [americas, europe, asia-pacific]
+        enum: [americas, europe, asia, oceania]
     FastFromMs:
       in: query
       name: fast_from_ms
       description: >-
-        Latency limit for fast_from, in milliseconds. Default 150 for americas and europe, 250 for asia-pacific (it
-        spans the Pacific, so few trackers are under 150 ms from both Asia and Oceania).
+        Latency limit for fast_from, in milliseconds. Default 150.
       schema:
         type: integer
         minimum: 1
