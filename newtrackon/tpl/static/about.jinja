@@ -44,6 +44,7 @@ the outage is ours: nothing is recorded, no tracker is penalised or removed, and
 exit's region (currently in Europe, North America and Asia; the cities change as the exits rotate). The time through our own VPN tunnel is
 measured separately and subtracted, so each figure is the tracker's distance from that city, accurate to roughly &plusmn;10&ndash;20 ms. For HTTP/HTTPS trackers the TCP and TLS setup is done before the clock starts, so each figure is one request round trip; for trackers behind a CDN that includes the hop to the real server, not just the nearest edge. Each region's figure is the median of its last 12 measurements within 48 hours. Latency does affect the score: see Latency and score at the end of this page.</p>
 
+<p>The API's <code>fast_from</code> filter uses these figures to list trackers that are quick from one part of the world (see The API below).</p>
 <h4>3. Check history</h4>
 <p>Results are kept as a timeline of <b>30-minute slots</b>, each up or down. A check fills in every slot since the previous one: same
 result as before fills them all; a changed result splits the gap down the middle; two checks in one slot keep the worse. The history is a
@@ -123,7 +124,19 @@ sort, page and position.</li>
 <li><code>/feed.xml</code>: an Atom/RSS feed of events: a tracker going <b>down</b>, coming back <b>up</b> (and after how long), turning Up/Bad, Up/Broken, Up/Slow, Up/Unreliable or Up/Junk (with the reason) or Up/Good again, an IP family confirmed dead or answering again, trackers <b>added</b> and <b>removed</b>. Down/up churn of trackers scoring under 50 isn't logged. Subscribe in any feed reader, or a Discord/Telegram RSS bot. Filters: <code>?tracker=example.org</code> (one tracker) and <code>?type=down,up,bad,good,family,added,removed</code>. Example: <code>/feed.xml?tracker=opentrackr&amp;type=down,bad</code></li>
 <li><code>/api/clean</code>: the list to put in your client. <b>Up/Good or Up/Slow (never Junk, Bad, Broken or down), score 90+, listed at least 3 days, no confirmed dead IP family, and one tracker per operator (the best of each group).</b> Options: <code>min_score</code> (default 90), <code>min_age_days</code> (default 3), <code>max_latency</code> (ms, region average), <code>require_ipv4=true</code>, <code>dedupe=false</code><code></code>. Example: <code>/api/clean?max_latency=500&amp;require_ipv4=true</code></li>
 <li><code>/api/details</code>: JSON with everything this page knows about every tracker: status and problems, score, latency and latency by region,
-IP families, peer-test record, fake-peer streak, flags, the tracker's announce interval, stats, same-operator group, IPs, country and network.</li>
+IP families, peer-test record, fake-peer streak, flags, the tracker's announce interval, stats, same-operator group, IPs, country, network and region.</li>
+<li><b>Region filters</b>, on every list above (and <code>/api/clean</code> and <code>/api/details</code>). Regions follow how the internet is wired rather than
+the map: <code>americas</code> (North, Central and South America: South America mostly reaches the world through North America),
+<code>europe</code> (Europe, Russia, Central Asia, the Middle East and Africa: their traffic is mostly exchanged in European hubs) and
+<code>asia-pacific</code> (Asia and Oceania).
+<ul>
+<li><code>region=</code>: trackers <b>located in</b> those regions, by the country of their IP addresses (comma-separated, e.g. <code>region=americas,europe</code>).</li>
+<li><code>fast_from=</code>: trackers that <b>answer quickly from</b> that region: under 150&nbsp;ms from North America (<code>americas</code>) or Europe (<code>europe</code>),
+under 250&nbsp;ms from <b>both</b> Asia and Wellington (<code>asia-pacific</code>, which spans the Pacific). Change the limit with <code>fast_from_ms=</code>.
+Trackers not yet measured from there are left out.</li>
+</ul>
+Examples: <code>/api/stable?fast_from=asia-pacific</code> (stable trackers that are quick from Asia and NZ),
+<code>/api/stable?region=europe</code>, <code>/api/clean?fast_from=americas&amp;fast_from_ms=100</code>. The <a href="/list">list page</a> has the same choices.</li>
 </ul>
 <p>Penalised (Up/Bad or Up/Broken) trackers drop out of every score-based list until they behave again.</p>
 
