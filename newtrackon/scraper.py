@@ -8,11 +8,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from logging import getLogger
 from os import urandom
 import threading
+from ipaddress import ip_address as _ip_addr
 from time import time
 from typing import NamedTuple, TypedDict, cast
 from urllib.parse import ParseResult, urlencode, urlparse
 
 import requests
+import urllib3.util.connection as _u3c
 from dns import resolver
 from dns.exception import DNSException
 from dns.rdata import Rdata
@@ -64,6 +66,52 @@ SCRAPING_HEADERS: dict[str, str] = {
 MAX_RESPONSE_SIZE: int = 1024 * 1024  # 1MB
 
 logger = getLogger("newtrackon")
+
+
+# ---- probes only ever connect to public addresses ----
+# update_ips() rejects trackers whose name points at a private address, but the name is resolved again when a
+# probe connects; a name that changes its answer in between (DNS rebinding) could otherwise aim a probe at this
+# server's own services. So the address actually connected to is checked too: in urllib3 for HTTP(S), and right
+# before connect() for UDP. (Deliberate non-tracker targets, like the tunnel gateway RTT query, don't use these.)
+def ip_is_public(ip: object) -> bool:
+    """Globally routable unicast address (same rule as update_ips); IPv4-mapped IPv6 is judged as IPv4."""
+    try:
+        a = _ip_addr(str(ip).split("%")[0])
+    except ValueError:
+        return False
+    if a.version == 6 and a.ipv4_mapped:
+        a = a.ipv4_mapped
+    return a.is_global and not a.is_reserved and not a.is_multicast and not (a.version == 6 and a.is_site_local)
+
+
+def require_public(sa: object) -> None:
+    """Raise OSError (as a failed connect would) unless sockaddr sa points at a public address."""
+    ip = sa[0] if isinstance(sa, tuple) else sa
+    if not ip_is_public(ip):
+        raise OSError(f"refusing to connect to non-public address {ip}")
+
+
+_u3c_create_connection = _u3c.create_connection
+
+
+def _public_create_connection(address, *args, **kwargs):  # type: ignore[no-untyped-def]
+    """urllib3 connect: resolve, keep public addresses only, connect by address (TLS still checks the hostname)."""
+    host, port = address
+    infos = socket.getaddrinfo(host, port, _u3c.allowed_gai_family(), socket.SOCK_STREAM)
+    public = [i for i in infos if ip_is_public(i[4][0])]
+    if not public:
+        raise OSError(f"refusing to connect to {host}: no public address")
+    err: OSError | None = None
+    for info in public:
+        try:
+            return _u3c_create_connection((info[4][0], port), *args, **kwargs)
+        except OSError as e:
+            err = e
+    assert err is not None
+    raise err
+
+
+_u3c.create_connection = _public_create_connection
 
 to_redact: list[str] = [str(HTTP_PORT), str(UDP_PORT)]
 
@@ -396,6 +444,7 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
                 sock = None
                 continue
             try:
+                require_public(sa)
                 sock.connect(sa)
             except OSError:
                 sock.close()
@@ -625,6 +674,7 @@ def _udp_session(family, sa, src):
     try:
         if src:
             s.bind((src, 0))
+        require_public(sa)
         s.connect(sa)
         req, tid = udp_create_binary_connection_request()
         s.sendall(req)
@@ -895,6 +945,7 @@ def _rtt_via(url, fam, src):
     p = urlparse(url)
     port = p.port or (443 if p.scheme == "https" else 80)
     addr = socket.getaddrinfo(p.hostname, port, fam)[0][4]
+    require_public(addr)
     if p.scheme == "udp":
         s = socket.socket(fam, socket.SOCK_DGRAM)
         s.settimeout(3)

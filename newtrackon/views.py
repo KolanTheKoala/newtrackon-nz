@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 from logging import ERROR, INFO, basicConfig, getLogger
 from sys import stdout
-from threading import Thread
+from collections import deque
+from threading import Lock, Thread
+from time import time
 
 from flask import (
     Flask,
@@ -15,10 +17,50 @@ from flask import (
 )
 from werkzeug.routing import BaseConverter, Map
 
-from newtrackon import db, ingest, persistence, utils
+from newtrackon import db, ingest, persistence, scraper, utils
 from newtrackon.tracker import format_uptime_and_downtime_time
 
 max_input_length: int = 1000000
+
+# ---- submission limits, per client address, so one sender can't flood the check queue ----
+SUBMIT_MAX_URLS = 500  # trackers in one submission
+SUBMIT_HOURLY_REQUESTS = 20  # submissions per address per hour
+SUBMIT_HOURLY_URLS = 500  # trackers per address per hour
+_submit_log: dict[str, deque[tuple[float, int]]] = {}
+_submit_lock = Lock()
+
+
+def _client_ip() -> str:
+    """The submitter's address. Behind Caddy every request arrives from 127.0.0.1 with X-Forwarded-For set by Caddy,
+    which replaces any client-sent value (no trusted_proxies configured), so its rightmost entry is the real client."""
+    remote = request.remote_addr or ""
+    if remote in ("127.0.0.1", "::1"):
+        fwd = request.headers.get("X-Forwarded-For", "")
+        if fwd.strip():
+            return fwd.split(",")[-1].strip()
+    return remote
+
+
+def _submission_refused(text: str) -> str | None:
+    """None if the submission may be queued, else the reason it's refused. This server's own addresses are exempt."""
+    ip = _client_ip()
+    if ip in ("127.0.0.1", "::1") or ip in (scraper.my_ipv4, scraper.my_ipv6):
+        return None
+    n = len(set(text.lower().split()))
+    if n > SUBMIT_MAX_URLS:
+        return f"Too many trackers in one submission (the limit is {SUBMIT_MAX_URLS})"
+    now = time()
+    with _submit_lock:
+        log = _submit_log.setdefault(ip, deque())
+        while log and log[0][0] < now - 3600:
+            log.popleft()
+        if len(log) >= SUBMIT_HOURLY_REQUESTS or sum(c for _, c in log) + n > SUBMIT_HOURLY_URLS:
+            return "Too many submissions from your address, please try again in an hour"
+        log.append((now, n))
+        if len(_submit_log) > 10000:
+            for k in [k for k, v in _submit_log.items() if not v or v[-1][0] < now - 3600]:
+                del _submit_log[k]
+    return None
 
 app = Flask(__name__)
 app.template_folder = "tpl"
@@ -61,10 +103,12 @@ logger.info("Server started")
 
 
 @app.route("/")
-def main(form_feedback: str | None = None) -> str:
+def main(form_feedback: str | None = None, form_reason: str | None = None) -> str:
     trackers_list = db.get_all_data()
     trackers_list = format_uptime_and_downtime_time(trackers_list)
-    return render_template("main.jinja", form_feedback=form_feedback, trackers=trackers_list, active="Home")
+    return render_template(
+        "main.jinja", form_feedback=form_feedback, form_reason=form_reason, trackers=trackers_list, active="Home"
+    )
 
 
 @app.route("/", methods=["POST"])
@@ -76,6 +120,8 @@ def new_trackers():
         abort(413)
     elif new_trackers == "":
         return main(form_feedback="EMPTY")
+    elif refused := _submission_refused(new_trackers):
+        return main(form_feedback="LIMIT", form_reason=refused), 429
     else:
         check_all_trackers = Thread(target=ingest.enqueue_new_trackers, args=(new_trackers,))
         check_all_trackers.daemon = True
@@ -90,6 +136,8 @@ def new_trackers_api():
         return abort(400)
     if len(new_trackers) > max_input_length:
         abort(413)
+    if refused := _submission_refused(new_trackers):
+        return Response(refused + "\n", status=429, headers={"Retry-After": "3600", "Access-Control-Allow-Origin": "*"})
     check_all_trackers = Thread(target=ingest.enqueue_new_trackers, args=(new_trackers,))
     check_all_trackers.daemon = True
     check_all_trackers.start()

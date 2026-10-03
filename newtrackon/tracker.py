@@ -383,7 +383,7 @@ class Tracker:
                 parsed_ips.append(ip_address(ip))
             # is_global alone also accepts some reserved, multicast and site-local addresses.
             for ip in parsed_ips:
-                if not ip.is_global or ip.is_reserved or ip.is_multicast or (isinstance(ip, IPv6Address) and ip.is_site_local):
+                if not scraper.ip_is_public(ip):
                     # cross-check: ask Cloudflare and Quad9 directly; delete only if neither gives a public address
                     pub = _nt_public_ips(self.host)
                     if pub is None or any(_nt_ip_public(x) for x in pub):
@@ -1214,11 +1214,7 @@ def _nt_public_ips(host):
 
 
 def _nt_ip_public(x):
-    try:
-        ip = ip_address(x)
-    except Exception:
-        return False
-    return bool(ip.is_global and not ip.is_reserved and not ip.is_multicast and not (ip.version == 6 and ip.is_site_local))
+    return scraper.ip_is_public(x)
 
 
 def _nt_public_dns_has(host):

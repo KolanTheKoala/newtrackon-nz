@@ -169,6 +169,12 @@
                         <div class="alert alert-info" role="alert">
                             Received, see the progress in the <strong><a class="alert-link" href="/submitted">Submitted</a></strong> section
                         </div>
+                    {% elif form_feedback == "LIMIT" %}
+                        <div class="alert alert-warning" role="alert">
+                            <i class="fas fa-exclamation-triangle" aria-hidden="true"></i>
+                            <span class="visually-hidden">Error:</span>
+                            {{ form_reason }}
+                        </div>
                     {% endif %}
                 </p>
                 <small class="form-text text-muted">
