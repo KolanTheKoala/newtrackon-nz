@@ -3,8 +3,32 @@
     <script src="https://cdn.jsdelivr.net/npm/rapidoc@9.3.3/dist/rapidoc-min.js"
             integrity="sha512-IqwxAUOKeDBseg67em0HTCqiklC6Bhu8E74aNEiM/1CqvozxFFiuMrcWhbn31Wbh8liSSoERRvP8tFqI2M9e4g=="
             crossorigin="anonymous"></script>
+    <script src="/static/js/region-guess.js"></script>
 {% endblock head %}
 {% block body %}
+    <div class="container">
+        <div class="alert alert-success mt-3" id="your-list" style="display:none">
+            <b>Your tracker list</b> (you seem to be in <span id="yl-place"></span>, going by your time zone).
+            Copy this link into your torrent client:<br>
+            <code id="yl-url"></code>
+            <button type="button" class="btn btn-sm btn-primary ms-2" id="yl-copy">Copy</button>
+            <br><small>Somewhere else? Pick your region in the table below.</small>
+        </div>
+    </div>
+    <script>
+    (function () {
+        var r = ntGuessRegion();
+        if (!r) { return; }
+        var url = location.origin + '/api/clean?fast_from=' + r;
+        document.getElementById('yl-place').textContent = NT_REGION_NAMES[r];
+        document.getElementById('yl-url').textContent = url;
+        document.getElementById('your-list').style.display = '';
+        document.getElementById('yl-copy').addEventListener('click', function () {
+            var b = this;
+            navigator.clipboard.writeText(url).then(function () { b.textContent = 'Copied!'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); });
+        });
+    })();
+    </script>
     <div class="container rapidoc">
         <rapi-doc spec-url="api.yml" theme="light" render-style="view" font-size="largest" show-header="false" regular-font="roboto" layout="column" default-schema-tab="example" allow-authentication="false" primary-color="#054f16" data-primary-color-light="#054f16" data-primary-color-dark="#66bb6a">
         </rapi-doc>

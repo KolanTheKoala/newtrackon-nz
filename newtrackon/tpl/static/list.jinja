@@ -3,6 +3,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.11/clipboard.min.js"
             integrity="sha512-7O5pXpc0oCRrxk8RUfDYFgn0nO1t+jLuIOQdOMRp4APB7uZ4vSjspzp5y6YDtDs4VzUSTbWzBFZ/LKJhnyFOKw=="
             crossorigin="anonymous"></script>
+    <script src="/static/js/region-guess.js"></script>
 {% endblock head %}
 {% block body %}
     <script>
@@ -52,24 +53,8 @@
         return 'api/stable?' + p.join('&');
     }
 
-    // guess the visitor's region from their time zone, so they get a list that is fast where they are
-    function guessRegion() {
-        var tz = '';
-        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; }
-        // same grouping as the regions: the Middle East, Caucasus, Central Asia and Russia's Asian time zones count as Europe
-        var eu = /^Asia\/(Dubai|Muscat|Riyadh|Qatar|Bahrain|Kuwait|Baghdad|Tehran|Jerusalem|Tel_Aviv|Gaza|Hebron|Amman|Beirut|Damascus|Aden|Nicosia|Famagusta|Istanbul|Tbilisi|Yerevan|Baku|Almaty|Qostanay|Qyzylorda|Aqtobe|Aqtau|Atyrau|Oral|Tashkent|Samarkand|Bishkek|Dushanbe|Ashgabat|Yekaterinburg|Omsk|Novosibirsk|Barnaul|Tomsk|Novokuznetsk|Krasnoyarsk|Irkutsk|Chita|Yakutsk|Khandyga|Vladivostok|Ust-Nera|Magadan|Sakhalin|Srednekolymsk|Kamchatka|Anadyr)$/;
-        if (eu.test(tz) || /^Indian\/(Mauritius|Reunion|Mayotte|Comoro|Antananarivo|Mahe)$/.test(tz)) { return 'europe'; }
-        if (/^Atlantic\/(Bermuda|Stanley|South_Georgia)$/.test(tz)) { return 'americas'; }
-        if (/^Pacific\/(Honolulu|Johnston|Midway|Galapagos|Easter)$/.test(tz)) { return 'americas'; }
-        if (/^(Australia|Pacific)\//.test(tz)) { return 'oceania'; }
-        if (/^(Asia|Indian)\//.test(tz)) { return 'asia'; }
-        if (/^(Europe|Africa|Atlantic)\//.test(tz)) { return 'europe'; }
-        if (/^America\//.test(tz)) { return 'americas'; }
-        return '';
-    }
-
     $(document).ready(function () {
-        var guess = guessRegion();
+        var guess = ntGuessRegion();
         if (guess) {
             $('#fast_from').val(guess);
             $('#region-note').text('Showing trackers that are fast from ' + $('#fast_from option:selected').text() +
