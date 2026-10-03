@@ -6,7 +6,7 @@
     <script src="/static/js/region-guess.js"></script>
 {% endblock head %}
 {% block body %}
-    <div class="container">
+    <div class="container-fluid px-4">
         <h2>Stable trackers</h2>
         <p>Trackers with a score of 90+, up now and listed for at least 7 days. Narrow it down, then copy it into your client.</p>
         <div id="nt-filters" class="d-flex flex-wrap align-items-center gap-2 my-2">
@@ -39,12 +39,10 @@
                 <label for="nt-search" class="m-0">Search:</label>
                 <input type="search" id="nt-search" class="form-control form-control-sm" style="flex: 1">
             </div>
-        </div>
-        <p>
-            <button class="btn btn-primary btn-copy" data-clipboard-action="copy" data-clipboard-target="#tocopy">
-                Copy <b id="size">0</b> trackers to clipboard
+            <button class="btn btn-sm btn-primary btn-copy" data-clipboard-action="copy" data-clipboard-target="#tocopy">
+                Copy <b id="size">0</b> trackers
             </button>
-        </p>
+        </div>
         <div id="list">
             <pre id="tocopy">Loading...</pre>
         </div>
