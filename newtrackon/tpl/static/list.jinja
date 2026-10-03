@@ -17,7 +17,6 @@
             <input type="checkbox" class="btn-check" id="ntf-v4" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v4">IPv4 works</label>
             <input type="checkbox" class="btn-check" id="ntf-v6" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v6">IPv6 works</label>
             <input type="checkbox" class="btn-check" id="ntf-peer" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-peer">Passes peer test</label>
-            <input type="checkbox" class="btn-check" id="ntf-new" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-new">Include new</label>
             <select id="ntf-region" class="form-select form-select-sm w-auto" aria-label="Located in">
                 <option value="">Located anywhere</option>
                 <option value="americas">Located in the Americas</option>
@@ -35,6 +34,7 @@
         <div id="nt-tablebar" class="d-flex flex-wrap align-items-center gap-3 mb-2">
             <button type="button" id="ntf-reset" class="btn btn-sm btn-danger">Reset</button>
             <span id="nt-count" class="fw-bold"></span>
+            <input type="checkbox" class="btn-check" id="ntf-new" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-new">Include new</label>
             <div class="d-flex align-items-center gap-2" style="flex: 1 1 22rem">
                 <label for="nt-search" class="m-0">Search:</label>
                 <input type="search" id="nt-search" class="form-control form-control-sm" style="flex: 1">
@@ -110,7 +110,7 @@
             $('#ntf-v4').prop('checked', true);   // most clients are IPv4-only
             if (mine) { $('#ntf-fast').val(mine); }
         }
-        $('#nt-filters').on('change', 'input, select', render);
+        $('#nt-filters, #nt-tablebar').on('change', 'input, select', render);
         $('#nt-search').on('input', render);
         $('#ntf-reset').on('click', function () {
             BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', false); });
