@@ -6,153 +6,109 @@
     <script src="/static/js/region-guess.js"></script>
 {% endblock head %}
 {% block body %}
-    <script>
-    var selectedList = 'api/stable?include_ipv4_only_trackers=1&include_ipv6_only_trackers=0&min_age_days=7'
-
-    function setTooltip(btn, message) {
-        var tooltip = bootstrap.Tooltip.getInstance(btn);
-        if (tooltip) {
-            tooltip.hide();
-        }
-        btn.setAttribute('data-bs-title', message);
-        tooltip = new bootstrap.Tooltip(btn, {trigger: 'manual', placement: 'bottom'});
-        tooltip.show();
-    }
-
-    function hideTooltip(btn) {
-        setTimeout(function () {
-            var tooltip = bootstrap.Tooltip.getInstance(btn);
-            if (tooltip) {
-                tooltip.hide();
-            }
-        }, 1000);
-    }
-
-    function getTrackers(api_url) {
-        $.get({
-            url: api_url,
-            data: null,
-            success: function (text) {
-                $('#tocopy').text(text);
-                size = (text.match(/^\s*\S/gm) || "").length;
-                $('#size').text(size);
-            },
-            dataType: 'text'
-        });
-    }
-
-    // the list URL is built from the current state of every control
-    function buildList() {
-        var p = [
-            'include_ipv4_only_trackers=' + ($('#include_ipv4_only').is(':checked') ? 1 : 0),
-            'include_ipv6_only_trackers=' + ($('#include_ipv6_only').is(':checked') ? 1 : 0),
-            'min_age_days=' + ($('#include_trackers_newer_than_10_days').is(':checked') ? 0 : 7)
-        ];
-        if ($('#region').val()) { p.push('region=' + $('#region').val()); }
-        if ($('#fast_from').val()) { p.push('fast_from=' + $('#fast_from').val()); }
-        return 'api/stable?' + p.join('&');
-    }
-
-    $(document).ready(function () {
-        var guess = ntGuessRegion();
-        if (guess) {
-            $('#fast_from').val(guess);
-            $('#region-note').text('Showing trackers that are fast from ' + $('#fast_from option:selected').text() +
-                ' (guessed from your time zone). Change it below if that is wrong.').show();
-            selectedList = buildList();
-        }
-        getTrackers(selectedList);
-        $('#include_ipv4_only, #include_ipv6_only, #include_trackers_newer_than_10_days, #region, #fast_from').change(function () {
-            selectedList = buildList();
-            getTrackers(selectedList);
-        });
-    });
-
-    var clipboard = new ClipboardJS('.btn-copy');
-
-    clipboard.on('success', function (e) {
-        setTooltip(e.trigger, 'Copied!');
-        hideTooltip(e.trigger);
-    });
-
-    clipboard.on('error', function (e) {
-        setTooltip(e.trigger, 'Failed!');
-        hideTooltip(e.trigger);
-    });
-    </script>
     <div class="container">
-        <h2>List of stable trackers</h2>
+        <h2>Stable trackers</h2>
+        <p>Trackers with a score of 90+, up now and listed for at least 7 days. Narrow it down, then copy it into your client.</p>
+        <div id="nt-filters" class="d-flex flex-wrap align-items-center gap-2 my-2">
+            <span class="fw-bold me-1">Show only:</span>
+            <input type="checkbox" class="btn-check" id="ntf-good" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-good">Up/Good</label>
+            <input type="checkbox" class="btn-check" id="ntf-udp" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-udp">UDP</label>
+            <input type="checkbox" class="btn-check" id="ntf-http" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-http">HTTP(S)</label>
+            <input type="checkbox" class="btn-check" id="ntf-v4" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v4">IPv4 works</label>
+            <input type="checkbox" class="btn-check" id="ntf-v6" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v6">IPv6 works</label>
+            <input type="checkbox" class="btn-check" id="ntf-peer" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-peer">Passes peer test</label>
+            <input type="checkbox" class="btn-check" id="ntf-new" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-new">Include new</label>
+            <select id="ntf-region" class="form-select form-select-sm w-auto" aria-label="Located in">
+                <option value="">Located anywhere</option>
+                <option value="americas">Located in the Americas</option>
+                <option value="europe">Located in Europe, Middle East &amp; Africa</option>
+                <option value="asia-pacific">Located in Asia-Pacific</option>
+            </select>
+            <select id="ntf-fast" class="form-select form-select-sm w-auto" aria-label="Fast from">
+                <option value="">Fast from anywhere</option>
+                <option value="oceania">Fast from Australia, NZ &amp; Pacific</option>
+                <option value="asia">Fast from Asia</option>
+                <option value="europe">Fast from Europe, Middle East &amp; Africa</option>
+                <option value="americas">Fast from the Americas</option>
+            </select>
+            <button type="button" id="ntf-reset" class="btn btn-sm btn-link">Reset</button>
+        </div>
         <p>
-            This is a list of trackers with a score of 90 or more and at least 7 days of history by default, considered stable.
-            You can copy the list and add it to your torrents or directly to your BitTorrent client.
-            Narrow it to trackers located in a region, or to trackers that answer quickly from a region
-            (under 150 ms, measured from North America, Europe, Asia or Wellington NZ).
+            <button class="btn btn-primary btn-copy" data-clipboard-action="copy" data-clipboard-target="#tocopy">
+                Copy <b id="size">0</b> trackers to clipboard
+            </button>
         </p>
-        <div class="row">
-            <div class="col-lg-3">
-                <p>
-                    <button class="btn btn-primary btn-copy"
-                            data-clipboard-action="copy"
-                            data-clipboard-target="#tocopy">
-                        Copy <b id="size"></b>
-                        trackers to clipboard
-                    </button>
-                </p>
-            </div>
-            <div class="col-lg-3">
-                <p>
-                    <label class="btn btn-secondary">
-                        <input type="checkbox" id="include_ipv4_only" checked>
-                        Include IPv4-only trackers
-                    </label>
-                </p>
-            </div>
-            <div class="col-lg-3">
-                <p>
-                    <label class="btn btn-secondary">
-                        <input type="checkbox" id="include_ipv6_only">
-                        Include IPv6-only trackers
-                    </label>
-                </p>
-            </div>
-            <div class="col-lg-3">
-                <p>
-                    <label class="btn btn-secondary">
-                        <input type="checkbox" id="include_trackers_newer_than_10_days">
-                        Include trackers newer than 7 days
-                    </label>
-                </p>
-            </div>
-        </div>
-        <div class="row">
-            <div class="col-lg-3">
-                <p>
-                    <label for="region" class="form-label">Located in</label>
-                    <select class="form-select" id="region">
-                        <option value="" selected>Anywhere</option>
-                        <option value="americas">Americas</option>
-                        <option value="europe">Europe, Middle East &amp; Africa</option>
-                        <option value="asia-pacific">Asia-Pacific</option>
-                    </select>
-                </p>
-            </div>
-            <div class="col-lg-3">
-                <p>
-                    <label for="fast_from" class="form-label">Fast from</label>
-                    <select class="form-select" id="fast_from">
-                        <option value="" selected>Anywhere</option>
-                        <option value="americas">Americas</option>
-                        <option value="europe">Europe, Middle East &amp; Africa</option>
-                        <option value="asia">Asia</option>
-                        <option value="oceania">Australia, New Zealand &amp; Pacific</option>
-                    </select>
-                </p>
-            </div>
-        </div>
-        <div class="alert alert-info" id="region-note" style="display:none"></div>
         <div id="list">
             <pre id="tocopy">Loading...</pre>
         </div>
     </div>
+    <script>
+    (function () {
+        var KEY = 'nt-list-filters', BOXES = ['good', 'udp', 'http', 'v4', 'v6', 'peer', 'new'];
+        var POINTS = {americas: 'North America', europe: 'Europe', asia: 'Asia', oceania: 'Oceania'};
+        var trackers = [];
+        var mine = ntGuessRegion();
+        if (mine) { var o = $('#ntf-fast option[value="' + mine + '"]'); o.text(o.text() + ' (you)'); }
+
+        function state() {
+            var s = {region: $('#ntf-region').val(), fast: $('#ntf-fast').val()};
+            BOXES.forEach(function (b) { s[b] = $('#ntf-' + b).is(':checked'); });
+            return s;
+        }
+        function keep(t, s, now) {
+            if (t.status === 'down' || Math.round(t.score) < 90) { return false; }               // the stable list
+            if (!s['new'] && now - t.added < 7 * 86400) { return false; }
+            if (s.good && t.status !== 'up_good' && t.status !== 'up_new') { return false; }
+            var udp = t.url.indexOf('udp:') === 0;
+            if (s.udp !== s.http && udp !== s.udp) { return false; }
+            if (s.v4 && t.families.v4 !== 'ok') { return false; }
+            if (s.v6 && t.families.v6 !== 'ok') { return false; }
+            if (s.peer && t.peer_test.latest !== 'pass') { return false; }
+            if (s.region && (t.regions || []).indexOf(s.region) < 0) { return false; }
+            if (s.fast) { var ms = (t.latency_by_region_ms || {})[POINTS[s.fast]]; if (typeof ms !== 'number' || ms >= 150) { return false; } }
+            return true;
+        }
+        function render() {
+            var s = state(), now = Date.now() / 1000;
+            var urls = trackers.filter(function (t) { return keep(t, s, now); })
+                .sort(function (a, b) { return Math.round(b.score) - Math.round(a.score) || (a.latency_ms || 99999) - (b.latency_ms || 99999); })
+                .map(function (t) { return t.url; });
+            $('#tocopy').text(urls.length ? urls.join('\n\n') + '\n' : 'No trackers match these filters.');
+            $('#size').text(urls.length);
+            try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {}
+        }
+
+        var saved = null;
+        try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
+        if (saved) {
+            BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', !!saved[b]); });
+            $('#ntf-region').val(saved.region || ''); $('#ntf-fast').val(saved.fast || '');
+        } else {
+            $('#ntf-v4').prop('checked', true);   // most clients are IPv4-only
+            if (mine) { $('#ntf-fast').val(mine); }
+        }
+        $('#nt-filters').on('change', 'input, select', render);
+        $('#ntf-reset').on('click', function () {
+            BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', false); });
+            $('#ntf-region, #ntf-fast').val('');
+            render();
+        });
+        $.getJSON('/api/details', function (d) { trackers = d; render(); });
+    })();
+
+    function setTooltip(btn, message) {
+        var tooltip = bootstrap.Tooltip.getInstance(btn);
+        if (tooltip) { tooltip.hide(); }
+        btn.setAttribute('data-bs-title', message);
+        tooltip = new bootstrap.Tooltip(btn, {trigger: 'manual', placement: 'bottom'});
+        tooltip.show();
+    }
+    function hideTooltip(btn) {
+        setTimeout(function () { var t = bootstrap.Tooltip.getInstance(btn); if (t) { t.hide(); } }, 1000);
+    }
+    var clipboard = new ClipboardJS('.btn-copy');
+    clipboard.on('success', function (e) { setTooltip(e.trigger, 'Copied!'); hideTooltip(e.trigger); });
+    clipboard.on('error', function (e) { setTooltip(e.trigger, 'Failed!'); hideTooltip(e.trigger); });
+    </script>
 {% endblock %}
 {% set title = "Stable Trackers List - newTrackon" %}
