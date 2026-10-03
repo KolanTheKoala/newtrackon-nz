@@ -221,7 +221,10 @@ fmt();setInterval(fmt,1000)})();</script>
                 <option value="europe">Fast from Europe, Middle East &amp; Africa</option>
                 <option value="americas">Fast from the Americas</option>
             </select>
-            <button type="button" id="ntf-reset" class="btn btn-sm btn-link">Reset</button>
+        </div>
+        <div id="nt-tablebar" class="d-flex flex-wrap align-items-center gap-3 mb-2">
+            <button type="button" id="ntf-reset" class="btn btn-sm btn-danger">Reset</button>
+            <span id="nt-count" class="fw-bold"></span>
         </div>
         <script>
         // Filter bar: DataTables search hook, so paging, the entry count and the auto-refresh keep working.
@@ -265,6 +268,13 @@ fmt();setInterval(fmt,1000)})();</script>
                 try { localStorage.removeItem(KEY); } catch (e) {}
                 dt.draw();
             });
+            // one line under the filters: Reset, "x of y shown", entries per page, search
+            var bar = $('#nt-tablebar'), wrap = $(dt.table().container());
+            wrap.find('.dt-length').first().appendTo(bar);
+            wrap.find('.dt-search').first().addClass('ms-auto').appendTo(bar);
+            wrap.children('.dt-layout-row').first().hide();
+            function count() { $('#nt-count').text(dt.rows({search: 'applied'}).count() + ' of ' + dt.rows().count() + ' shown'); }
+            dt.on('draw', count);
             dt.draw();
         });
         </script>
