@@ -331,8 +331,8 @@ class TestProcessNewTracker:
     """Tests for process_new_tracker function."""
 
     @pytest.mark.usefixtures("empty_queues", "mock_db_connection")
-    def test_rejects_interval_too_short(self) -> None:
-        """Test that trackers with interval < 300 seconds are rejected."""
+    def test_accepts_interval_too_short(self) -> None:
+        """NZ: an announce interval under 5 minutes is accepted (the check interval is our own)."""
         from newtrackon import ingest
         from newtrackon.persistence import submitted_data
 
@@ -357,11 +357,11 @@ class TestProcessNewTracker:
         ):
             ingest.process_new_tracker(tracker_candidate)
 
-            mock_insert.assert_not_called()
+            mock_insert.assert_called_once()
 
     @pytest.mark.usefixtures("empty_queues", "mock_db_connection")
-    def test_rejects_interval_too_long(self) -> None:
-        """Test that trackers with interval > 10800 seconds are rejected."""
+    def test_accepts_interval_too_long(self) -> None:
+        """NZ: an announce interval over 3 hours is accepted (the check interval is our own)."""
         from newtrackon import ingest
         from newtrackon.persistence import submitted_data
 
@@ -386,7 +386,7 @@ class TestProcessNewTracker:
         ):
             ingest.process_new_tracker(tracker_candidate)
 
-            mock_insert.assert_not_called()
+            mock_insert.assert_called_once()
 
     @pytest.mark.usefixtures("empty_queues", "mock_db_connection")
     def test_accepts_valid_interval_minimum(self) -> None:

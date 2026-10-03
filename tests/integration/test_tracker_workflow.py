@@ -605,8 +605,8 @@ class TestIntervalValidation:
     """Test interval validation during tracker submission."""
 
     @pytest.mark.usefixtures("empty_queues", "reset_globals")
-    def test_reject_tracker_with_interval_below_minimum(self, shared_memory_db: Connection) -> None:
-        """Mock scraper to return interval < 300, verify tracker rejected."""
+    def test_accept_tracker_with_interval_below_minimum(self, shared_memory_db: Connection) -> None:
+        """NZ: announce interval 200 is accepted; the check interval is our own."""
         from newtrackon.persistence import submitted_data
 
         test_url = "udp://low-interval.example.com:6969/announce"
@@ -644,15 +644,15 @@ class TestIntervalValidation:
         ):
             ingest.process_submitted_queue()
 
-        # Verify tracker was NOT inserted into database
+        # NZ: accepted, whatever its announce interval
         cursor = shared_memory_db.cursor()
         _ = cursor.execute("SELECT host FROM status WHERE host = ?", ("low-interval.example.com",))
         row = cast(tuple[object, ...] | None, cursor.fetchone())
-        assert row is None
+        assert row is not None
 
     @pytest.mark.usefixtures("empty_queues", "reset_globals")
-    def test_reject_tracker_with_interval_above_maximum(self, shared_memory_db: Connection) -> None:
-        """Mock scraper to return interval > 10800, verify tracker rejected."""
+    def test_accept_tracker_with_interval_above_maximum(self, shared_memory_db: Connection) -> None:
+        """NZ: announce interval 15000 is accepted; the check interval is our own."""
         from newtrackon.persistence import submitted_data
 
         test_url = "udp://high-interval.example.com:6969/announce"
@@ -690,11 +690,11 @@ class TestIntervalValidation:
         ):
             ingest.process_submitted_queue()
 
-        # Verify tracker was NOT inserted into database
+        # NZ: accepted, whatever its announce interval
         cursor = shared_memory_db.cursor()
         _ = cursor.execute("SELECT host FROM status WHERE host = ?", ("high-interval.example.com",))
         row = cast(tuple[object, ...] | None, cursor.fetchone())
-        assert row is None
+        assert row is not None
 
     @pytest.mark.usefixtures("empty_queues", "reset_globals")
     def test_accept_tracker_with_valid_interval(self, shared_memory_db: Connection) -> None:

@@ -217,10 +217,7 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
     if not tracker_candidate.interval:
         log_wrong_interval_denial("missing interval field")
         return
-    if 300 > tracker_candidate.interval or tracker_candidate.interval > 10800:  # trackers with an update interval
-        # less than 5' and more than 3h
-        log_wrong_interval_denial(reason="having an interval shorter than 5 minutes or longer than 3 hours")
-        return
+    # Any announce interval is accepted: this instance sets its own adaptive check interval and never uses the tracker's.
     tracker_candidate.update_ipapi_data()
     if old is not None:
         for a in ("historic", "added", "last_downtime", "last_uptime", "recent_ips"):
