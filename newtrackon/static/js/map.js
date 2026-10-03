@@ -1,9 +1,21 @@
 // Tracker map: Mercator world map, neighbouring countries in different colours (communist states red),
 // one small flag per tracker on its country, tooltip on hover, click to open the tracker in the main table.
 (function () {
-    var COMMUNIST = {'156': 1, '704': 1, '418': 1, '192': 1, '408': 1};   // China, Vietnam, Laos, Cuba, North Korea
-    var RED = '#c62828';
-    var PALETTE = ['#3f6f9f', '#5a8f5a', '#a0884a', '#7d5f9a', '#4f9a96', '#9a6a4f', '#6b7fb0'];  // no red
+    // fixed colours: communist states in distinct reds, Russia dark red, Greenland white, Brazil green
+    var FIXED = {
+        '156': '#e53935',  // China
+        '704': '#ff8a80',  // Vietnam
+        '418': '#b71c1c',  // Laos
+        '408': '#ff5252',  // North Korea
+        '192': '#c62828',  // Cuba
+        '643': '#7f0000',  // Russia
+        '304': '#f2f2f2',  // Greenland
+        '076': '#2e9d48'   // Brazil
+    };
+    var PALETTE = ['#3f6f9f', '#a0884a', '#7d5f9a', '#4f9a96', '#9a6a4f', '#6b7fb0', '#8a9a4f'];  // no reds, white or Brazil green
+    // neighbours across a narrow sea, which must not share a colour either
+    var SEA_NEIGHBORS = [['036', '554'], ['036', '360'], ['826', '372'], ['826', '250'], ['392', '410'], ['392', '156'],
+        ['158', '156'], ['144', '356'], ['450', '508'], ['840', '192'], ['124', '304'], ['352', '304']];
     var FLAG_W = 18, FLAG_H = 13.5, GAP = 3;
     // countries too small for the 110m map: [lon, lat]
     var SMALL = {sg: [103.82, 1.35], hk: [114.17, 22.32], mo: [113.54, 22.19], bh: [50.56, 26.07], mt: [14.38, 35.94],
@@ -50,9 +62,13 @@
         var projection = d3.geoMercator().fitExtent([[8, 8], [width - 8, height - 8]], {type: 'FeatureCollection', features: countries});
         var path = d3.geoPath(projection);
 
-        // colour: red for communist states; everyone else gets a palette colour different from all neighbours
-        var neighbors = topojson.neighbors(geoms), color = {};
-        geoms.forEach(function (g, i) { if (COMMUNIST[g.id]) { color[i] = RED; } });
+        // colour: fixed ones first; everyone else gets a palette colour different from all neighbours (land and sea)
+        var neighbors = topojson.neighbors(geoms), color = {}, index = {};
+        geoms.forEach(function (g, i) { index[g.id] = i; if (FIXED[g.id]) { color[i] = FIXED[g.id]; } });
+        SEA_NEIGHBORS.forEach(function (p) {
+            var a = index[p[0]], b = index[p[1]];
+            if (a !== undefined && b !== undefined) { neighbors[a] = neighbors[a].concat([b]); neighbors[b] = neighbors[b].concat([a]); }
+        });
         geoms.map(function (g, i) { return i; })
             .sort(function (a, b) { return neighbors[b].length - neighbors[a].length; })
             .forEach(function (i) {
