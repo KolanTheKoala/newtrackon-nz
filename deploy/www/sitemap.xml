@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://newtrackon.co.nz/</loc></url>
+  <url><loc>https://newtrackon.co.nz/list</loc></url>
+  <url><loc>https://newtrackon.co.nz/api</loc></url>
+  <url><loc>https://newtrackon.co.nz/faq</loc></url>
+  <url><loc>https://newtrackon.co.nz/about</loc></url>
+  <url><loc>https://newtrackon.co.nz/submitted</loc></url>
+  <url>
+    <loc>https://newtrackon.co.nz/raw</loc>
+    <lastmod>2026-09-27</lastmod>
+  </url>
+</urlset>

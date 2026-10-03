@@ -1,0 +1,85 @@
+{
+	admin unix//config/caddy-admin.sock
+	# Site-local global options that aren't in the repo: deploy/caddy/local/global-*.caddy
+	import /etc/caddy/local/global-*.caddy
+}
+
+newtrackon.co.nz {
+	# Site-local extras that aren't in the repo: deploy/caddy/local/main-*.caddy
+	import /etc/caddy/local/main-*.caddy
+
+	encode gzip
+	header {
+		-Server
+		-Via
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	log {
+		output file /data/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 7
+		}
+		format json
+	}
+
+	handle /robots.txt {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "User-agent: *
+Allow: /
+Sitemap: https://newtrackon.co.nz/sitemap.xml
+" 200
+	}
+	# IndexNow key
+	handle /821f0e01b6d2e32c71fd20915c6aa290.txt {
+		root * /srv/www
+		file_server
+	}
+	handle /sitemap.xml {
+		header Content-Type "application/xml; charset=utf-8"
+		root * /srv/www
+		rewrite * /sitemap.xml
+		file_server
+	}
+	@favalt path /favicon.png /favicon.jpg /favicon.gif
+	handle @favalt {
+		redir * /static/imgs/favicon-32x32.png 301
+	}
+
+	reverse_proxy 127.0.0.1:8080 {
+		@nt404 status 404
+		handle_response @nt404 {
+			root * /srv/www
+			rewrite * /404.html
+			templates
+			header Content-Type "text/html; charset=utf-8"
+			file_server {
+				status 404
+			}
+		}
+	}
+}
+
+ipv4.newtrackon.co.nz {
+	import /etc/caddy/local/alt-*.caddy
+	encode gzip
+	header Content-Type "text/plain; charset=utf-8"
+	respond "stack=v4
+remote={http.request.remote.host}
+proto={http.request.proto}
+" 200
+}
+
+ipv6.newtrackon.co.nz {
+	import /etc/caddy/local/alt-*.caddy
+	encode gzip
+	header Content-Type "text/plain; charset=utf-8"
+	respond "stack=v6
+remote={http.request.remote.host}
+proto={http.request.proto}
+" 200
+}

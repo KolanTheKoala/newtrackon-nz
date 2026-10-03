@@ -1,14 +1,53 @@
+# newtrackon.co.nz: the app plus Caddy (TLS, static pages, reverse proxy).
+# Project name "newtrackon" keeps the existing volumes (newtrackon_newtrackon-data, newtrackon_caddy-*).
+name: newtrackon
+
 services:
   newtrackon:
+    build: .
+    image: newtrackon-nz:local
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     container_name: newtrackon
-    ports:
-      - 8080:8080
+    restart: unless-stopped
+    network_mode: host
+    command:
+    - --address=127.0.0.1
+    - --port=8080
     volumes:
-      - newtrackon_data:/app/newTrackon/data
-    image: corralpeltzer/newtrackon:latest
+    - newtrackon-data:/app/newTrackon/data
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
 
-    ### If you have full IPv4 & IPv6 use as-is, otherwise add --ignore-ipv4 or --ignore-ipv6 as required:
-    command: --address=0.0.0.0
+  caddy:
+    image: caddy:2
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    container_name: caddy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+    - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    - ./deploy/caddy/local:/etc/caddy/local:ro   # untracked site-local snippets
+    - ./deploy/www:/srv/www:ro
+    - ./deploy/www-local:/srv/www-local:ro       # untracked files for those snippets
+    - caddy-data:/data
+    - caddy-config:/config
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    cap_add:
+    - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+    - /tmp
 
 volumes:
-  newtrackon_data:
+  newtrackon-data:
+  caddy-data:
+  caddy-config:

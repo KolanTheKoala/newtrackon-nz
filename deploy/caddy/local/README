@@ -1,0 +1,5 @@
+Untracked, site-local Caddy snippets. The Caddyfile imports
+  main-*.caddy  inside the newtrackon.co.nz block
+  alt-*.caddy   inside the ipv4./ipv6. blocks
+Anything else in here (and everything but this README) is git-ignored.
+Files they serve go in deploy/www-local/ (mounted at /srv/www-local).

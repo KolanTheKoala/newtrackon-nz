@@ -12,3 +12,16 @@ __pycache__/
 .coverage.*
 htmlcov/
 .pytest_cache/
+
+# newtrackon.co.nz
+.env
+data/*
+!data/.gitignore
+# site-local Caddy snippets and their files stay off GitHub
+deploy/caddy/local/*
+!deploy/caddy/local/README
+deploy/www-local/*
+!deploy/www-local/README
+# upstream ignores *.html and *.sh; the site pages and host scripts are ours
+!deploy/www/*.html
+!host/*.sh

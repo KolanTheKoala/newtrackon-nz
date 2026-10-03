@@ -1,4 +1,42 @@
-# newTrackon
+# newTrackon NZ (newtrackon.co.nz)
+
+The code behind [newtrackon.co.nz](https://newtrackon.co.nz/), a New Zealand instance of
+[newTrackon](https://github.com/CorralPeltzer/newTrackon). It is upstream newTrackon at commit `e1a0104`
+plus the NZ changes, packaged as one self-contained Docker project (app + Caddy).
+
+What's different from upstream: a stricter status ladder (Up/Good, Up/Slow, Up/Unreliable, Up/Junk,
+Up/Bad, Up/Broken), peer, fake-peer and dual-stack checks, latency measured from several regions,
+an event feed with optional Telegram alerts, clean shutdown on SIGTERM, atomic history writes,
+and NZ templates and styling. See `git log upstream/master..main` for the full diff.
+
+## Running
+
+```
+docker compose up -d --build
+```
+
+Both containers use host networking: the app listens on 127.0.0.1:8080 and Caddy serves
+`newtrackon.co.nz` (plus `ipv4.`/`ipv6.` test hosts) with automatic TLS. Change the hostnames in
+`deploy/caddy/Caddyfile` to run it elsewhere.
+
+- `deploy/caddy/Caddyfile`: proxy config. It imports untracked site-local snippets from
+  `deploy/caddy/local/` (see the README there); files they serve go in `deploy/www-local/`.
+- `deploy/www/`: static files (sitemap, IndexNow key, 404 page).
+- App state lives in the `newtrackon_newtrackon-data` volume. Telegram alerts are configured in
+  `data/notify.json` inside it and are off if that file is missing.
+
+## Status
+
+The upstream test suite passes on upstream; 76 of its 674 tests fail against the NZ changes, mostly
+because they assert upstream labels and scoring. They haven't been updated yet.
+
+## Credit
+
+newTrackon is the work of its original authors (MIT licence, see `LICENSE.txt`). The upstream README follows.
+
+---
+
+## Upstream: newTrackon
 
 newTrackon is a service to monitor the status and health of existing open and public trackers that anyone can use. It
 also allows to submit new trackers to add them to the list.

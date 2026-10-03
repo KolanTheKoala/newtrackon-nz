@@ -1,0 +1,13 @@
+.git
+.github
+.venv
+.env
+data/*
+!data/.gitignore
+deploy
+**/__pycache__
+*.pyc
+.pytest_cache
+.coverage*
+htmlcov
+docker-compose.yml
