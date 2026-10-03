@@ -5,6 +5,15 @@
     var RED = '#c62828';
     var PALETTE = ['#3f6f9f', '#5a8f5a', '#a0884a', '#7d5f9a', '#4f9a96', '#9a6a4f', '#6b7fb0'];  // no red
     var FLAG_W = 18, FLAG_H = 13.5, GAP = 3;
+    // countries too small for the 110m map: [lon, lat]
+    var SMALL = {sg: [103.82, 1.35], hk: [114.17, 22.32], mo: [113.54, 22.19], bh: [50.56, 26.07], mt: [14.38, 35.94],
+        mc: [7.42, 43.74], li: [9.55, 47.16], sm: [12.46, 43.94], va: [12.45, 41.9], ad: [1.52, 42.51], mv: [73.22, 3.2],
+        gi: [-5.35, 36.14], im: [-4.55, 54.24], je: [-2.13, 49.21], gg: [-2.58, 49.45], mu: [57.55, -20.35], sc: [55.49, -4.68],
+        bb: [-59.54, 13.19], ag: [-61.8, 17.06], lc: [-60.98, 13.91], gd: [-61.68, 12.11], kn: [-62.78, 17.3], dm: [-61.37, 15.41],
+        aw: [-69.97, 12.52], cw: [-68.99, 12.17], bm: [-64.75, 32.31], ky: [-81.25, 19.31], pf: [-149.41, -17.68], ws: [-172.1, -13.76],
+        to: [-175.2, -21.18], ki: [173.0, 1.87], mh: [171.18, 7.13], fm: [158.21, 6.92], pw: [134.58, 7.51], nr: [166.93, -0.52],
+        tv: [179.2, -8.52], gu: [144.79, 13.44], as: [-170.7, -14.27], mp: [145.75, 15.18], km: [43.33, -11.65], st: [6.61, 0.19],
+        cv: [-23.6, 15.12], ax: [19.94, 60.19], fo: [-6.91, 62.01]};
     var FLAG_URL = 'https://cdnjs.cloudflare.com/ajax/libs/flag-icons/7.5.0/flags/4x3/';
     var STATUS_COLOR = {up_good: '#00e676', up_new: '#00e676', down: '#9e9e9e'};
     var STATUS_TEXT = {up_good: 'Up/Good', up_new: 'Up/New', up_slow: 'Up/Slow', up_unreliable: 'Up/Unreliable',
@@ -72,8 +81,9 @@
         Object.keys(byCountry).forEach(function (cc) {
             var f = featById[iso[cc]];
             var ts = byCountry[cc].sort(function (a, b) { return b.score - a.score; });
-            var center = projection(f ? mainCentroid(f) : [0, 0]);
-            if (!f || !center) { return; }
+            var lonlat = f ? mainCentroid(f) : SMALL[cc];
+            var center = lonlat && projection(lonlat);
+            if (!center) { return; }
             var cols = Math.ceil(Math.sqrt(ts.length)), rows = Math.ceil(ts.length / cols);
             ts.forEach(function (t, k) {
                 flags.push({t: t, cc: cc, cx: center[0], cy: center[1],
