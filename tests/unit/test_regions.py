@@ -197,3 +197,34 @@ class TestApi:
     def test_clean_region(self, flask_client: FlaskClient) -> None:
         r = flask_client.get("/api/clean?min_age_days=0&region=asia-pacific")
         assert set(_urls(r)) == {"udp://akl.example:1/announce", "udp://sgp.example:1/announce"}
+
+
+@pytest.mark.usefixtures("region_db")
+class TestMainTableFilters:
+    def _rows(self, client: FlaskClient) -> dict[str, dict[str, str]]:  # url -> data-nt-* attributes
+        html = client.get("/").get_data(as_text=True)
+        rows = {}
+        for m in re.finditer(r"<tr [^>]*data-nt-state[^>]*>\s*<td>([^<\s]+)", html):
+            attrs = dict(re.findall(r'data-nt-(\w+)="([^"]*)"', m.group(0)))
+            rows[m.group(1)] = attrs
+        return rows
+
+    def test_filter_bar_present(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/").get_data(as_text=True)
+        for el in ("ntf-up", "ntf-good", "ntf-udp", "ntf-http", "ntf-v4", "ntf-v6", "ntf-peer", "ntf-region", "ntf-fast", "ntf-reset"):
+            assert f'id="{el}"' in html, el
+        assert "/static/js/region-guess.js" in html
+
+    def test_row_tags(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from newtrackon import tracker as T
+
+        monkeypatch.setattr(T, "FAMS", {"udp://akl.example:1/announce": {"v4": True, "v6": True}})
+        monkeypatch.setattr(T, "PEER_OK", {"udp://akl.example:1/announce": True, "udp://ams.example:1/announce": False})
+        rows = self._rows(flask_client)
+        akl, ams, nyc = rows["udp://akl.example:1/announce"], rows["udp://ams.example:1/announce"], rows["http://nyc.example:80/announce"]
+        assert akl["proto"] == "udp" and nyc["proto"] == "http"
+        assert akl["region"] == "asia-pacific" and ams["region"] == "europe" and nyc["region"] == "americas"
+        assert set(akl["fast"].split()) == {"asia", "oceania", "americas"}  # Asia 120, Oceania 3, North America 130
+        assert set(ams["fast"].split()) == {"europe", "americas"}  # Europe 10, North America 90
+        assert set(akl["fam"].split()) == {"v4", "v6"} and ams["fam"] == ""
+        assert akl["peer"] == "pass" and ams["peer"] == "fail" and nyc["peer"] == "na"

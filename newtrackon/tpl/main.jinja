@@ -196,6 +196,76 @@ function fmt(){var d=new Date(ts*1000),a=Math.max(0,Math.round(Date.now()/1000-t
 el.textContent=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'})+' \u00b7 '+ag+' ago'}
 var of=window.fetch;window.fetch=function(){var p=of.apply(this,arguments);p.then(function(r){if(r.ok&&/text\/html/.test(r.headers.get('content-type')||''))r.clone().text().then(function(t){var m=/data-nt-ts="(\d+)"/.exec(t);if(m){ts=+m[1];fmt()}})}).catch(function(){});return p};
 fmt();setInterval(fmt,1000)})();</script>
+<div id="nt-filters" class="d-flex flex-wrap align-items-center gap-2 my-2">
+            <span class="fw-bold me-1">Show only:</span>
+            <input type="checkbox" class="btn-check" id="ntf-up" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-up">Up now</label>
+            <input type="checkbox" class="btn-check" id="ntf-good" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-good">Up/Good</label>
+            <input type="checkbox" class="btn-check" id="ntf-udp" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-udp">UDP</label>
+            <input type="checkbox" class="btn-check" id="ntf-http" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-http">HTTP(S)</label>
+            <input type="checkbox" class="btn-check" id="ntf-v4" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v4">IPv4 works</label>
+            <input type="checkbox" class="btn-check" id="ntf-v6" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v6">IPv6 works</label>
+            <input type="checkbox" class="btn-check" id="ntf-peer" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-peer">Passes peer test</label>
+            <select id="ntf-region" class="form-select form-select-sm w-auto" aria-label="Located in">
+                <option value="">Located anywhere</option>
+                <option value="americas">Located in the Americas</option>
+                <option value="europe">Located in Europe, Middle East &amp; Africa</option>
+                <option value="asia-pacific">Located in Asia-Pacific</option>
+            </select>
+            <select id="ntf-fast" class="form-select form-select-sm w-auto" aria-label="Fast from">
+                <option value="">Fast from anywhere</option>
+                <option value="oceania">Fast from Australia, NZ &amp; Pacific</option>
+                <option value="asia">Fast from Asia</option>
+                <option value="europe">Fast from Europe, Middle East &amp; Africa</option>
+                <option value="americas">Fast from the Americas</option>
+            </select>
+            <button type="button" id="ntf-reset" class="btn btn-sm btn-link">Reset</button>
+        </div>
+        <script src="/static/js/region-guess.js"></script>
+        <script>
+        // Filter bar: DataTables search hook, so paging, the entry count and the auto-refresh keep working.
+        $(function () {
+            var KEY = 'nt-filters', BOXES = ['up', 'good', 'udp', 'http', 'v4', 'v6', 'peer'];
+            var dt = $('#trackon_table').DataTable();
+            var mine = ntGuessRegion();
+            if (mine) { var o = $('#ntf-fast option[value="' + mine + '"]'); o.text(o.text() + ' (you)'); }
+            function state() {
+                var s = {region: $('#ntf-region').val(), fast: $('#ntf-fast').val()};
+                BOXES.forEach(function (b) { s[b] = $('#ntf-' + b).is(':checked'); });
+                return s;
+            }
+            function has(list, v) { return (' ' + (list || '') + ' ').indexOf(' ' + v + ' ') >= 0; }
+            $.fn.dataTable.ext.search.push(function (settings, data, idx) {
+                if (settings.nTable.id !== 'trackon_table') { return true; }
+                var tr = dt.row(idx).node(); if (!tr) { return true; }
+                var s = state(), d = tr.dataset, st = d.ntState || '';
+                if (s.up && st === 'down') { return false; }
+                if (s.good && st !== 'up_good' && st !== 'up_new') { return false; }
+                if (s.udp !== s.http && d.ntProto !== (s.udp ? 'udp' : 'http')) { return false; }
+                if (s.v4 && !has(d.ntFam, 'v4')) { return false; }
+                if (s.v6 && !has(d.ntFam, 'v6')) { return false; }
+                if (s.peer && d.ntPeer !== 'pass') { return false; }
+                if (s.region && !has(d.ntRegion, s.region)) { return false; }
+                if (s.fast && !has(d.ntFast, s.fast)) { return false; }
+                return true;
+            });
+            try {
+                var saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+                BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', !!saved[b]); });
+                $('#ntf-region').val(saved.region || ''); $('#ntf-fast').val(saved.fast || '');
+            } catch (e) {}
+            $('#nt-filters').on('change', 'input, select', function () {
+                try { localStorage.setItem(KEY, JSON.stringify(state())); } catch (e) {}
+                dt.draw();
+            });
+            $('#ntf-reset').on('click', function () {
+                BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', false); });
+                $('#ntf-region, #ntf-fast').val('');
+                try { localStorage.removeItem(KEY); } catch (e) {}
+                dt.draw();
+            });
+            dt.draw();
+        });
+        </script>
 <table id="trackon_table"
                class="table display responsive table-striped table-bordered table-hover initially-hidden">
             <thead>
@@ -221,7 +291,7 @@ fmt();setInterval(fmt,1000)})();</script>
             {% set lt, dt = namespace(value=0), namespace(value=0) %}
             {% if trackers %}
                 {% for t in trackers %}
-                    <tr class="nt-row-{{ nt_rowcls(t) }}" data-nt-state="{{ nt_state(t) }}">
+                    {% set tg = nt_tags(t) %}<tr class="nt-row-{{ nt_rowcls(t) }}" data-nt-state="{{ nt_state(t) }}" data-nt-proto="{{ tg.proto }}" data-nt-fam="{{ tg.fam }}" data-nt-peer="{{ tg.peer }}" data-nt-region="{{ tg.region }}" data-nt-fast="{{ tg.fast }}">
                         <td>{{ t.url }}{% if t.operator_peers %}<span class="nt-grp" title="Same operator or server as: {{ t.operator_peers|join(", ") }}">&#10697;{{ t.operator_peers|length + 1 }}</span>{% endif %}</td>
                         <td class="right{% if t.region_lat %} nt-haslat{% endif %}{% if t.latency %} {{ 'nt-lat-g' if t.latency < 200 else ('nt-lat-o' if t.latency < 300 else 'nt-lat-r') }}{% endif %}"{% if t.region_lat %} title="Latency by region: {% for k, v in t.region_lat.items() %}{{ k }} {{ v }} ms{% if not loop.last %} &middot; {% endif %}{% endfor %} &mdash; median of recent checks per region; other regions via rotating VPN exits, tunnel time subtracted (&plusmn;10&ndash;20 ms)"{% endif %} data-sort="{{ t.latency if (t.status == 1 and t.latency is not none) else 999999 }}">{% if t.status == 1 and t.latency is not none %}{{ [t.latency, 1]|max }} ms{% else %}&mdash;{% endif %}</td>
                         <td class="nt-score" data-nt-age="{{ '%.2f' % ((nt_now() - (t.added or 0)) / 86400) }}" data-sort="{% if t.status == 1 %}{{ (t.uptime|round|int) * 100000 + 9999 - ([t.latency or 9999, 9999]|min) + 20000000 }}{% else %}{{ 19000000 - ([((nt_now() - (t.last_uptime or 0)) / 60)|int, 9000000]|min) }}{% endif %}">{% set nt_r = t.uptime|round|int %}{% set nt_n = [((nt_r / 20)|round|int), 5]|min %}<span class="nt-stars" title="{{ nt_n }} of 5 stars">{{ '★' * nt_n }}<span class="nt-star-off">{{ '☆' * (5 - nt_n) }}</span></span> {{ nt_r }}</td>
