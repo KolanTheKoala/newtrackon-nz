@@ -532,6 +532,8 @@ class TestProcessNewTracker:
 
         existing_tracker = MagicMock()
         existing_tracker.host = "tracker.example.com"
+        # NZ: a same-host candidate is only accepted with a better protocol (udp > http > https); same protocol here
+        existing_tracker.url = "udp://tracker.example.com:6969/announce"
         existing_tracker.ips = ["10.0.0.1"]
         existing_tracker.recent_ips = {"10.0.0.1": 1700000000}
 
@@ -936,11 +938,11 @@ class TestUpdateOutdatedTrackers:
         recent_tracker = MagicMock(update_status=mock_update_status)
         recent_tracker.url = "udp://tracker.example.com:6969/announce"
         recent_tracker.last_checked = 1000  # Checked at time 1000
-        recent_tracker.interval = 300  # 5 minute interval
+        recent_tracker.interval = 1800  # 30 min: NZ intervals are 900 or 1800..14400 (others count as 1800)
         recent_tracker.to_be_deleted = False
 
         with (
-            patch("newtrackon.trackon.time", return_value=1100),  # Now is 1100, so 100 seconds passed < 300 interval
+            patch("newtrackon.trackon.time", return_value=1100),  # 100 s passed: well inside the interval, even with +/-10% jitter
             patch("newtrackon.trackon.db.get_all_data", return_value=[recent_tracker]),
             patch("newtrackon.trackon.db.update_tracker") as mock_update,
             patch("newtrackon.trackon.db.delete_tracker") as mock_delete,
@@ -968,11 +970,11 @@ class TestUpdateOutdatedTrackers:
         outdated_tracker = MagicMock(update_status=mock_update_status)
         outdated_tracker.url = "udp://tracker.example.com:6969/announce"
         outdated_tracker.last_checked = 1000  # Checked at time 1000
-        outdated_tracker.interval = 300  # 5 minute interval
+        outdated_tracker.interval = 1800  # 30 min: NZ intervals are 900 or 1800..14400 (others count as 1800)
         outdated_tracker.to_be_deleted = False  # Should NOT be deleted
 
         with (
-            patch("newtrackon.trackon.time", return_value=1500),  # Now is 1500, so 500 seconds passed > 300 interval
+            patch("newtrackon.trackon.time", return_value=1000 + 2 * 1800),  # two intervals overdue: beyond the +/-10% jitter
             patch("newtrackon.trackon.db.get_all_data", return_value=[outdated_tracker]),
             patch("newtrackon.trackon.db.update_tracker") as mock_update,
             patch("newtrackon.trackon.db.delete_tracker") as mock_delete,
@@ -1000,11 +1002,11 @@ class TestUpdateOutdatedTrackers:
         outdated_tracker = MagicMock(update_status=mock_update_status)
         outdated_tracker.url = "udp://tracker.example.com:6969/announce"
         outdated_tracker.last_checked = 1000  # Checked at time 1000
-        outdated_tracker.interval = 300  # 5 minute interval
+        outdated_tracker.interval = 1800  # 30 min: NZ intervals are 900 or 1800..14400 (others count as 1800)
         outdated_tracker.to_be_deleted = True  # Should be deleted
 
         with (
-            patch("newtrackon.trackon.time", return_value=1500),  # Now is 1500, so 500 seconds passed > 300 interval
+            patch("newtrackon.trackon.time", return_value=1000 + 2 * 1800),  # two intervals overdue: beyond the +/-10% jitter
             patch("newtrackon.trackon.db.get_all_data", return_value=[outdated_tracker]),
             patch("newtrackon.trackon.db.update_tracker") as mock_update,
             patch("newtrackon.trackon.db.delete_tracker") as mock_delete,

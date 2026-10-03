@@ -25,10 +25,18 @@ Both containers use host networking: the app listens on 127.0.0.1:8080 and Caddy
 - App state lives in the `newtrackon_newtrackon-data` volume. Telegram alerts are configured in
   `data/notify.json` inside it and are off if that file is missing.
 
-## Status
+## Tests
 
-The upstream test suite passes on upstream; 76 of its 674 tests fail against the NZ changes, mostly
-because they assert upstream labels and scoring. They haven't been updated yet.
+Upstream's test suite, updated for the NZ behaviour, passes in full (686 tests), and needs no network:
+
+```
+pip install pytest freezegun
+python -m pytest tests -q
+```
+
+`tests/conftest.py` gives every test a temporary `data/` directory and sets the NZ "is it our fault?"
+checks (monitor online, public-resolver cross-check, local-fault check) to the answers upstream assumes;
+`TestNZGuards` tests those checks themselves.
 
 ## Credit
 

@@ -225,16 +225,16 @@ class TestApiStableEndpoint:
 
     @pytest.mark.usefixtures("insert_sample_tracker")
     def test_get_api_stable_returns_95_percent_trackers(self, flask_client: FlaskClient) -> None:
-        """GET /api/stable should return trackers with >= 95% uptime."""
+        """GET /api/stable should return trackers with score >= 90 (NZ threshold), so 95 is included."""
         response = flask_client.get("/api/stable")
         assert response.status_code == 200
         assert response.headers.get("Access-Control-Allow-Origin") == "*"
         # Sample tracker has exactly 95% uptime
         assert b"udp://tracker.example.com:6969/announce" in response.get_data()
 
-    def test_get_api_stable_excludes_below_95(self, flask_client: FlaskClient, mock_db_connection: sqlite3.Connection) -> None:
-        """GET /api/stable should exclude trackers below 95% uptime."""
-        # Insert a tracker with 90% uptime
+    def test_get_api_stable_excludes_below_90(self, flask_client: FlaskClient, mock_db_connection: sqlite3.Connection) -> None:
+        """GET /api/stable should exclude trackers scoring below 90 (NZ threshold; upstream used 95)."""
+        # Insert a tracker scoring 89
         _ = mock_db_connection.execute(
             "INSERT INTO status VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -245,7 +245,7 @@ class TestApiStableEndpoint:
                 1700000000,
                 1800,
                 1,
-                90,  # 90% uptime
+                89,  # score 89: just below the threshold
                 json.dumps(["United States"]),
                 json.dumps(["us"]),
                 json.dumps(["ISP"]),
@@ -261,6 +261,37 @@ class TestApiStableEndpoint:
         response = flask_client.get("/api/stable")
         assert response.status_code == 200
         assert b"low.uptime.tracker.com" not in response.get_data()
+
+
+    def test_get_api_stable_includes_exactly_90(self, flask_client: FlaskClient, mock_db_connection: sqlite3.Connection) -> None:
+        """GET /api/stable should include a tracker scoring exactly 90 (NZ threshold)."""
+        # Insert a tracker scoring 90
+        _ = mock_db_connection.execute(
+            "INSERT INTO status VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "low.uptime.tracker.com",
+                "udp://low.uptime.tracker.com:6969/announce",
+                json.dumps(["1.2.3.4"]),
+                50,
+                1700000000,
+                1800,
+                1,
+                90,  # score 90: on the threshold
+                json.dumps(["United States"]),
+                json.dumps(["us"]),
+                json.dumps(["ISP"]),
+                1704067200,
+                json.dumps([1] * 100),
+                1699990000,
+                1700000000,
+                json.dumps({}),
+            ),
+        )
+        mock_db_connection.commit()
+
+        response = flask_client.get("/api/stable")
+        assert response.status_code == 200
+        assert b"low.uptime.tracker.com" in response.get_data()
 
     def test_get_api_stable_with_min_age_days_zero_includes_new_trackers(
         self, flask_client: FlaskClient, mock_db_connection: sqlite3.Connection

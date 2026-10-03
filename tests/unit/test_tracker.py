@@ -6,6 +6,7 @@ from time import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+from freezegun import freeze_time
 
 from newtrackon.persistence import HistoryData
 from newtrackon.scraper import ScraperResult
@@ -369,14 +370,59 @@ class TestFromUrl:
         assert before <= tracker.added <= after
 
 
+class TestRecordSlots:
+    """NZ history is one entry per 30-min slot, not per check, so check frequency doesn't skew the score."""
+
+    NOW = "2026-01-01 00:10:00"
+
+    def _prep(self, t: Tracker, slots_ago: float) -> None:
+        t.historic = deque([1] * 5, maxlen=1000)
+        t._prev_checked = int(time() - slots_ago * Tracker.SLOT)
+
+    @freeze_time(NOW)
+    def test_one_slot_later_appends_one(self, sample_tracker: Tracker) -> None:
+        self._prep(sample_tracker, 1)
+        sample_tracker._record(1)
+        assert list(sample_tracker.historic) == [1] * 6
+
+    @freeze_time(NOW)
+    def test_same_slot_keeps_the_worse_result(self, sample_tracker: Tracker) -> None:
+        self._prep(sample_tracker, 0.01)
+        sample_tracker._record(0)
+        assert list(sample_tracker.historic) == [1] * 4 + [0]
+
+    @freeze_time(NOW)
+    def test_long_gap_is_capped(self, sample_tracker: Tracker) -> None:
+        self._prep(sample_tracker, 100)
+        sample_tracker._record(1)
+        assert len(sample_tracker.historic) == 5 + Tracker.ADAPT_MAX // Tracker.SLOT + 1
+
+    @freeze_time(NOW)
+    def test_gap_is_split_when_status_changes(self, sample_tracker: Tracker) -> None:
+        """Unknown slots between an up and a down check are shared: half old status, half new."""
+        self._prep(sample_tracker, 5)
+        sample_tracker._record(0)
+        assert list(sample_tracker.historic)[5:] == [1, 1, 0, 0, 0]
+
+
 class TestUpdateUptime:
-    """Tests for Tracker.update_uptime method."""
+    """Tests for Tracker.update_uptime (NZ score).
+
+    score = recency-weighted availability * (1 - flip rate)^2 * 100, half-life 336 slots,
+    capped at 80 + 20 * min(1, slots / 336) so new trackers earn a top score over 7 days.
+    """
 
     def test_update_uptime_all_up(self, sample_tracker: Tracker) -> None:
-        """Test uptime calculation when all entries are up."""
+        """All up, but only 100 slots old: held at the new-tracker ceiling."""
         sample_tracker.historic = deque([1] * 100, maxlen=1000)
         sample_tracker.update_uptime()
-        assert sample_tracker.uptime == 100.0
+        assert sample_tracker.uptime == pytest.approx(80.0 + 20.0 * 100 / 336)
+
+    def test_update_uptime_all_up_established(self, sample_tracker: Tracker) -> None:
+        """All up for more than 7 days of slots: full score."""
+        sample_tracker.historic = deque([1] * 400, maxlen=1000)
+        sample_tracker.update_uptime()
+        assert sample_tracker.uptime == pytest.approx(100.0)
 
     def test_update_uptime_all_down(self, sample_tracker: Tracker) -> None:
         """Test uptime calculation when all entries are down."""
@@ -385,22 +431,28 @@ class TestUpdateUptime:
         assert sample_tracker.uptime == 0.0
 
     def test_update_uptime_mixed(self, sample_tracker: Tracker) -> None:
-        """Test uptime calculation with mixed up/down entries."""
-        sample_tracker.historic = deque([1, 0] * 50, maxlen=1000)  # 50% uptime
+        """Flapping every slot: 50% available, but stability collapses to zero."""
+        sample_tracker.historic = deque([1, 0] * 50, maxlen=1000)
         sample_tracker.update_uptime()
-        assert sample_tracker.uptime == 50.0
+        assert sample_tracker.uptime == 0.0
 
     def test_update_uptime_75_percent(self, sample_tracker: Tracker) -> None:
-        """Test uptime calculation with 75% uptime."""
-        sample_tracker.historic = deque([1, 1, 1, 0] * 25, maxlen=1000)  # 75% uptime
+        """75% up but flipping every few slots: scored far below 75."""
+        sample_tracker.historic = deque([1, 1, 1, 0] * 25, maxlen=1000)
         sample_tracker.update_uptime()
-        assert sample_tracker.uptime == 75.0
+        assert sample_tracker.uptime == pytest.approx(19.0728, abs=1e-3)
+
+    def test_update_uptime_one_outage_small_penalty(self, sample_tracker: Tracker) -> None:
+        """One 3-hour outage in an established record costs only a little."""
+        sample_tracker.historic = deque([1] * 200 + [0] * 6 + [1] * 194, maxlen=1000)
+        sample_tracker.update_uptime()
+        assert 97.0 < sample_tracker.uptime < 98.0
 
     def test_update_uptime_single_entry_up(self, sample_tracker: Tracker) -> None:
-        """Test uptime calculation with single up entry."""
+        """A single up slot: held at the new-tracker ceiling."""
         sample_tracker.historic = deque([1], maxlen=1000)
         sample_tracker.update_uptime()
-        assert sample_tracker.uptime == 100.0
+        assert sample_tracker.uptime == pytest.approx(80.0 + 20.0 / 336)
 
     def test_update_uptime_single_entry_down(self, sample_tracker: Tracker) -> None:
         """Test uptime calculation with single down entry."""
@@ -642,7 +694,8 @@ class TestUpdateStatus:
             sample_tracker.update_status()
 
             assert sample_tracker.status == 1
-            assert sample_tracker.interval == 1800
+            # NZ: interval is adaptive, not the tracker's announce interval; a clean record steps up by 30 min
+            assert sample_tracker.interval == 3600
             assert sample_tracker.latency is not None
 
     @pytest.mark.usefixtures("reset_globals")
@@ -669,7 +722,8 @@ class TestUpdateStatus:
             sample_tracker.update_status()
 
             assert sample_tracker.status == 1
-            assert sample_tracker.interval == 1800
+            # NZ: interval is adaptive, not the tracker's announce interval; a clean record steps up by 30 min
+            assert sample_tracker.interval == 3600
 
     @pytest.mark.usefixtures("reset_globals")
     def test_update_status_announce_failure(self, sample_tracker: Tracker, mock_network: dict[str, MagicMock]) -> None:
@@ -753,7 +807,7 @@ class TestUpdateStatus:
     def test_update_status_sets_interval_when_uptime_zero(
         self, sample_tracker: Tracker, mock_network: dict[str, MagicMock]
     ) -> None:
-        """Test that interval is set to 10800 when uptime is 0."""
+        """NZ dead ramp: a dead tracker is checked after 60 min, then +30 min per failed check (max 4 h)."""
         mock_network["getaddrinfo"].return_value = [
             (socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("93.184.216.34", 6969)),
         ]
@@ -769,7 +823,11 @@ class TestUpdateStatus:
 
             sample_tracker.update_status()
 
-            assert sample_tracker.interval == 10800
+            assert sample_tracker.status == 0
+            assert sample_tracker.interval == 3600
+
+            sample_tracker.update_status()
+            assert sample_tracker.interval == 5400
 
 
 class TestUpdateSchemeFromBep34:
@@ -1000,11 +1058,12 @@ class TestEdgeCases:
         assert tracker.ips == ["93.184.216.34"]
 
     def test_empty_historic_deque(self, sample_tracker: Tracker) -> None:
-        """Test update_uptime with empty historic deque raises."""
+        """NZ: update_uptime with an empty history scores 0 instead of raising ZeroDivisionError."""
         sample_tracker.historic = deque(maxlen=1000)
 
-        with pytest.raises(ZeroDivisionError):
-            sample_tracker.update_uptime()
+        sample_tracker.update_uptime()
+
+        assert sample_tracker.uptime == 0.0
 
     def test_tracker_url_without_port(self, mock_network: dict[str, MagicMock]) -> None:
         """Test tracker URL without explicit port."""
@@ -1029,3 +1088,88 @@ class TestEdgeCases:
 
         # Should deduplicate and order IPv6 first
         assert sample_tracker.ips == ["2606:2800:21f:cb07:6820:80da:af6b:8b2c", "1.2.3.4"]
+
+
+class TestNZGuards:
+    """NZ "is it our fault?" guards: a failure is only blamed on the tracker when this monitor is fine.
+
+    The autouse nz_isolation fixture sets these guards to the upstream path; each test here overrides one.
+    """
+
+    @staticmethod
+    def _failing_check(tracker: Tracker, mock_network: dict[str, MagicMock]) -> None:
+        mock_network["getaddrinfo"].return_value = [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("93.184.216.34", 6969))]
+        with (
+            patch("newtrackon.tracker.scraper.get_bep_34", return_value=(False, None)),
+            patch("newtrackon.tracker.scraper.announce_udp", side_effect=RuntimeError("UDP timeout")),
+            patch("newtrackon.tracker.persistence.raw_data", deque[HistoryData]()),
+            patch.object(tracker, "update_ipapi_data"),
+        ):
+            tracker.update_status()
+
+    @pytest.mark.usefixtures("reset_globals")
+    def test_monitor_offline_records_nothing(
+        self, sample_tracker: Tracker, mock_network: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Our own outage: the tracker stays up, history is untouched, and it is re-checked in about 5 minutes."""
+        import newtrackon.tracker as T
+
+        monkeypatch.setattr(T, "_monitor_online", lambda: False)
+        sample_tracker.last_uptime = int(time())
+        before = list(sample_tracker.historic)
+
+        self._failing_check(sample_tracker, mock_network)
+
+        assert sample_tracker.status == 1
+        assert list(sample_tracker.historic) == before
+        assert sample_tracker.to_be_deleted is False
+        assert abs(sample_tracker.last_checked - (int(time()) - sample_tracker.interval + 300)) <= 2
+
+    @pytest.mark.usefixtures("mock_network", "reset_globals")
+    def test_monitor_offline_never_deletes(self, sample_tracker: Tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A tracker past max_downtime is not deleted while this monitor is offline."""
+        import newtrackon.tracker as T
+
+        monkeypatch.setattr(T, "_monitor_online", lambda: False)
+        sample_tracker.last_uptime = int(time()) - max_downtime - 1
+
+        with patch("newtrackon.tracker.persistence.raw_data", deque[HistoryData]()):
+            sample_tracker.update_status()
+
+        assert sample_tracker.to_be_deleted is False
+
+    @pytest.mark.usefixtures("reset_globals")
+    def test_local_fault_records_nothing(
+        self, sample_tracker: Tracker, mock_network: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Works from elsewhere (our DNS or path is broken): nothing is recorded against the tracker."""
+        import newtrackon.tracker as T
+
+        monkeypatch.setattr(T, "_nt_local_fault", lambda t, err: True)
+        sample_tracker.last_uptime = int(time())
+        before = list(sample_tracker.historic)
+
+        self._failing_check(sample_tracker, mock_network)
+
+        assert sample_tracker.status == 1
+        assert list(sample_tracker.historic) == before
+
+    @pytest.mark.parametrize("public_answer", [None, {"93.184.216.34"}], ids=["no-resolver-answered", "public-ip-elsewhere"])
+    def test_private_ip_kept_unless_public_resolvers_agree(
+        self,
+        sample_tracker: Tracker,
+        mock_network: dict[str, MagicMock],
+        monkeypatch: pytest.MonkeyPatch,
+        public_answer: set[str] | None,
+    ) -> None:
+        """Local DNS says private, but Cloudflare/Quad9 don't confirm it: the tracker is kept, not deleted."""
+        import newtrackon.tracker as T
+
+        monkeypatch.setattr(T, "_nt_public_ips", lambda host: public_answer)
+        mock_network["getaddrinfo"].return_value = [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("127.0.0.1", 6969))]
+
+        with pytest.raises(RuntimeError, match="tracker kept"):
+            sample_tracker.update_ips()
+
+        assert sample_tracker.ips is None
+        assert sample_tracker.to_be_deleted is False

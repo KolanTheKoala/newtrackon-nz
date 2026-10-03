@@ -334,31 +334,31 @@ class TestFormatUptimeAndDowntimeTime:
 
         result = format_uptime_and_downtime_time([tracker])
 
-        assert result[0].status_readable == "Working for 1 hour"
+        assert result[0].status_readable == "Up \u20071h"  # NZ format: "Dd HHh", figure-space padded
         assert result[0].status_epoch == last_downtime
 
     @freeze_time("2024-01-15 12:00:00")
     def test_working_tracker_never_down(self):
-        """Should show 'Working' for tracker that was never down."""
+        """Should show 'Up' for tracker that was never down."""
         tracker = MagicMock()
         tracker.status = 1
         tracker.last_downtime = None
 
         result = format_uptime_and_downtime_time([tracker])
 
-        assert result[0].status_readable == "Working"
+        assert result[0].status_readable == "Up"
         assert result[0].status_epoch is None
 
     @freeze_time("2024-01-15 12:00:00")
     def test_working_tracker_with_zero_downtime(self):
-        """Should show 'Working' when last_downtime is 0 (falsy)."""
+        """Should show 'Up' when last_downtime is 0 (falsy)."""
         tracker = MagicMock()
         tracker.status = 1
         tracker.last_downtime = 0
 
         result = format_uptime_and_downtime_time([tracker])
 
-        assert result[0].status_readable == "Working"
+        assert result[0].status_readable == "Up"
 
     @freeze_time("2024-01-15 12:00:00")
     def test_down_tracker_with_last_uptime(self):
@@ -372,7 +372,7 @@ class TestFormatUptimeAndDowntimeTime:
 
         result = format_uptime_and_downtime_time([tracker])
 
-        assert result[0].status_readable == "Down for 2 days"
+        assert result[0].status_readable == "Down 2d \u20070h"
         assert result[0].status_epoch == sys.maxsize
 
     @freeze_time("2024-01-15 12:00:00")
@@ -415,8 +415,8 @@ class TestFormatUptimeAndDowntimeTime:
 
         result = format_uptime_and_downtime_time([tracker1, tracker2])
 
-        assert result[0].status_readable == "Working for 1 hour"
-        assert result[1].status_readable == "Down for 2 hours"
+        assert result[0].status_readable == "Up \u20071h"
+        assert result[1].status_readable == "Down \u20072h"
 
     def test_empty_list(self):
         """Should handle empty tracker list."""

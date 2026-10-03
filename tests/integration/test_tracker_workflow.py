@@ -11,6 +11,7 @@ from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from freezegun import freeze_time
 from pytest import MonkeyPatch
 
 from newtrackon import ingest
@@ -73,6 +74,7 @@ class TestTrackerUpdateCycle:
     """Test end-to-end tracker update cycle combining multiple modules."""
 
     @pytest.mark.usefixtures("reset_globals")
+    @freeze_time("2026-01-01 00:10:00")
     def test_update_status_with_successful_scrape(self, shared_memory_db: Connection, sample_tracker: Tracker) -> None:
         """Insert tracker in DB, call update_status() with mocked scraper,
         verify status, uptime, historic updated, and db.update_tracker() persists changes.
@@ -81,6 +83,8 @@ class TestTrackerUpdateCycle:
 
         # Ensure tracker has a recent last_uptime to avoid max_downtime deletion
         sample_tracker.last_uptime = int(time())
+        # NZ records history per 30-min slot: previous check exactly one slot ago -> one new entry
+        sample_tracker.last_checked = int(time()) - Tracker.SLOT
 
         # Insert tracker into DB
         _ = shared_memory_db.execute(
@@ -135,7 +139,7 @@ class TestTrackerUpdateCycle:
         assert sample_tracker.uptime is not None
 
         # Verify interval from response
-        assert sample_tracker.interval == 1800
+        assert sample_tracker.interval == 3600  # NZ adaptive: a clean record steps up by 30 min
 
         # Persist changes to DB
         db.update_tracker(sample_tracker)
@@ -146,7 +150,7 @@ class TestTrackerUpdateCycle:
         row = cast(tuple[object, ...] | None, cursor.fetchone())
         assert row is not None
         assert row[0] == 1  # status
-        assert row[1] == 1800  # interval
+        assert row[1] == 3600  # interval (NZ adaptive)
         historic_from_db = cast(list[int], json.loads(cast(str, row[2])))
         assert historic_from_db[-1] == 1  # Last historic entry
 
@@ -822,7 +826,8 @@ class TestIntervalValidation:
         _ = cursor.execute("SELECT host, interval FROM status WHERE host = ?", ("boundary-high.example.com",))
         row = cast(tuple[object, ...] | None, cursor.fetchone())
         assert row is not None
-        assert row[1] == 10800
+        # NZ: the announce interval only decides admission; the check interval is adaptive and a new tracker starts at 30 min
+        assert row[1] == 1800
 
     @pytest.mark.usefixtures("empty_queues", "reset_globals")
     def test_reject_tracker_with_missing_interval(self, shared_memory_db: Connection) -> None:

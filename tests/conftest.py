@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections import deque
 from collections.abc import Generator
+from pathlib import Path
 from queue import Empty
 from sqlite3 import Connection
 from typing import TYPE_CHECKING
@@ -48,6 +49,38 @@ def clean_global_state() -> Generator[None]:
     drain_submitted_queue()
     persistence.raw_data.clear()
     persistence.submitted_data.clear()
+
+
+_NT_STATE_DICTS = (
+    "PEER_OK", "PEER_FAILS", "FAKE_FAILS", "FAKE_N", "INFLATED", "STALE", "CID_OK", "FAM_FAILS", "FAMS", "DOWN_WHY",
+    "ANN_IV", "REGION_LAT", "REGION_SAMPLES", "REGION_TS", "PEER_HIST", "LAST_STATE", "_NT_SKIPS", "_NT_DEL_REASON",
+)
+
+
+@pytest.fixture(autouse=True)
+def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Isolate the NZ additions: no real network checks, no Telegram, no writes outside a temp data/ dir.
+
+    The "is it our fault?" guards are set to the answers that put the code on the upstream path:
+    the monitor is online, public resolvers find no public address, and failures are the tracker's own.
+    Tests of the guards themselves override these.
+    """
+    from newtrackon import tracker as T
+
+    workdir = tmp_path / "nz-cwd"  # own subdir: some tests create tmp_path/"data" themselves
+    (workdir / "data").mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+    monkeypatch.setattr(T, "_monitor_online", lambda: True)
+    monkeypatch.setattr(T, "_nt_public_ips", lambda host: set())
+    monkeypatch.setattr(T, "_nt_local_fault", lambda t, err: False)
+    monkeypatch.setattr(T, "_notify", lambda ev: None)
+    for name in _NT_STATE_DICTS:
+        if isinstance(getattr(T, name, None), dict):
+            monkeypatch.setattr(T, name, {})
+    monkeypatch.setattr(T, "EVENTS", [])
+    monkeypatch.setattr(T, "_ONLINE", [0.0, True])
+    monkeypatch.setattr(T, "_FAILSTREAK", [0])
+    yield
 
 
 @pytest.fixture
