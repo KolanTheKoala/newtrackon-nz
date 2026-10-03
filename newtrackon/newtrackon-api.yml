@@ -9,8 +9,8 @@ info:
 
     | You are in | For example | Copy this link |
     |---|---|---|
-    | Asia | China, Japan, Korea, India, Singapore, Thailand | [https://newtrackon.co.nz/api/clean?fast_from=asia](https://newtrackon.co.nz/api/clean?fast_from=asia) |
     | Australia, New Zealand or the Pacific | Australia, New Zealand, Fiji | [https://newtrackon.co.nz/api/clean?fast_from=oceania](https://newtrackon.co.nz/api/clean?fast_from=oceania) |
+    | Asia | China, Japan, Korea, India, Singapore, Thailand | [https://newtrackon.co.nz/api/clean?fast_from=asia](https://newtrackon.co.nz/api/clean?fast_from=asia) |
     | Europe, the Middle East or Africa | UK, Germany, Russia, Turkey, UAE, South Africa | [https://newtrackon.co.nz/api/clean?fast_from=europe](https://newtrackon.co.nz/api/clean?fast_from=europe) |
     | North, Central or South America | USA, Canada, Mexico, Brazil, Chile | [https://newtrackon.co.nz/api/clean?fast_from=americas](https://newtrackon.co.nz/api/clean?fast_from=americas) |
     | Anywhere / not sure | | [https://newtrackon.co.nz/api/clean](https://newtrackon.co.nz/api/clean) |
