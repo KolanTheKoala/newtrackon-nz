@@ -222,6 +222,12 @@ fmt();setInterval(fmt,1000)})();</script>
                 <option value="americas">Fast from the Americas</option>
             </select>
         </div>
+        <style>
+        #nt-tablebar .dt-length, #nt-tablebar .dt-search { display: flex; align-items: center; gap: .5rem; margin: 0; }
+        #nt-tablebar .dt-length label, #nt-tablebar .dt-search label { margin: 0; white-space: nowrap; }
+        #nt-tablebar .dt-search { flex: 1 1 22rem; }
+        #nt-tablebar .dt-search input { flex: 1; width: auto; margin: 0; }
+        </style>
         <div id="nt-tablebar" class="d-flex flex-wrap align-items-center gap-3 mb-2">
             <button type="button" id="ntf-reset" class="btn btn-sm btn-danger">Reset</button>
             <span id="nt-count" class="fw-bold"></span>
@@ -266,12 +272,14 @@ fmt();setInterval(fmt,1000)})();</script>
                 BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', false); });
                 $('#ntf-region, #ntf-fast').val('');
                 try { localStorage.removeItem(KEY); } catch (e) {}
+                dt.search('');
+                $(dt.table().container()).find('.dt-search input').val('');
                 dt.draw();
             });
             // one line under the filters: Reset, "x of y shown", entries per page, search
             var bar = $('#nt-tablebar'), wrap = $(dt.table().container());
             wrap.find('.dt-length').first().appendTo(bar);
-            wrap.find('.dt-search').first().addClass('ms-auto').appendTo(bar);
+            wrap.find('.dt-search').first().appendTo(bar);
             wrap.children('.dt-layout-row').first().hide();
             function count() { $('#nt-count').text(dt.rows({search: 'applied'}).count() + ' of ' + dt.rows().count() + ' shown'); }
             dt.on('draw', count);

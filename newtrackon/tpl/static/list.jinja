@@ -31,7 +31,14 @@
                 <option value="europe">Fast from Europe, Middle East &amp; Africa</option>
                 <option value="americas">Fast from the Americas</option>
             </select>
-            <button type="button" id="ntf-reset" class="btn btn-sm btn-link">Reset</button>
+        </div>
+        <div id="nt-tablebar" class="d-flex flex-wrap align-items-center gap-3 mb-2">
+            <button type="button" id="ntf-reset" class="btn btn-sm btn-danger">Reset</button>
+            <span id="nt-count" class="fw-bold"></span>
+            <div class="d-flex align-items-center gap-2" style="flex: 1 1 22rem">
+                <label for="nt-search" class="m-0">Search:</label>
+                <input type="search" id="nt-search" class="form-control form-control-sm" style="flex: 1">
+            </div>
         </div>
         <p>
             <button class="btn btn-primary btn-copy" data-clipboard-action="copy" data-clipboard-target="#tocopy">
@@ -75,11 +82,14 @@
         }
         function render() {
             var s = state(), now = Date.now() / 1000;
-            var urls = trackers.filter(function (t) { return keep(t, s, now); })
+            var base = trackers.filter(function (t) { return keep(t, {v4: false, 'new': s['new']}, now); }).length;
+            var q = ($('#nt-search').val() || '').trim().toLowerCase();
+            var urls = trackers.filter(function (t) { return keep(t, s, now) && (!q || t.url.toLowerCase().indexOf(q) >= 0); })
                 .sort(function (a, b) { return Math.round(b.score) - Math.round(a.score) || (a.latency_ms || 99999) - (b.latency_ms || 99999); })
                 .map(function (t) { return t.url; });
             $('#tocopy').text(urls.length ? urls.join('\n\n') + '\n' : 'No trackers match these filters.');
             $('#size').text(urls.length);
+            $('#nt-count').text(urls.length + ' of ' + base + ' shown');
             var q = [];
             if (s['new']) { q.push('min_age_days=0'); }
             if (s.good) { q.push('good=1'); }
@@ -103,9 +113,11 @@
             if (mine) { $('#ntf-fast').val(mine); }
         }
         $('#nt-filters').on('change', 'input, select', render);
+        $('#nt-search').on('input', render);
         $('#ntf-reset').on('click', function () {
             BOXES.forEach(function (b) { $('#ntf-' + b).prop('checked', false); });
             $('#ntf-region, #ntf-fast').val('');
+            $('#nt-search').val('');
             render();
         });
         $.getJSON('/api/details', function (d) { trackers = d; render(); });
