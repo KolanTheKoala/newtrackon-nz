@@ -18,6 +18,7 @@ from flask import (
 from werkzeug.routing import BaseConverter, Map
 
 from newtrackon import db, ingest, persistence, scraper, utils
+from newtrackon.regions import RegionFilter, parse_region_filter
 from newtrackon.tracker import format_uptime_and_downtime_time
 
 max_input_length: int = 1000000
@@ -184,7 +185,10 @@ def api_percentage(percentage: int, added_before: int | None = None) -> Response
     include_upv4_only = request.args.get("include_ipv4_only_trackers", default="true").lower() not in ("false", "0")
     include_upv6_only = request.args.get("include_ipv6_only_trackers", default="true").lower() not in ("false", "0")
     if 0 <= percentage <= 100:
-        formatted_list = db.get_api_data("percentage", percentage, include_upv4_only, include_upv6_only, added_before)
+        formatted_list = db.get_api_data(
+            "percentage", percentage, include_upv4_only, include_upv6_only, added_before,
+            region_filter=get_region_filter_or_abort(),
+        )
         resp = make_response(formatted_list)
         resp = utils.add_api_headers(resp)
         return resp
@@ -199,6 +203,13 @@ def api_percentage(percentage: int, added_before: int | None = None) -> Response
 
 
 stable_min_age_days_default: int = 7
+
+
+def get_region_filter_or_abort() -> RegionFilter:
+    try:
+        return parse_region_filter(request.args)
+    except ValueError as exc:
+        abort(Response(str(exc), 400, headers={"Access-Control-Allow-Origin": "*"}))
 
 
 def get_added_before_or_abort(default_min_age_days: int = 0) -> int | None:
@@ -233,7 +244,9 @@ def api_all():
 @app.route("/api/udp")
 @app.route("/api/http")
 def api_multiple():
-    resp = make_response(db.get_api_data(request.path, added_before=get_added_before_or_abort()))
+    resp = make_response(
+        db.get_api_data(request.path, added_before=get_added_before_or_abort(), region_filter=get_region_filter_or_abort())
+    )
     resp = utils.add_api_headers(resp)
     return resp
 

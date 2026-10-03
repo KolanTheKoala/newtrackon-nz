@@ -55,7 +55,9 @@ paths:
         - name: max_latency
           in: query
           required: false
-          description: Maximum latency in milliseconds, average across regions. 0 means no limit.
+          description: >-
+            Maximum latency in milliseconds, average across all probe points. 0 means no limit. For speed from one part
+            of the world use fast_from instead.
           schema: {type: integer, default: 0, minimum: 0}
         - name: min_age_days
           in: query
@@ -71,6 +73,9 @@ paths:
           required: false
           description: Keep only the best tracker per operator (same servers or same domain).
           schema: {type: boolean, default: true}
+        - $ref: "#/components/parameters/Region"
+        - $ref: "#/components/parameters/FastFrom"
+        - $ref: "#/components/parameters/FastFromMs"
       responses:
         "200":
           description: Announce URLs, one per line, separated by blank lines (same format as the other lists).
@@ -79,7 +84,7 @@ paths:
               schema: {type: string}
               example: "udp://tracker.example.org:1337/announce\n\nhttps://tracker.example.net:443/announce\n"
         "400":
-          description: min_score, min_age_days or max_latency is not a number.
+          description: min_score, min_age_days or max_latency is not a number, or a region option is invalid.
   /details:
     get:
       summary: Full state of every tracker as JSON (NZ mirror)
@@ -87,7 +92,11 @@ paths:
       description: >-
         Everything the site knows about each tracker - status (up_good / up_new / up_slow / up_unreliable / up_junk / up_broken / up_bad / down) and problems, score, latency
         and latency by city, IP families, peer-test record, fake-peer streak, flags, the tracker's own announce interval,
-        availability stats, same-operator group, IPs, countries and networks.
+        availability stats, same-operator group, IPs, countries, networks and regions. Accepts the region filters too.
+      parameters:
+        - $ref: "#/components/parameters/Region"
+        - $ref: "#/components/parameters/FastFrom"
+        - $ref: "#/components/parameters/FastFromMs"
       responses:
         "200":
           description: One object per tracker.
@@ -105,6 +114,7 @@ paths:
                       score: {}
                       latency_ms: {}
                       latency_by_region_ms: {}
+                      regions: {}
                       families: {}
                       peer_test: {}
                       fake_peers: {}
@@ -152,6 +162,9 @@ paths:
       - $ref: "#/components/parameters/IncludeIPv4OnlyTrackers"
       - $ref: "#/components/parameters/IncludeIPv6OnlyTrackers"
       - $ref: "#/components/parameters/MinAgeDays"
+      - $ref: "#/components/parameters/Region"
+      - $ref: "#/components/parameters/FastFrom"
+      - $ref: "#/components/parameters/FastFromMs"
     get:
       summary: Get stable trackers
       tags:
@@ -169,6 +182,9 @@ paths:
       - $ref: "#/components/parameters/IncludeIPv4OnlyTrackers"
       - $ref: "#/components/parameters/IncludeIPv6OnlyTrackers"
       - $ref: "#/components/parameters/MinAgeDays"
+      - $ref: "#/components/parameters/Region"
+      - $ref: "#/components/parameters/FastFrom"
+      - $ref: "#/components/parameters/FastFromMs"
       - name: score
         in: path
         description: Minimum score (0-100)
@@ -194,6 +210,9 @@ paths:
   /live:
     parameters:
       - $ref: "#/components/parameters/MinAgeDays"
+      - $ref: "#/components/parameters/Region"
+      - $ref: "#/components/parameters/FastFrom"
+      - $ref: "#/components/parameters/FastFromMs"
     get:
       summary: Get working trackers
       tags:
@@ -209,6 +228,9 @@ paths:
   /udp:
     parameters:
       - $ref: "#/components/parameters/MinAgeDays"
+      - $ref: "#/components/parameters/Region"
+      - $ref: "#/components/parameters/FastFrom"
+      - $ref: "#/components/parameters/FastFromMs"
     get:
       summary: Get stable UDP trackers
       tags:
@@ -230,6 +252,9 @@ paths:
   /http:
     parameters:
       - $ref: "#/components/parameters/MinAgeDays"
+      - $ref: "#/components/parameters/Region"
+      - $ref: "#/components/parameters/FastFrom"
+      - $ref: "#/components/parameters/FastFromMs"
     get:
       summary: Get stable HTTP/HTTPS trackers
       tags:
@@ -254,6 +279,9 @@ paths:
       - $ref: "#/components/parameters/IncludeIPv4OnlyTrackers"
       - $ref: "#/components/parameters/IncludeIPv6OnlyTrackers"
       - $ref: "#/components/parameters/MinAgeDays"
+      - $ref: "#/components/parameters/Region"
+      - $ref: "#/components/parameters/FastFrom"
+      - $ref: "#/components/parameters/FastFromMs"
     get:
       summary: Get all trackers
       tags:
@@ -320,6 +348,36 @@ components:
       schema:
         type: boolean
         default: true
+    Region:
+      in: query
+      name: region
+      description: >-
+        Only trackers located in these regions (by the country of their IP addresses; a tracker counts if any of its
+        addresses is there). Comma-separated. Regions follow how the internet is wired: americas (North, Central and
+        South America), europe (Europe, Russia, Central Asia, the Middle East and Africa), asia-pacific (Asia and Oceania).
+        Trackers with no known country are left out.
+      schema:
+        type: string
+        example: europe
+    FastFrom:
+      in: query
+      name: fast_from
+      description: >-
+        Only trackers that answer quickly from this region: americas (measured from North America), europe (from Europe)
+        or asia-pacific (from both Asia and Oceania). Trackers not yet measured from every point are left out.
+      schema:
+        type: string
+        enum: [americas, europe, asia-pacific]
+    FastFromMs:
+      in: query
+      name: fast_from_ms
+      description: >-
+        Latency limit for fast_from, in milliseconds. Default 150 for americas and europe, 250 for asia-pacific (it
+        spans the Pacific, so few trackers are under 150 ms from both Asia and Oceania).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 2000
     MinAgeDays:
       in: query
       name: min_age_days

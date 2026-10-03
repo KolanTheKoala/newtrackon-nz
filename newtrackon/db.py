@@ -5,6 +5,8 @@ from collections.abc import Iterable, Sequence
 from os import path
 from typing import TypedDict, cast
 
+from newtrackon import tracker as _tracker
+from newtrackon.regions import NO_FILTER, RegionFilter
 from newtrackon.tracker import Tracker
 from newtrackon.utils import TrackerEndpointInput, dict_factory, format_list, remove_ipvx_only_trackers
 
@@ -140,6 +142,8 @@ def get_api_data(
     include_ipv4_only: bool = True,
     include_ipv6_only: bool = True,
     added_before: int | None = None,
+    *,
+    region_filter: RegionFilter = NO_FILTER,
 ) -> str:
     conn = sqlite3.connect(db_file)
     c = conn.cursor()
@@ -147,13 +151,13 @@ def get_api_data(
     params: tuple[int, ...] = ()
 
     if query == "/api/http":
-        sql = 'SELECT URL, IP FROM STATUS WHERE URL LIKE "http%" AND STATUS = 1 AND ROUND(UPTIME) >= 90'
+        sql = 'SELECT URL, IP, COUNTRY_CODE FROM STATUS WHERE URL LIKE "http%" AND STATUS = 1 AND ROUND(UPTIME) >= 90'
     elif query == "/api/udp":
-        sql = 'SELECT URL, IP FROM STATUS WHERE URL LIKE "udp://%" AND STATUS = 1 AND ROUND(UPTIME) >= 90'
+        sql = 'SELECT URL, IP, COUNTRY_CODE FROM STATUS WHERE URL LIKE "udp://%" AND STATUS = 1 AND ROUND(UPTIME) >= 90'
     elif query == "/api/live":
-        sql = "SELECT URL, IP FROM STATUS WHERE STATUS = 1"
+        sql = "SELECT URL, IP, COUNTRY_CODE FROM STATUS WHERE STATUS = 1"
     elif query == "percentage":
-        sql = "SELECT URL, IP FROM STATUS WHERE ROUND(UPTIME) >= ?"
+        sql = "SELECT URL, IP, COUNTRY_CODE FROM STATUS WHERE ROUND(UPTIME) >= ?"
         params = (uptime,)
         if uptime > 0:  # live-only for score lists; /api/all (0) stays complete
             sql += " AND STATUS = 1"
@@ -165,10 +169,14 @@ def get_api_data(
     sql += " ORDER BY (STATUS = 1) DESC, ROUND(UPTIME) DESC, COALESCE(LATENCY, 99999) ASC"
     _ = c.execute(sql, params)
 
-    raw_rows = cast(list[tuple[str, str]], c.fetchall())
+    raw_rows = cast(list[tuple[str, str, str | None]], c.fetchall())
     conn.close()
 
-    urls_and_ips: Sequence[TrackerEndpointInput] = [(url, cast(list[str] | None, json.loads(ips))) for url, ips in raw_rows]
+    if region_filter.active:
+        raw_rows = [
+            r for r in raw_rows if region_filter.matches(r[0], json.loads(r[2]) if r[2] else None, _tracker.REGION_LAT)
+        ]
+    urls_and_ips: Sequence[TrackerEndpointInput] = [(url, cast(list[str] | None, json.loads(ips))) for url, ips, _ in raw_rows]
 
     if not include_ipv4_only:
         urls_and_ips = remove_ipvx_only_trackers(urls_and_ips, version=4)

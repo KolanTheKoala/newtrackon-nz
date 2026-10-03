@@ -3,6 +3,7 @@ from flask import Response, jsonify, request
 
 from newtrackon import db
 from newtrackon import tracker as T
+from newtrackon.regions import parse_region_filter, regions_of
 
 
 def _trackers():
@@ -93,6 +94,7 @@ def _detail(t):
         "score": round(float(t.uptime or 0), 1),
         "latency_ms": t.latency if up else None,
         "latency_by_region_ms": T.REGION_LAT.get(t.url) or {},
+        "regions": sorted(regions_of(t.country_codes)),
         "families": _fams(t),
         "peer_test": {"latest": {True: "pass", False: "fail", None: "n/a"}[T.PEER_OK.get(t.url)] if up else "n/a",
                       "passed": sum(ph), "of": len(ph)},
@@ -152,7 +154,11 @@ def register(app):
 
     @app.route("/api/details")
     def api_details():
-        r = jsonify([_detail(t) for t in _trackers()])
+        try:
+            rf = parse_region_filter(request.args)
+        except ValueError as exc:
+            return Response(str(exc), 400, mimetype="text/plain", headers={"Access-Control-Allow-Origin": "*"})
+        r = jsonify([_detail(t) for t in _trackers() if not rf.active or rf.matches(t.url, t.country_codes, T.REGION_LAT)])
         r.headers["Access-Control-Allow-Origin"] = "*"
         return r
 
@@ -165,6 +171,10 @@ def register(app):
             min_age = float(a.get("min_age_days", 3))
         except ValueError:
             return Response("min_score / max_latency / min_age_days must be numbers", 400, mimetype="text/plain", headers={"Access-Control-Allow-Origin": "*"})
+        try:
+            rf = parse_region_filter(a)
+        except ValueError as exc:
+            return Response(str(exc), 400, mimetype="text/plain", headers={"Access-Control-Allow-Origin": "*"})
         need_v4 = a.get("require_ipv4", "false").lower() in ("1", "true")
         dedupe = a.get("dedupe", "true").lower() not in ("0", "false")
         pick = {}
@@ -175,6 +185,8 @@ def register(app):
             if "dead" in fam.values() or (need_v4 and fam["v4"] != "ok"):
                 continue
             if max_ms and (t.latency is None or t.latency >= max_ms):
+                continue
+            if rf.active and not rf.matches(t.url, t.country_codes, T.REGION_LAT):
                 continue
             key = getattr(t, "group_id", t.url) if dedupe else t.url
             cur = pick.get(key)

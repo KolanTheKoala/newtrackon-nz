@@ -40,32 +40,22 @@
         });
     }
 
+    // the list URL is built from the current state of every control
+    function buildList() {
+        var p = [
+            'include_ipv4_only_trackers=' + ($('#include_ipv4_only').is(':checked') ? 1 : 0),
+            'include_ipv6_only_trackers=' + ($('#include_ipv6_only').is(':checked') ? 1 : 0),
+            'min_age_days=' + ($('#include_trackers_newer_than_10_days').is(':checked') ? 0 : 7)
+        ];
+        if ($('#region').val()) { p.push('region=' + $('#region').val()); }
+        if ($('#fast_from').val()) { p.push('fast_from=' + $('#fast_from').val()); }
+        return 'api/stable?' + p.join('&');
+    }
+
     $(document).ready(function () {
         getTrackers(selectedList);
-        $('#include_ipv6_only').change(function () {
-            if (this.checked) {
-                selectedList = selectedList.replace('include_ipv6_only_trackers=0','include_ipv6_only_trackers=1');
-                getTrackers(selectedList);
-            } else {
-                selectedList = selectedList.replace('include_ipv6_only_trackers=1','include_ipv6_only_trackers=0');
-                getTrackers(selectedList);
-            }
-        });
-        $('#include_ipv4_only').change(function () {
-            if (this.checked) {
-                selectedList = selectedList.replace('include_ipv4_only_trackers=0','include_ipv4_only_trackers=1');
-                getTrackers(selectedList);
-            } else {
-                selectedList = selectedList.replace('include_ipv4_only_trackers=1','include_ipv4_only_trackers=0');
-                getTrackers(selectedList);
-            }
-        });
-        $('#include_trackers_newer_than_10_days').change(function () {
-            if (this.checked) {
-                selectedList = selectedList.replace('min_age_days=7', 'min_age_days=0');
-            } else {
-                selectedList = selectedList.replace('min_age_days=0', 'min_age_days=7');
-            }
+        $('#include_ipv4_only, #include_ipv6_only, #include_trackers_newer_than_10_days, #region, #fast_from').change(function () {
+            selectedList = buildList();
             getTrackers(selectedList);
         });
     });
@@ -87,6 +77,8 @@
         <p>
             This is a list of trackers with a score of 90 or more and at least 7 days of history by default, considered stable.
             You can copy the list and add it to your torrents or directly to your BitTorrent client.
+            Narrow it to trackers located in a region, or to trackers that answer quickly from a region
+            (under 150 ms from the Americas or Europe, under 250 ms from both Asia and Oceania for Asia-Pacific).
         </p>
         <div class="row">
             <div class="col-lg-3">
@@ -121,6 +113,30 @@
                         <input type="checkbox" id="include_trackers_newer_than_10_days">
                         Include trackers newer than 7 days
                     </label>
+                </p>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-lg-3">
+                <p>
+                    <label for="region" class="form-label">Located in</label>
+                    <select class="form-select" id="region">
+                        <option value="" selected>Anywhere</option>
+                        <option value="americas">Americas</option>
+                        <option value="europe">Europe, Middle East &amp; Africa</option>
+                        <option value="asia-pacific">Asia-Pacific</option>
+                    </select>
+                </p>
+            </div>
+            <div class="col-lg-3">
+                <p>
+                    <label for="fast_from" class="form-label">Fast from</label>
+                    <select class="form-select" id="fast_from">
+                        <option value="" selected>Anywhere</option>
+                        <option value="americas">Americas</option>
+                        <option value="europe">Europe, Middle East &amp; Africa</option>
+                        <option value="asia-pacific">Asia-Pacific</option>
+                    </select>
                 </p>
             </div>
         </div>
