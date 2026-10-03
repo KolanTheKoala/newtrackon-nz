@@ -143,21 +143,29 @@
     });
     </script>
     <div class="container">
-        <h1 class="h2 text-center">Tracking the Trackers - (Wellington NZ Mirror)</h1>
-        <p>
-            newTrackon is a service to monitor the status and health of existing open and public trackers that anyone can
-            use. A meta-tracker if you will. You can add any of the tracker announce URLs listed here to any of your
-            torrents, or submit any other open/public trackers you might know of.
+        <script src="/static/js/region-guess.js"></script>
+        <h1 class="h2 text-center">Tracking the Trackers (Wellington NZ)</h1>
+        <p class="text-center mb-2">Live health checks of public BitTorrent trackers.</p>
+        <p class="text-center">
+            <b>Your tracker list<span id="nt-yl-where"></span>:</b>
+            <code id="nt-yl">https://newtrackon.co.nz/api/clean</code>
+            <button type="button" class="btn btn-sm btn-primary ms-1" id="nt-yl-copy">Copy</button>
+            &middot; <a href="/list">more options</a>
         </p>
-        <p>
-            <b>To get a client-ready list of all trackers with a score of 90 or more and at least 7 days of history, go to the <a href="/list">List</a>
-            section.</b>
-        </p>
-        <p>Or let your client fetch the list automatically. Any torrent client that can load trackers from a URL can use <code>https://newtrackon.co.nz/api/clean?min_score=90&amp;require_ipv4=true</code> &mdash; trackers that are up and healthy, score 90 or more, reachable over IPv4. In qBittorrent 5.1 or later: open Options &rarr; BitTorrent, tick &ldquo;Automatically append trackers from URL to new downloads&rdquo; and paste it there. In other clients, look for a tracker-list URL setting or plugin.</p>
-        <hr>
+        <script>
+        (function () {
+            var r = ntGuessRegion(), url = location.origin + '/api/clean' + (r ? '?fast_from=' + r : '');
+            document.getElementById('nt-yl').textContent = url;
+            if (r) { document.getElementById('nt-yl-where').textContent = ' (' + NT_REGION_NAMES[r] + ')'; }
+            document.getElementById('nt-yl-copy').addEventListener('click', function () {
+                var b = this;
+                navigator.clipboard.writeText(url).then(function () { b.textContent = 'Copied!'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); });
+            });
+        })();
+        </script>
         <form method="post" action="/">
             <div class="form-group">
-                <textarea class="form-control" rows="2" id="textArea" name="new_trackers"></textarea>
+                <textarea class="form-control" rows="1" id="textArea" name="new_trackers" placeholder="Submit trackers: announce URLs, one per line"></textarea>
                 <p>
                     {% if form_feedback == "EMPTY" %}
                         <div class="alert alert-warning" role="alert">
@@ -177,11 +185,6 @@
                         </div>
                     {% endif %}
                 </p>
-                <small class="form-text text-muted">
-                    You can submit multiple trackers separated by newline, up to ~1MB of text.
-                    If you post new trackers, please wait a few minutes while we gather data before it is added to the list,
-                    or check the <a href="/submitted">Submitted</a> section.
-                </small>
             </div>
             <div class="form-group">
                 <button type="submit" class="btn btn-primary">Submit</button>
@@ -220,7 +223,6 @@ fmt();setInterval(fmt,1000)})();</script>
             </select>
             <button type="button" id="ntf-reset" class="btn btn-sm btn-link">Reset</button>
         </div>
-        <script src="/static/js/region-guess.js"></script>
         <script>
         // Filter bar: DataTables search hook, so paging, the entry count and the auto-refresh keep working.
         $(function () {
