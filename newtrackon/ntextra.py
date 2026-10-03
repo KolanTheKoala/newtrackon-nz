@@ -144,6 +144,40 @@ def _feed():
     return Response("\n".join(out), mimetype="application/atom+xml", headers={"Access-Control-Allow-Origin": "*"})
 
 
+_QUALITY_ARGS = ("good", "protocol", "ipv4_works", "ipv6_works", "passes_peer_test")
+
+
+def quality_filter(args):
+    """The main table's 'Show only' buttons as API options. Returns None (no filter) or a url -> bool predicate.
+    Raises ValueError with a user-facing message on a bad value."""
+    def flag(name):
+        v = (args.get(name) or "").strip().lower()
+        if v in ("", "0", "false", "no"):
+            return False
+        if v in ("1", "true", "yes"):
+            return True
+        raise ValueError(f"{name} must be true or false")
+    good, v4, v6, peer = flag("good"), flag("ipv4_works"), flag("ipv6_works"), flag("passes_peer_test")
+    proto = (args.get("protocol") or "").strip().lower()
+    if proto not in ("", "udp", "http"):
+        raise ValueError("protocol must be udp or http (http includes https)")
+    if not (good or v4 or v6 or peer or proto):
+        return None
+    ok = set()
+    for t in _trackers():
+        if good and _state(t)[0] not in ("up_good", "up_new"):
+            continue
+        if proto and ("udp" if t.url.startswith("udp:") else "http") != proto:
+            continue
+        fams = _fams(t)
+        if (v4 and fams["v4"] != "ok") or (v6 and fams["v6"] != "ok"):
+            continue
+        if peer and T.PEER_OK.get(t.url) is not True:
+            continue
+        ok.add(t.url)
+    return ok.__contains__
+
+
 def _filter_tags(t):
     """Space-separated tags for the main table's filter bar (data attributes on each row)."""
     lat = T.REGION_LAT.get(t.url) or {}

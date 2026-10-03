@@ -228,3 +228,48 @@ class TestMainTableFilters:
         assert set(ams["fast"].split()) == {"europe", "americas"}  # Europe 10, North America 90
         assert set(akl["fam"].split()) == {"v4", "v6"} and ams["fam"] == ""
         assert akl["peer"] == "pass" and ams["peer"] == "fail" and nyc["peer"] == "na"
+
+
+@pytest.mark.usefixtures("region_db")
+class TestQualityOptions:
+    """The main table's 'Show only' buttons as API options (good, protocol, ipv4_works, ipv6_works, passes_peer_test)."""
+
+    def test_protocol(self, flask_client: FlaskClient) -> None:
+        assert all(u.startswith("udp://") for u in _urls(flask_client.get("/api/all?protocol=udp")))
+        assert _urls(flask_client.get("/api/all?protocol=http")) == ["http://nyc.example:80/announce"]
+
+    def test_ip_families(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from newtrackon import tracker as T
+
+        monkeypatch.setattr(T, "FAMS", {"udp://akl.example:1/announce": {"v4": True, "v6": True},
+                                        "udp://ams.example:1/announce": {"v4": True}})
+        assert set(_urls(flask_client.get("/api/all?ipv4_works=1"))) == {"udp://akl.example:1/announce", "udp://ams.example:1/announce"}
+        assert _urls(flask_client.get("/api/all?ipv6_works=true")) == ["udp://akl.example:1/announce"]
+
+    def test_peer_test(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from newtrackon import tracker as T
+
+        monkeypatch.setattr(T, "PEER_OK", {"udp://akl.example:1/announce": True, "udp://ams.example:1/announce": False})
+        assert _urls(flask_client.get("/api/all?passes_peer_test=1")) == ["udp://akl.example:1/announce"]
+
+    def test_good_excludes_down(self, flask_client: FlaskClient) -> None:
+        urls = _urls(flask_client.get("/api/all?good=1"))
+        assert "udp://down.example:1/announce" not in urls and urls
+
+    def test_combines_with_region_and_stays_subset(self, flask_client: FlaskClient) -> None:
+        full = set(_urls(flask_client.get("/api/all")))
+        r = set(_urls(flask_client.get("/api/all?protocol=udp&region=asia-pacific")))
+        assert r <= full and r == {"udp://akl.example:1/announce", "udp://sgp.example:1/announce"}
+
+    def test_off_values_change_nothing(self, flask_client: FlaskClient) -> None:
+        plain = flask_client.get("/api/stable?min_age_days=0").get_data()
+        q = "good=0&protocol=&ipv4_works=false&ipv6_works=no&passes_peer_test="
+        assert flask_client.get(f"/api/stable?min_age_days=0&{q}").get_data() == plain
+
+    @pytest.mark.parametrize("q", ["protocol=ftp", "good=maybe", "ipv4_works=2"])
+    def test_bad_values_400(self, flask_client: FlaskClient, q: str) -> None:
+        r = flask_client.get(f"/api/stable?{q}")
+        assert r.status_code == 400 and r.headers["Access-Control-Allow-Origin"] == "*"
+
+    def test_list_page_shows_api_link(self, flask_client: FlaskClient) -> None:
+        assert 'id="api-url"' in flask_client.get("/list").get_data(as_text=True)

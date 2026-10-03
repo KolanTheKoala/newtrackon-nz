@@ -41,6 +41,11 @@
         <div id="list">
             <pre id="tocopy">Loading...</pre>
         </div>
+        <p class="mt-2">
+            <b>Same list from the API</b> (for clients that load trackers from a URL):<br>
+            <code id="api-url">https://newtrackon.co.nz/api/stable</code>
+            <button type="button" class="btn btn-sm btn-primary ms-1" id="api-copy">Copy</button>
+        </p>
     </div>
     <script>
     (function () {
@@ -75,6 +80,16 @@
                 .map(function (t) { return t.url; });
             $('#tocopy').text(urls.length ? urls.join('\n\n') + '\n' : 'No trackers match these filters.');
             $('#size').text(urls.length);
+            var q = [];
+            if (s['new']) { q.push('min_age_days=0'); }
+            if (s.good) { q.push('good=1'); }
+            if (s.udp !== s.http) { q.push('protocol=' + (s.udp ? 'udp' : 'http')); }
+            if (s.v4) { q.push('ipv4_works=1'); }
+            if (s.v6) { q.push('ipv6_works=1'); }
+            if (s.peer) { q.push('passes_peer_test=1'); }
+            if (s.region) { q.push('region=' + s.region); }
+            if (s.fast) { q.push('fast_from=' + s.fast); }
+            $('#api-url').text(location.origin + '/api/stable' + (q.length ? '?' + q.join('&') : ''));
             try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {}
         }
 
@@ -106,6 +121,10 @@
     function hideTooltip(btn) {
         setTimeout(function () { var t = bootstrap.Tooltip.getInstance(btn); if (t) { t.hide(); } }, 1000);
     }
+    $('#api-copy').on('click', function () {
+        var b = this;
+        navigator.clipboard.writeText($('#api-url').text()).then(function () { b.textContent = 'Copied!'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); });
+    });
     var clipboard = new ClipboardJS('.btn-copy');
     clipboard.on('success', function (e) { setTooltip(e.trigger, 'Copied!'); hideTooltip(e.trigger); });
     clipboard.on('error', function (e) { setTooltip(e.trigger, 'Failed!'); hideTooltip(e.trigger); });

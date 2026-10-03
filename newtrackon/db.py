@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from os import path
 from typing import TypedDict, cast
 
@@ -144,8 +144,10 @@ def get_api_data(
     added_before: int | None = None,
     *,
     region_filter: RegionFilter = NO_FILTER,
+    url_filter: Callable[[str], bool] | None = None,
 ) -> str:
     conn = sqlite3.connect(db_file)
+    conn.row_factory = None  # plain tuples (a reused connection may have a dict factory set)
     c = conn.cursor()
     sql = ""
     params: tuple[int, ...] = ()
@@ -172,6 +174,8 @@ def get_api_data(
     raw_rows = cast(list[tuple[str, str, str | None]], c.fetchall())
     conn.close()
 
+    if url_filter is not None:
+        raw_rows = [r for r in raw_rows if url_filter(r[0])]
     if region_filter.active:
         raw_rows = [
             r for r in raw_rows if region_filter.matches(r[0], json.loads(r[2]) if r[2] else None, _tracker.REGION_LAT)

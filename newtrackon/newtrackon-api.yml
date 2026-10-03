@@ -90,6 +90,11 @@ paths:
         - $ref: "#/components/parameters/Region"
         - $ref: "#/components/parameters/FastFrom"
         - $ref: "#/components/parameters/FastFromMs"
+        - $ref: "#/components/parameters/Good"
+        - $ref: "#/components/parameters/Protocol"
+        - $ref: "#/components/parameters/IPv4Works"
+        - $ref: "#/components/parameters/IPv6Works"
+        - $ref: "#/components/parameters/PassesPeerTest"
       responses:
         "200":
           description: Announce URLs, one per line, separated by blank lines (same format as the other lists).
@@ -111,6 +116,11 @@ paths:
         - $ref: "#/components/parameters/Region"
         - $ref: "#/components/parameters/FastFrom"
         - $ref: "#/components/parameters/FastFromMs"
+        - $ref: "#/components/parameters/Good"
+        - $ref: "#/components/parameters/Protocol"
+        - $ref: "#/components/parameters/IPv4Works"
+        - $ref: "#/components/parameters/IPv6Works"
+        - $ref: "#/components/parameters/PassesPeerTest"
       responses:
         "200":
           description: One object per tracker.
@@ -179,6 +189,11 @@ paths:
       - $ref: "#/components/parameters/Region"
       - $ref: "#/components/parameters/FastFrom"
       - $ref: "#/components/parameters/FastFromMs"
+      - $ref: "#/components/parameters/Good"
+      - $ref: "#/components/parameters/Protocol"
+      - $ref: "#/components/parameters/IPv4Works"
+      - $ref: "#/components/parameters/IPv6Works"
+      - $ref: "#/components/parameters/PassesPeerTest"
     get:
       summary: Get stable trackers
       tags:
@@ -199,6 +214,11 @@ paths:
       - $ref: "#/components/parameters/Region"
       - $ref: "#/components/parameters/FastFrom"
       - $ref: "#/components/parameters/FastFromMs"
+      - $ref: "#/components/parameters/Good"
+      - $ref: "#/components/parameters/Protocol"
+      - $ref: "#/components/parameters/IPv4Works"
+      - $ref: "#/components/parameters/IPv6Works"
+      - $ref: "#/components/parameters/PassesPeerTest"
       - name: score
         in: path
         description: Minimum score (0-100)
@@ -227,6 +247,11 @@ paths:
       - $ref: "#/components/parameters/Region"
       - $ref: "#/components/parameters/FastFrom"
       - $ref: "#/components/parameters/FastFromMs"
+      - $ref: "#/components/parameters/Good"
+      - $ref: "#/components/parameters/Protocol"
+      - $ref: "#/components/parameters/IPv4Works"
+      - $ref: "#/components/parameters/IPv6Works"
+      - $ref: "#/components/parameters/PassesPeerTest"
     get:
       summary: Get working trackers
       tags:
@@ -245,6 +270,11 @@ paths:
       - $ref: "#/components/parameters/Region"
       - $ref: "#/components/parameters/FastFrom"
       - $ref: "#/components/parameters/FastFromMs"
+      - $ref: "#/components/parameters/Good"
+      - $ref: "#/components/parameters/Protocol"
+      - $ref: "#/components/parameters/IPv4Works"
+      - $ref: "#/components/parameters/IPv6Works"
+      - $ref: "#/components/parameters/PassesPeerTest"
     get:
       summary: Get stable UDP trackers
       tags:
@@ -269,6 +299,11 @@ paths:
       - $ref: "#/components/parameters/Region"
       - $ref: "#/components/parameters/FastFrom"
       - $ref: "#/components/parameters/FastFromMs"
+      - $ref: "#/components/parameters/Good"
+      - $ref: "#/components/parameters/Protocol"
+      - $ref: "#/components/parameters/IPv4Works"
+      - $ref: "#/components/parameters/IPv6Works"
+      - $ref: "#/components/parameters/PassesPeerTest"
     get:
       summary: Get stable HTTP/HTTPS trackers
       tags:
@@ -296,6 +331,11 @@ paths:
       - $ref: "#/components/parameters/Region"
       - $ref: "#/components/parameters/FastFrom"
       - $ref: "#/components/parameters/FastFromMs"
+      - $ref: "#/components/parameters/Good"
+      - $ref: "#/components/parameters/Protocol"
+      - $ref: "#/components/parameters/IPv4Works"
+      - $ref: "#/components/parameters/IPv6Works"
+      - $ref: "#/components/parameters/PassesPeerTest"
     get:
       summary: Get all trackers
       tags:
@@ -384,6 +424,31 @@ components:
       schema:
         type: string
         enum: [americas, europe, asia, oceania]
+    Good:
+      in: query
+      name: good
+      description: Only Up/Good trackers (including Up/New ones still building their first week).
+      schema: {type: boolean, default: false}
+    Protocol:
+      in: query
+      name: protocol
+      description: Only UDP trackers, or only HTTP/HTTPS trackers.
+      schema: {type: string, enum: [udp, http]}
+    IPv4Works:
+      in: query
+      name: ipv4_works
+      description: Only trackers whose IPv4 address answers.
+      schema: {type: boolean, default: false}
+    IPv6Works:
+      in: query
+      name: ipv6_works
+      description: Only trackers whose IPv6 address answers.
+      schema: {type: boolean, default: false}
+    PassesPeerTest:
+      in: query
+      name: passes_peer_test
+      description: Only trackers that passed their latest peer test (they really hand out peers).
+      schema: {type: boolean, default: false}
     FastFromMs:
       in: query
       name: fast_from_ms

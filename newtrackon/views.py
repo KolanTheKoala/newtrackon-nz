@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from logging import ERROR, INFO, basicConfig, getLogger
 from sys import stdout
 from collections import deque
+from collections.abc import Callable
 from threading import Lock, Thread
 from time import time
 
@@ -187,7 +188,7 @@ def api_percentage(percentage: int, added_before: int | None = None) -> Response
     if 0 <= percentage <= 100:
         formatted_list = db.get_api_data(
             "percentage", percentage, include_upv4_only, include_upv6_only, added_before,
-            region_filter=get_region_filter_or_abort(),
+            region_filter=get_region_filter_or_abort(), url_filter=get_quality_filter_or_abort(),
         )
         resp = make_response(formatted_list)
         resp = utils.add_api_headers(resp)
@@ -203,6 +204,15 @@ def api_percentage(percentage: int, added_before: int | None = None) -> Response
 
 
 stable_min_age_days_default: int = 7
+
+
+def get_quality_filter_or_abort() -> Callable[[str], bool] | None:
+    from newtrackon import ntextra
+
+    try:
+        return ntextra.quality_filter(request.args)
+    except ValueError as exc:
+        abort(Response(str(exc), 400, headers={"Access-Control-Allow-Origin": "*"}))
 
 
 def get_region_filter_or_abort() -> RegionFilter:
@@ -245,7 +255,10 @@ def api_all():
 @app.route("/api/http")
 def api_multiple():
     resp = make_response(
-        db.get_api_data(request.path, added_before=get_added_before_or_abort(), region_filter=get_region_filter_or_abort())
+        db.get_api_data(
+            request.path, added_before=get_added_before_or_abort(), region_filter=get_region_filter_or_abort(),
+            url_filter=get_quality_filter_or_abort(),
+        )
     )
     resp = utils.add_api_headers(resp)
     return resp
