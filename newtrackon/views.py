@@ -150,7 +150,7 @@ def api_percentage(percentage: int, added_before: int | None = None) -> Response
         )
 
 
-stable_min_age_days_default: int = 10
+stable_min_age_days_default: int = 7
 
 
 def get_added_before_or_abort(default_min_age_days: int = 0) -> int | None:
@@ -168,7 +168,7 @@ def get_added_before_or_abort(default_min_age_days: int = 0) -> int | None:
 
 @app.route("/api/stable")
 def api_stable():
-    return api_percentage(95, added_before=get_added_before_or_abort(stable_min_age_days_default))
+    return api_percentage(90, added_before=get_added_before_or_abort(stable_min_age_days_default))
 
 
 @app.route("/api/best")
@@ -216,3 +216,8 @@ def openapi_def():
 def reject_announce_requests():
     if request.args.get("info_hash"):
         return abort(Response("newTrackon is not a tracker and cannot provide peers", 403))
+
+
+from newtrackon import ntextra  # noqa: E402  NZ mirror extras (/api/details, /api/clean)
+
+ntextra.register(app)

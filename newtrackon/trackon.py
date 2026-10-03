@@ -1,3 +1,4 @@
+import random
 import logging
 from time import sleep, time
 from typing import NoReturn
@@ -9,6 +10,12 @@ from newtrackon.persistence import (
     save_deque_to_disk,
 )
 from newtrackon.tracker import Tracker
+
+import signal
+import sys
+
+# Docker stops us with SIGTERM; as PID 1 with no handler it is ignored and we get SIGKILLed after 10 s.
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
 logger: logging.Logger = logging.getLogger("newtrackon")
 
@@ -30,7 +37,9 @@ def update_outdated_trackers() -> NoReturn:
         trackers_all = db.get_all_data()
         trackers_outdated: list[Tracker] = []
         for tracker in trackers_all:
-            if (now - tracker.last_checked) > tracker.interval:
+            iv = tracker.interval if 900 <= tracker.interval <= 14400 else 1800
+            iv = int(iv * random.Random(f"{tracker.url}|{tracker.last_checked}").uniform(0.9, 1.1))  # scheduling jitter +/-10%, fixed per check cycle, not stored or shown
+            if (now - tracker.last_checked) > iv:
                 trackers_outdated.append(tracker)
         for tracker in trackers_outdated:
             logger.info("Updating %s", tracker.url)

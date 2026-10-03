@@ -1,5 +1,57 @@
 {% extends "base.jinja" %}
 {% block head %}
+    <script>
+    // Column layout changed: drop any table state saved against the old column numbers (once).
+    try { if (localStorage.getItem("nt-dt-layout") !== "latcol") {
+        Object.keys(localStorage).forEach(function (k) { if (k.indexOf("DataTables_trackon_table") === 0) localStorage.removeItem(k); });
+        localStorage.setItem("nt-dt-layout", "latcol"); } } catch (e) {}
+    </script>
+        <style>
+          .nt-uptime-note { font-size:0.9rem; margin:8px 0 24px; max-width:900px; }
+          .nt-uptime-note ol { padding-left:1.4em; margin-bottom:0.5em; }
+          .nt-uptime-note p { margin-bottom:0.5em; }
+        </style>
+        <style>
+          .nt-key { margin:12px 0 20px; font-size:0.9rem; line-height:2; }
+          .nt-key-item { display:inline-block; margin-right:16px; white-space:nowrap; }
+          .nt-key-sw { display:inline-block; width:14px; height:14px; border-radius:3px; margin-right:6px; vertical-align:middle; }
+          .nt-row-green-sw   { background:#051b11; border:1px solid #75b798; }
+          .nt-row-orange-sw  { background:#331a00; border:1px solid #ffb070; }
+          .nt-row-red-sw     { background:#2c0b0e; border:1px solid #ea868f; }
+          .nt-row-offline-sw { background:#000000; border:1px solid #666; }
+        </style>
+        <style>
+          tr.nt-row-green > td { --bs-table-bg:#051b11; --bs-table-accent-bg:#051b11; --bs-table-bg-type:#051b11; --bs-table-bg-state:#051b11; background-color:#051b11 !important; color:#75b798 !important; box-shadow:none !important; }
+          tr.nt-row-orange > td { --bs-table-bg:#331a00; --bs-table-accent-bg:#331a00; --bs-table-bg-type:#331a00; --bs-table-bg-state:#331a00; background-color:#331a00 !important; color:#ffb070 !important; box-shadow:none !important; }
+          tr.nt-row-red > td { --bs-table-bg:#2c0b0e; --bs-table-accent-bg:#2c0b0e; --bs-table-bg-type:#2c0b0e; --bs-table-bg-state:#2c0b0e; background-color:#2c0b0e !important; color:#ea868f !important; box-shadow:none !important; }
+          tr.nt-row-offline > td { --bs-table-bg:#000000; --bs-table-accent-bg:#000000; --bs-table-bg-type:#000000; --bs-table-bg-state:#000000; background-color:#000000 !important; color:#e0e0e0 !important; box-shadow:none !important; }
+          tr[class^=nt-row-] > td a { color:inherit !important; }
+        </style>
+        <style>
+          td.nt-dots { white-space:nowrap; }
+          .nt-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:2px; vertical-align:middle; }
+          .nt-dot-up   { background:#28a745; box-shadow:0 0 3px #28a745; }
+          td { font-variant-numeric: tabular-nums; }  /* nt-tnum */
+          .nt-st { display:inline-block; min-width:3.2em; position:relative; overflow:visible; } table tbody tr:not(#_a) td:not(#_b):not(#_c):not(#_d):has(> b > .nt-st) { padding-left:2.2em !important; } .nt-emo { position:absolute; left:-1.8em; top:0; width:1.5em; text-align:center; font-weight:normal; }  /* nt-status-cols */
+          .nt-dur { display:inline-block; min-width:5.2em; text-align:right; white-space:pre; } .nt-stt { display:inline-grid; grid-template-columns:max-content auto; gap:2px 18px; vertical-align:top; text-align:left; } .nt-stt > .k { opacity:.65; font-weight:400; white-space:nowrap; } .nt-stt > .v { font-weight:600; } .nt-stt > .tot { opacity:1; font-weight:700; border-top:1px solid rgba(255,255,255,.3); padding-top:2px; } .nt-stt > .sep { grid-column:1 / -1; height:8px; }
+          .nt-stars { color:#f5c518; letter-spacing:1px; margin-right:6px; white-space:nowrap; }  /* nt-stars */
+          .nt-star-off { color:#6c757d; }
+          td.nt-score { white-space:nowrap; }
+          .nt-peerwarn { color:#f5c518; margin-left:6px; cursor:help; }  /* nt-peerwarn */
+          .nt-peerpen { color:#dc3545; }
+          .nt-peerok { color:#28a745; }
+          .nt-peerdown { color:#dc3545; }
+          .nt-fake { color:#f5c518; }  .nt-infl { color:#ffa500; font-size:0.8em; }
+          .nt-stale { color:#ffa500; }  .nt-shield { margin-left:6px; cursor:help; }  .nt-shield-ok { color:#28a745; }  .nt-shield-bad { color:#dc3545; }  .nt-shield-na { color:#6c757d; }
+          .nt-dot-down { background:#dc3545; box-shadow:0 0 3px #dc3545; }
+          .nt-dot-none { background:transparent; border:1px solid #6c757d; }
+        </style>
+        <style>
+          td.nt-orange, td.nt-red, td.nt-offline { text-align:left !important; box-shadow:none !important; }
+          td.nt-orange  { background-color:#331a00 !important; color:#ffb070 !important; }
+          td.nt-red     { background-color:#2c0b0e !important; color:#ea868f !important; }
+          td.nt-offline { background-color:#000000 !important; color:#e0e0e0 !important; }
+        </style>
     <link rel="stylesheet"
           href="https://cdn.datatables.net/2.3.6/css/dataTables.bootstrap5.min.css" />
     <link rel="stylesheet"
@@ -13,6 +65,56 @@
     <script src="https://cdn.datatables.net/responsive/3.0.7/js/dataTables.responsive.min.js"></script>
     <script src="https://cdn.datatables.net/responsive/3.0.7/js/responsive.bootstrap5.min.js"></script>
     <script src="https://cdn.datatables.net/plug-ins/2.3.6/sorting/natural.js"></script>
+<script id="nt-refresh">
+(function () {
+  var EVERY = 120000, busy = false, last = Date.now();
+  function refresh() {
+    if (busy || document.hidden || !window.jQuery || !jQuery.fn.dataTable) return;
+    var t = jQuery.fn.dataTable.tables()[0];
+    if (!t || t.querySelector('tr.shown, tr.parent')) return;   // don't yank an expanded row
+    busy = true;
+    fetch(location.pathname + location.search, { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw 0; return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var nt = (t.id && doc.getElementById(t.id)) || doc.querySelector('table');
+        var rows = nt ? nt.querySelectorAll('tbody > tr') : [];
+        if (!rows.length) return;
+        var dt = jQuery(t).DataTable();
+        dt.clear(); dt.rows.add(Array.prototype.slice.call(rows)); dt.draw(false);  // keeps sort, page, search
+        last = Date.now();
+      })
+      .catch(function () {})
+      .then(function () { busy = false; });
+  }
+  setInterval(refresh, EVERY);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && Date.now() - last > EVERY) refresh();
+  });
+})();
+</script>
+<script id="nt-ago">
+(function () {
+  function f(s) {
+    var m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+    if (d > 0) return d + 'd ' + (h % 24) + 'h';
+    if (h > 0) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+    return m + 'm';
+  }
+  function run() {
+    var n = Date.now() / 1000;
+    document.querySelectorAll('[data-nt-ts]').forEach(function (e) {
+      var t = +e.getAttribute('data-nt-ts');
+      e.textContent = t ? f(Math.max(0, n - t)) : '\u2014';
+    });
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    run();
+    if (window.jQuery) jQuery(document).on('draw.dt', run);
+  });
+  setInterval(run, 30000);
+})();
+</script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.30.1/moment.min.js"
             integrity="sha512-QoJS4DOhdmG8kbbHkxmB/rtPdN62cGWXAdAFWWJPvUFF1/zxcPSdAnn4HhYZSIlVoLVEJ0LesfNlusgm2bPfnA=="
             crossorigin="anonymous"></script>
@@ -27,12 +129,13 @@
     <script>
     $(document).ready(function () {
         $('#trackon_table').DataTable({
-            pageLength: 50,
-            order: [[1, 'desc'], [9, 'asc']],
+            pageLength: 100,
+            order: [[2, 'desc'], [11, 'asc']],
             columnDefs: [
-                {orderable: false, targets: [3, 5, 6, 7, 8]},
-                {type: 'natural', targets: 4},
-                {type: 'num', targets: 9}
+                {type: 'num', targets: 1},
+                {orderable: false, targets: [4, 6, 8, 9, 10]},
+                {type: 'natural', targets: 7},
+                {type: 'num', targets: 11}
             ],
             responsive: true
         });
@@ -40,16 +143,17 @@
     });
     </script>
     <div class="container">
-        <h2 class="text-center">Tracking the Trackers</h2>
+        <h1 class="h2 text-center">Tracking the Trackers - (Wellington NZ Mirror)</h1>
         <p>
             newTrackon is a service to monitor the status and health of existing open and public trackers that anyone can
             use. A meta-tracker if you will. You can add any of the tracker announce URLs listed here to any of your
             torrents, or submit any other open/public trackers you might know of.
         </p>
         <p>
-            <b>To get a client-ready list of all trackers with more than 95% of uptime, go to the <a href="/list">List</a>
+            <b>To get a client-ready list of all trackers with a score of 90 or more and at least 7 days of history, go to the <a href="/list">List</a>
             section.</b>
         </p>
+        <p>Or let your client fetch the list automatically. Any torrent client that can load trackers from a URL can use <code>https://newtrackon.co.nz/api/clean?min_score=90&amp;require_ipv4=true</code> &mdash; trackers that are up and healthy, score 90 or more, reachable over IPv4. In qBittorrent 5.1 or later: open Options &rarr; BitTorrent, tick &ldquo;Automatically append trackers from URL to new downloads&rdquo; and paste it there. In other clients, look for a tracker-list URL setting or plugin.</p>
         <hr>
         <form method="post" action="/">
             <div class="form-group">
@@ -78,46 +182,60 @@
             </div>
         </form>
     </div>
+    <style>td.nt-haslat{cursor:help;text-decoration:underline dotted rgba(255,255,255,.45);text-underline-offset:3px}.nt-grp{margin-left:6px;font-size:.75em;color:#8ab4ff;cursor:help;vertical-align:1px}</style>
     <div class="container-fluid table-responsive">
-        <table id="trackon_table"
+        <div class="nt-upd" style="font-size:.85rem;opacity:.75;margin:4px 0 8px">Last updated <span id="nt-upd" data-nt-ts="{{ nt_now() }}">just now</span></div>
+<script>(function(){var el=document.getElementById('nt-upd');if(!el)return;var ts=+el.dataset.ntTs;
+function fmt(){var d=new Date(ts*1000),a=Math.max(0,Math.round(Date.now()/1000-ts)),ag=a<60?a+' s':a<3600?Math.floor(a/60)+' min':Math.floor(a/3600)+' h';
+el.textContent=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'})+' \u00b7 '+ag+' ago'}
+var of=window.fetch;window.fetch=function(){var p=of.apply(this,arguments);p.then(function(r){if(r.ok&&/text\/html/.test(r.headers.get('content-type')||''))r.clone().text().then(function(t){var m=/data-nt-ts="(\d+)"/.exec(t);if(m){ts=+m[1];fmt()}})}).catch(function(){});return p};
+fmt();setInterval(fmt,1000)})();</script>
+<table id="trackon_table"
                class="table display responsive table-striped table-bordered table-hover initially-hidden">
             <thead>
                 <tr>
                     <th>Tracker URL</th>
-                    <th class="sorttable_numeric">Uptime *</th>
+                    <th class="nt-latcol">
+                        <span title="Announce latency">Latency</span>
+                    </th>
+                    <th class="sorttable_numeric">Score *</th>
+                    <th class="nt-last7">Last 7 days</th>
+                    <th class="nt-last5">Last 24 hours</th>
                     <th class="status-col">Status</th>
                     <th class="sorttable_numeric">Checked</th>
                     <th class="sorttable_numeric">Update interval</th>
                     <th>IP address</th>
                     <th class="sortable">Country</th>
                     <th class="sortable">Network</th>
-                    <th class="sorttable_numeric">
-                        <span title="Announce latency">Latency</span>
-                    </th>
                     <th>Added</th>
+                    <th class="none">Stats</th>
+                    <th class="none">Same operator</th>
                 </tr>
             </thead>
             {% set lt, dt = namespace(value=0), namespace(value=0) %}
             {% if trackers %}
                 {% for t in trackers %}
-                    <tr>
-                        <td>{{ t.url }}</td>
-                        <td>{{ "%.2f" % t.uptime }}%</td>
+                    <tr class="nt-row-{{ nt_rowcls(t) }}" data-nt-state="{{ nt_state(t) }}">
+                        <td>{{ t.url }}{% if t.operator_peers %}<span class="nt-grp" title="Same operator or server as: {{ t.operator_peers|join(", ") }}">&#10697;{{ t.operator_peers|length + 1 }}</span>{% endif %}</td>
+                        <td class="right{% if t.region_lat %} nt-haslat{% endif %}{% if t.latency %} {{ 'nt-lat-g' if t.latency < 200 else ('nt-lat-o' if t.latency < 300 else 'nt-lat-r') }}{% endif %}"{% if t.region_lat %} title="Latency by region: {% for k, v in t.region_lat.items() %}{{ k }} {{ v }} ms{% if not loop.last %} &middot; {% endif %}{% endfor %} &mdash; median of recent checks per region; other regions via rotating VPN exits, tunnel time subtracted (&plusmn;10&ndash;20 ms)"{% endif %} data-sort="{{ t.latency if (t.status == 1 and t.latency is not none) else 999999 }}">{% if t.status == 1 and t.latency is not none %}{{ [t.latency, 1]|max }} ms{% else %}&mdash;{% endif %}</td>
+                        <td class="nt-score" data-nt-age="{{ '%.2f' % ((nt_now() - (t.added or 0)) / 86400) }}" data-sort="{% if t.status == 1 %}{{ (t.uptime|round|int) * 100000 + 9999 - ([t.latency or 9999, 9999]|min) + 20000000 }}{% else %}{{ 19000000 - ([((nt_now() - (t.last_uptime or 0)) / 60)|int, 9000000]|min) }}{% endif %}">{% set nt_r = t.uptime|round|int %}{% set nt_n = [((nt_r / 20)|round|int), 5]|min %}<span class="nt-stars" title="{{ nt_n }} of 5 stars">{{ '★' * nt_n }}<span class="nt-star-off">{{ '☆' * (5 - nt_n) }}</span></span> {{ nt_r }}</td>
+                        <td class="nt-dots nt-7d" title="Last 7 days, 1 day per dot (red if any check that day failed, grey = not monitored yet), oldest left">{% set ww = (t.historic|list)[-336:] %}{% set w = [none] * (336 - ww|length) + ww %}{% for d in range(7) %}{% set real = w[d*48:(d+1)*48]|reject("none")|list %}<span class="nt-dot {% if not real %}nt-dot-none{% elif 0 in real or 0.5 in real %}nt-dot-down{% else %}nt-dot-up{% endif %}"></span>{% endfor %}</td>
+                        <td class="nt-dots nt-12h" title="Last 24 hours, 2 hours per dot (red if any check in those 2 hours failed), oldest left">{% set hh = (t.historic|list)[-48:] %}{% set h = [none] * (48 - hh|length) + hh %}{% for i in range(12) %}{% set p = h[4*i:4*i+4] %}<span class="nt-dot {% if p|reject("none")|list|length == 0 %}nt-dot-none{% elif 0 in p or 0.5 in p %}nt-dot-down{% else %}nt-dot-up{% endif %}"></span>{% endfor %}</td>
                         {% if t.status == 1 %}
-                            <td data-sort="{{ t.status_epoch }}" class="up">
-                                <b>{{ t.status_readable }}</b>
+                            <td data-sort="{{ t.status_epoch }}" class="{{ 'up' if nt_rowcls(t) == 'green' else 'nt-orange' }}">
+                                <b>{% set nt_s = t.status_readable.split(" ", 1) %}<span class="nt-st">{% if t.status == 1 and not ((t.peer_fails is defined and t.peer_fails >= 3) or (t.fake_fails is defined and t.fake_fails >= 3) or (t.deadfam and t.deadfam.n >= 3)) %}{% if (t.uptime|round) >= 50 %}<b class="nt-good" title="Answering and passing every test, with a score of {{ t.uptime|round|int }} (90 or more). Healthy.">Up/Good<span class="nt-emo">&#11014;&#65038;</span></b>{% else %}<b class="nt-up" title="Answering and passing every test, but its score is under 50: an unreliable history.">Up/Junk<span class="nt-emo">&#128465;&#65039;</span></b>{% endif %}{% else %}{% if t.status == 1 and t.peer_fails is defined and t.peer_fails >= 3 %}<b class="nt-junk" style="color:#ffa500" title="Hands out no peers (failed 3+ of its last 6 peer tests): effectively down, score 0.">Up/Bad<span class="nt-emo">&#128121;</span></b>{% elif t.status == 1 and t.fake_fails is defined and t.fake_fails >= 3 %}<b class="nt-fakes" style="color:#ffa500" title="Handed out fake peers for a random torrent only we know about, {{ t.fake_fails }} checks in a row (decoys, spam or junk). Score set to 0.">Up/Bad<span class="nt-emo">&#128121;</span></b>{% elif t.status == 1 and t.deadfam and t.deadfam.n >= 3 %}<b class="nt-degraded" style="color:#ffa500" title="Its published IPv{{ t.deadfam.fam[1] }} address has not answered for {{ t.deadfam.n }} checks in a row: broken for every client using that family. Still works over IPv{{ '4' if t.deadfam.fam[1] == '6' else '6' }}. Score capped at 50.">Up/Broken<span class="nt-emo">&#128295;</span></b>{% else %}<span title="Down{% if t.down_why %}: its last check failed with &quot;{{ t.down_why|e }}&quot;{% else %}: did not answer its last check{% endif %}{% if nt_s|length > 1 %} (down for {{ nt_s[1]|trim }}){% endif %}. Rechecked every 1 to 4 hours, and removed from the list after 5 days down.">{{ nt_s[0] }}{% if t.down_label %}/{{ t.down_label }}{% endif %}<span class="nt-emo">&#129702;</span></span>{% endif %}{% endif %}</span>{% if nt_s|length > 1 %}<span class="nt-dur">{{ nt_s[1] }}</span>{% endif %}{% if t.status != 1 %}<span class="nt-peerwarn nt-peerdown" title="Down: the tracker did not answer its last check.">&#10008;</span>{% elif t.fake_fails is defined and t.fake_fails >= 3 %}<span class="nt-peerwarn nt-peerpen" title="Returned fake peers {{ t.fake_fails }} times in a row for random torrents only we know about (decoys, spam or junk). Score set to 0.">&#9760;</span>{% elif t.fake_n %}<span class="nt-peerwarn nt-fake" title="Fake peers: the tracker returned {{ t.fake_n }} peer(s) for a random torrent only we know about. They can only be fake (decoys, spam or junk). 3 in a row sets the score to 0.">&#9760;</span>{% elif t.peer_fails is defined and t.peer_fails >= 3 %}<span class="nt-peerwarn nt-peerpen" title="Failed {{ t.peer_fails }} of its last 6 peer tests: the tracker accepts announces but doesn't hand peers to other clients. Score set to 0 (no peers = effectively down).">&#9888;</span>{% elif t.peer_ok is sameas false %}<span class="nt-peerwarn" title="Latest peer test failed: the tracker accepted our announce but didn't hand our peer to a second client. 3 fails in its last 6 tests sets the score to 0.">&#9888;</span>{% elif t.peer_ok is sameas true %}<span class="nt-peerwarn nt-peerok" title="Peer test passed: the tracker handed our peer to a second client, so it is really tracking peers.">&#10004;</span>{% endif %}{% if t.fams %}<span class="nt-fams" style="margin-left:4px;cursor:help" title="IP families this tracker publishes: green = answers, red = published but confirmed dead, 3+ checks in a row (broken for every client using it), black = not supported.{% if t.deadfam and t.deadfam.n >= 3 %} Dead 3+ checks in a row: score capped at 50.{% elif t.deadfam %} 3 in a row caps the score at 50.{% endif %}">{% for k in ('v4', 'v6') %}<b style="font-size:.75em;margin-left:4px;color:{{ ('#dc3545' if (t.deadfam and t.deadfam.fam == k and t.deadfam.n >= 3) else '#28a745') if k in t.fams else '#000' }}">IPv{{ k[1] }}</b>{% endfor %}</span>{% endif %}{% if t.inflated %}<span class="nt-peerwarn nt-infl" title="Inflated counts: reported {{ t.inflated[0] }} seeders / {{ t.inflated[1] }} leechers for a random torrent only we know about (the truth is 1 / 1). Flag only, no penalty.">&#9650;</span>{% endif %}{% if t.stale %}<span class="nt-peerwarn nt-stale" title="Keeps handing out peers after they have left (ignores the &quot;stopped&quot; event), so clients waste time on dead peers. Flag only, no penalty.">&#8856;</span>{% endif %}{% if t.url.startswith("http") and t.status == 1 %}<span class="nt-shield nt-shield-ok" title="Security: HTTP(S) trackers run over TCP, whose handshake makes spoofed announces impossible."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% elif t.status == 1 and t.cid_ok is sameas true %}<span class="nt-shield nt-shield-ok" title="Security: enforces the UDP connection-ID handshake (BEP 15), so it cannot be used to aim spoofed traffic at others."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% elif t.status == 1 and t.cid_ok is sameas false %}<span class="nt-shield nt-shield-bad" title="Security: accepted an announce with a made-up connection ID. Anyone can spoof announces through it, e.g. to point swarm traffic at a victim. No penalty."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% elif t.status == 1 and t.url.startswith("udp") %}<span class="nt-shield nt-shield-na" title="Security: not tested yet. The UDP connection-ID (BEP 15) check has not completed for this tracker, usually because it has not stayed up long enough."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% endif %}</b>
                             </td>
                             {% set lt.value = lt.value + 1 %}
                         {% else %}
-                            <td data-sort="{{ t.status_epoch }}" class="down">
-                                <b>{{ t.status_readable }}</b>
+                            <td data-sort="{{ t.status_epoch }}" class="nt-offline">
+                                <b>{% set nt_s = t.status_readable.split(" ", 1) %}<span class="nt-st">{% if t.status == 1 and not ((t.peer_fails is defined and t.peer_fails >= 3) or (t.fake_fails is defined and t.fake_fails >= 3) or (t.deadfam and t.deadfam.n >= 3)) %}{% if (t.uptime|round) >= 50 %}<b class="nt-good" title="Answering and passing every test, with a score of {{ t.uptime|round|int }} (90 or more). Healthy.">Up/Good<span class="nt-emo">&#11014;&#65038;</span></b>{% else %}<b class="nt-up" title="Answering and passing every test, but its score is under 50: an unreliable history.">Up/Junk<span class="nt-emo">&#128465;&#65039;</span></b>{% endif %}{% else %}{% if t.status == 1 and t.peer_fails is defined and t.peer_fails >= 3 %}<b class="nt-junk" style="color:#ffa500" title="Hands out no peers (failed 3+ of its last 6 peer tests): effectively down, score 0.">Up/Bad<span class="nt-emo">&#128121;</span></b>{% elif t.status == 1 and t.fake_fails is defined and t.fake_fails >= 3 %}<b class="nt-fakes" style="color:#ffa500" title="Handed out fake peers for a random torrent only we know about, {{ t.fake_fails }} checks in a row (decoys, spam or junk). Score set to 0.">Up/Bad<span class="nt-emo">&#128121;</span></b>{% elif t.status == 1 and t.deadfam and t.deadfam.n >= 3 %}<b class="nt-degraded" style="color:#ffa500" title="Its published IPv{{ t.deadfam.fam[1] }} address has not answered for {{ t.deadfam.n }} checks in a row: broken for every client using that family. Still works over IPv{{ '4' if t.deadfam.fam[1] == '6' else '6' }}. Score capped at 50.">Up/Broken<span class="nt-emo">&#128295;</span></b>{% else %}<span title="Down{% if t.down_why %}: its last check failed with &quot;{{ t.down_why|e }}&quot;{% else %}: did not answer its last check{% endif %}{% if nt_s|length > 1 %} (down for {{ nt_s[1]|trim }}){% endif %}. Rechecked every 1 to 4 hours, and removed from the list after 5 days down.">{{ nt_s[0] }}{% if t.down_label %}/{{ t.down_label }}{% endif %}<span class="nt-emo">&#129702;</span></span>{% endif %}{% endif %}</span>{% if nt_s|length > 1 %}<span class="nt-dur">{{ nt_s[1] }}</span>{% endif %}{% if t.status != 1 %}<span class="nt-peerwarn nt-peerdown" title="Down: the tracker did not answer its last check.">&#10008;</span>{% elif t.fake_fails is defined and t.fake_fails >= 3 %}<span class="nt-peerwarn nt-peerpen" title="Returned fake peers {{ t.fake_fails }} times in a row for random torrents only we know about (decoys, spam or junk). Score set to 0.">&#9760;</span>{% elif t.fake_n %}<span class="nt-peerwarn nt-fake" title="Fake peers: the tracker returned {{ t.fake_n }} peer(s) for a random torrent only we know about. They can only be fake (decoys, spam or junk). 3 in a row sets the score to 0.">&#9760;</span>{% elif t.peer_fails is defined and t.peer_fails >= 3 %}<span class="nt-peerwarn nt-peerpen" title="Failed {{ t.peer_fails }} of its last 6 peer tests: the tracker accepts announces but doesn't hand peers to other clients. Score set to 0 (no peers = effectively down).">&#9888;</span>{% elif t.peer_ok is sameas false %}<span class="nt-peerwarn" title="Latest peer test failed: the tracker accepted our announce but didn't hand our peer to a second client. 3 fails in its last 6 tests sets the score to 0.">&#9888;</span>{% elif t.peer_ok is sameas true %}<span class="nt-peerwarn nt-peerok" title="Peer test passed: the tracker handed our peer to a second client, so it is really tracking peers.">&#10004;</span>{% endif %}{% if t.fams %}<span class="nt-fams" style="margin-left:4px;cursor:help" title="IP families this tracker publishes: green = answers, red = published but confirmed dead, 3+ checks in a row (broken for every client using it), black = not supported.{% if t.deadfam and t.deadfam.n >= 3 %} Dead 3+ checks in a row: score capped at 50.{% elif t.deadfam %} 3 in a row caps the score at 50.{% endif %}">{% for k in ('v4', 'v6') %}<b style="font-size:.75em;margin-left:4px;color:{{ ('#dc3545' if (t.deadfam and t.deadfam.fam == k and t.deadfam.n >= 3) else '#28a745') if k in t.fams else '#000' }}">IPv{{ k[1] }}</b>{% endfor %}</span>{% endif %}{% if t.inflated %}<span class="nt-peerwarn nt-infl" title="Inflated counts: reported {{ t.inflated[0] }} seeders / {{ t.inflated[1] }} leechers for a random torrent only we know about (the truth is 1 / 1). Flag only, no penalty.">&#9650;</span>{% endif %}{% if t.stale %}<span class="nt-peerwarn nt-stale" title="Keeps handing out peers after they have left (ignores the &quot;stopped&quot; event), so clients waste time on dead peers. Flag only, no penalty.">&#8856;</span>{% endif %}{% if t.url.startswith("http") and t.status == 1 %}<span class="nt-shield nt-shield-ok" title="Security: HTTP(S) trackers run over TCP, whose handshake makes spoofed announces impossible."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% elif t.status == 1 and t.cid_ok is sameas true %}<span class="nt-shield nt-shield-ok" title="Security: enforces the UDP connection-ID handshake (BEP 15), so it cannot be used to aim spoofed traffic at others."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% elif t.status == 1 and t.cid_ok is sameas false %}<span class="nt-shield nt-shield-bad" title="Security: accepted an announce with a made-up connection ID. Anyone can spoof announces through it, e.g. to point swarm traffic at a victim. No penalty."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% elif t.status == 1 and t.url.startswith("udp") %}<span class="nt-shield nt-shield-na" title="Security: not tested yet. The UDP connection-ID (BEP 15) check has not completed for this tracker, usually because it has not stayed up long enough."><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="vertical-align:-1px"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>{% endif %}</b>
                             </td>
                             {% set dt.value = dt.value + 1 %}
                         {% endif %}
                         <td>
-                            <span data-livestamp="{{ t.last_checked }}"></span>
+                            <span class="nt-dur" data-nt-ts="{{ t.last_checked }}"></span>
                         </td>
-                        <td>~{{ t.interval//60 }} min ({{ t.interval }} sec)</td>
+                        <td data-sort="{{ t.interval }}">{% set nt_iv = t.interval // 60 %}{# nt-iv #}{% if nt_iv < 60 %}{{ nt_iv }}m{% else %}{{ nt_iv // 60 }}h{% if nt_iv % 60 %} {{ nt_iv % 60 }}m{% endif %}{% endif %}</td>
                         <td>
                             {% if t.ips %}
                                 {% for ip in t.ips %}
@@ -146,18 +264,66 @@
                                 {% endfor %}
                             {% endif %}
                         </td>
-                        <td class="right">{% if t.latency %}{{ t.latency }} ms{% endif %}</td>
                         <td class="right" data-sort="{{ t.added }}">{{ t.added|format_date }}</td>
+                        <td>{% set s = t.stats or {} %}<div class="nt-stt">{% if s.base is defined %}<span class="k">Recent availability</span><span class="v">{{ s.avail_weighted }}%</span><span class="k" title="How steadily it stays up, weighted towards recent checks. 100% means it never flipped between up and down. Constantly dropping in and out pulls this down far more than one long outage does." style="cursor:help;text-decoration:underline dotted">Stability</span><span class="v" title="How steadily it stays up, weighted towards recent checks. 100% means it never flipped between up and down. Constantly dropping in and out pulls this down far more than one long outage does.">&times; {{ s.stability }}%</span><span class="k">Reliability score</span><span class="v">= {{ s.base_r }}</span>{% if s.ceiling is defined and s.ceiling < s.base %}<span class="k">New-tracker ceiling</span><span class="v">held to {{ s.ceiling_r }} (under 7 days old)</span>{% endif %}<span class="k">Latency penalty</span><span class="v">{% set nt_c = ([s.base_r, s.ceiling_r]|min if s.ceiling_r is defined else s.base_r) %}{% set nt_p = (s.lat_penalty|round|int) if s.capped else (nt_c - ((t.uptime + 0.5)|int)) %}{% if s.lat_penalty and nt_p >= 1 %}&minus;{{ nt_p }}{% elif s.lat_penalty %}under 1{% else %}none{% endif %}</span>{% if s.capped %}<span class="k">Quality cap</span><span class="v">capped for failing a quality test (see Status)</span>{% endif %}<span class="k tot">Score</span><span class="v tot">{{ (t.uptime + 0.5)|int }}</span><span class="sep"></span>{% endif %}{% if s.avail7 is defined %}<span class="k">Last 7 days</span><span class="v">answered {{ s.avail7 }}% of checks &middot; {{ s.outages7 }} outage{{ "" if s.outages7 == 1 else "s" }}</span>{% if s.avail_all is defined %}<span class="k">Since added</span><span class="v">answered {{ s.avail_all }}% over {{ s.days }} days{% if s.longest_h %} &middot; longest outage {{ s.longest_h }}&nbsp;h{% endif %}</span>{% endif %}{% endif %}{% if s.peer %}<span class="k">Peer test</span><span class="v">passed {{ s.peer.split('/')[0] }} of its last {{ s.peer.split('/')[1] }} (3 fails marks it Up/Bad)</span>{% endif %}{% if s.ann_iv %}<span class="k">Announce interval</span><span class="v">{{ s.ann_iv // 60 }} min (set by the tracker)</span>{% endif %}{% if t.region_lat %}<span class="k">Latency by region</span><span class="v">{% for k, v in t.region_lat.items() %}{{ k }} {{ v }} ms{% if not loop.last %} &middot; {% endif %}{% endfor %}</span>{% endif %}</div></td>
+                        <td>{% if t.operator_peers %}{% for u in t.operator_peers %}{{ u }}<br>{% endfor %}{% else %}&mdash;{% endif %}</td>
                     </tr>
                 {% endfor %}
             {% endif %}
             <caption style="text-align: right;"><b>Live trackers</b>: {{ lt.value }} / <b>Trackers down</b>: {{ dt.value }} / <b>Total
             trackers</b>: {{ trackers | count }}</caption>
         </table>
-        <p style="text-align: right;">
-            * Based on the last 1000 checks. The time depends on the update interval set by the
-            tracker, and can vary from 6 to 40 days.
-        </p>
+            {% set evs = nt_events(10) %}{% if evs %}<style>.nt-events{margin:20px 0 4px;font-size:.85rem}.nt-events h6{margin:0 0 4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;opacity:.65;border-bottom:1px solid rgba(255,255,255,.15);padding-bottom:3px}.nt-ev{display:grid;grid-template-columns:78px minmax(160px,300px) 1fr;gap:10px;line-height:1.7}@media(max-width:700px){.nt-ev{grid-template-columns:64px 1fr}.nt-ev>span:last-child{grid-column:1/-1}}</style><div class="nt-events"><h6>Recent events &middot; <a href="/feed.xml">RSS / Atom feed</a> &middot; one tracker only: <code style="text-transform:none;letter-spacing:0">https://newtrackon.co.nz/feed.xml?tracker=example.org</code></h6>{% for e in evs %}<div class="nt-ev"><span><span data-nt-ts="{{ e.t }}"></span> ago</span><span>{{ e.host }}</span><span style="color:{{ {"down": "#ff3b30", "up": "#00e676", "good": "#00e676", "bad": "#ffa500", "family": "#ffa500"}.get(e.type, "#8ab4ff") }}">{{ e.text }}</span></div>{% endfor %}</div>{% endif %}
+<style>.nt-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px 28px;margin:16px 0 24px;font-size:.85rem}.nt-lg h6{margin:0 0 4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;opacity:.65;border-bottom:1px solid rgba(255,255,255,.15);padding-bottom:3px}.nt-lg .r{display:grid;grid-template-columns:78px 1fr;align-items:center;line-height:1.7}.nt-lg .s{text-align:center;white-space:nowrap}</style><style>.nt-lg .r{display:flex;gap:8px;align-items:baseline;margin:2px 0}.nt-lg .k{min-width:96px;font-weight:600;white-space:nowrap}</style>
+<div class="nt-legend">
+<div class="nt-lg"><h6>Status</h6>
+<div class="r"><span class="k" style="color:#00e676">Up/Good &#11014;&#65038;</span>Answering, passes every test, score 90+ (on the stable list)</div>
+<div class="r"><span class="k" style="color:#00e676">Up/Slow &#128034;</span>Healthy but slow: averages 300&nbsp;ms or more, or 200&nbsp;ms or more with latency alone pulling its score under 90 (green if still 90+, orange below)</div>
+<div class="r"><span class="k" style="color:#ffa500">Up/Unreliable &#127922;</span>Answering now, but score under 90 from recent misses</div>
+<div class="r"><span class="k" style="color:#4fc3f7">Up/New &#128035;</span>Healthy, under 7 days old: score capped while it builds history</div>
+<div class="r"><span class="k" style="color:#ffa500">Up/Junk &#128465;&#65039;</span>Answering, but score under 50</div>
+<div class="r"><span class="k" style="color:#ffa500">Up/Broken &#128295;</span>One published address family (IPv4 or IPv6) is dead; still works on the other. Score capped at 50</div>
+<div class="r"><span class="k" style="color:#ffa500">Up/Bad &#128121;</span>Fails a quality test (hover for why)</div>
+<div class="r"><span class="k" style="color:#ff3b30">Down</span>Not answering</div></div>
+<div class="nt-lg"><h6>Latency</h6>
+<div class="r"><span class="k">Figure</span>Average of the per-region medians (hover for the breakdown)</div>
+<div class="r"><span class="k" style="color:#00e676">green</span>under 200&nbsp;ms</div>
+<div class="r"><span class="k" style="color:#ff9100">orange</span>200&ndash;299&nbsp;ms</div>
+<div class="r"><span class="k" style="color:#ff3b30">red</span>300&nbsp;ms or more</div>
+<div class="r"><span class="k">Penalty</span>&minus;0.02/ms over 150&nbsp;ms up to 1&nbsp;s, steeper beyond (max &minus;40)</div></div>
+<div class="nt-lg"><h6>Score</h6>
+<div class="r"><span class="k">0&ndash;100</span>Availability × stability, minus penalties (latency, peer tests, fake peers, dead IP family). New trackers are capped at 80, rising to 100 over 7 days</div>
+<div class="r"><span class="k" style="color:#f5c518">&#9733;</span>1 star per 20 points &middot; &#9733;&#9733;&#9733;&#9733;&#9733; = 90+</div>
+<div class="r"><span class="k" style="color:#8b93a1">Grey text</span>Score under 90, not on the stable list (Up/New excepted)</div></div>
+<div class="nt-lg"><h6>Peer test</h6>
+<div class="r"><span class="k" style="color:#00e676">&#10004;</span>Hands our peer to a 2nd client</div>
+<div class="r"><span class="k" style="color:#ffa500">&#9888;</span>Latest peer test failed</div>
+<div class="r"><span class="k" style="color:#ff3b30">&#9888;</span>Failed 3 of last 6 &rarr; score 0</div></div>
+<div class="nt-lg"><h6>Fake peers</h6>
+<div class="r"><span class="k" style="color:#ffa500">&#9760;</span>Returned fake peers</div>
+<div class="r"><span class="k" style="color:#ff3b30">&#9760;</span>3&times; running &rarr; score &le; 50</div></div>
+<div class="nt-lg"><h6>IP families</h6>
+<div class="r"><span class="k" style="color:#00e676">IPv4</span>Answers</div>
+<div class="r"><span class="k" style="color:#ff3b30">IPv4</span>Published but dead (3 checks) &rarr; score &le; 50</div>
+<div class="r"><span class="k" style="color:#555">IPv6</span>Not published</div></div>
+<div class="nt-lg"><h6>Security shield</h6>
+<div class="r"><span class="k" style="color:#28a745"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>Spoof-proof: HTTP(S), or UDP that enforces the connection-ID handshake</div>
+<div class="r"><span class="k" style="color:#dc3545"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>Spoofable UDP (no penalty)</div>
+<div class="r"><span class="k" style="color:#6c757d"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>UDP, not tested yet &middot; none shown when down</div></div>
+<div class="nt-lg"><h6>Same operator</h6>
+<div class="r"><span class="k" style="color:#8ab4f8">&#10697;N</span>This tracker and N&minus;1 others share servers or a domain: adding several gains little</div></div>
+<div class="nt-lg"><h6>Flags (no penalty)</h6>
+<div class="r"><span class="k" style="color:#ffa500">&#9650;</span>Inflated seed/leech counts</div>
+<div class="r"><span class="k" style="color:#ffa500">&#8856;</span>Keeps peers after they stop</div></div>
+<div class="nt-lg"><h6>History dots</h6>
+<div class="r"><span class="k" style="color:#00e676">&#9679;</span>Up</div>
+<div class="r"><span class="k" style="color:#ff3b30">&#9679;</span>Down (any failed check in that period)</div>
+<div class="r"><span class="k">&#9675;</span>Not monitored yet</div>
+<div class="r"><span class="k">Scale</span>7 days: 1 dot = 1 day &middot; 24 hours: 1 dot = 2 hours</div></div>
+</div>
+        <div class="nt-uptime-note">
+            <p><b>* Score is out of 100, not an uptime percentage.</b> Recent checks count more than old ones, and a tracker that keeps dropping in and out scores lower than one that had a single outage. Healthy trackers are checked every 30&ndash;60 minutes (up to 4h for trackers scoring 95+ with a clean record of 12&ndash;48 hours) shaky ones every 15, and dead ones back off to every 1&ndash;4 hours; trackers that stop answering for 5 days, or are too unreliable to be useful, are removed (About, section 8).</p>
+        </div>
     </div>
 {% endblock %}
 {% set title = "newtrackon, Tracking the Trackers" %}

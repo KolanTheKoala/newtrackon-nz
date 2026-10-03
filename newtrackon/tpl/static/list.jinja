@@ -6,7 +6,7 @@
 {% endblock head %}
 {% block body %}
     <script>
-    var selectedList = 'api/stable?include_ipv4_only_trackers=1&include_ipv6_only_trackers=0&min_age_days=10'
+    var selectedList = 'api/stable?include_ipv4_only_trackers=1&include_ipv6_only_trackers=0&min_age_days=7'
 
     function setTooltip(btn, message) {
         var tooltip = bootstrap.Tooltip.getInstance(btn);
@@ -62,9 +62,9 @@
         });
         $('#include_trackers_newer_than_10_days').change(function () {
             if (this.checked) {
-                selectedList = selectedList.replace('min_age_days=10', 'min_age_days=0');
+                selectedList = selectedList.replace('min_age_days=7', 'min_age_days=0');
             } else {
-                selectedList = selectedList.replace('min_age_days=0', 'min_age_days=10');
+                selectedList = selectedList.replace('min_age_days=0', 'min_age_days=7');
             }
             getTrackers(selectedList);
         });
@@ -85,7 +85,7 @@
     <div class="container">
         <h2>List of stable trackers</h2>
         <p>
-            This is a list of trackers with more than 95% of uptime and at least 10 days of history by default, considered stable.
+            This is a list of trackers with a score of 90 or more and at least 7 days of history by default, considered stable.
             You can copy the list and add it to your torrents or directly to your BitTorrent client.
         </p>
         <div class="row">
@@ -119,7 +119,7 @@
                 <p>
                     <label class="btn btn-secondary">
                         <input type="checkbox" id="include_trackers_newer_than_10_days">
-                        Include trackers newer than 10 days
+                        Include trackers newer than 7 days
                     </label>
                 </p>
             </div>

@@ -31,11 +31,8 @@
         or change the port and protocol. For other changes, contact me as stated in the <a href="/about">About</a> section
         <h4>How do I add a tracker to my torrents?</h4>
         Go to the list section, copy the trackers and paste them in your BitTorrent client.
-        <h4>How is the uptime calculated?</h4>
-        Uptime is calculated based on the percentage of valid responses to the last 1000 attempts to contact the
-        tracker. Because the interval between attempts will depend on the interval for that tracker and other
-        factors, comparing the uptime values of different trackers is not completely 'fair'.
-        <h4>Does newTrackon respect the trackers update interval?</h4>
+        <h4>How is the score calculated?</h4>
+        The score (out of 100) combines recent availability and stability, weighted towards the last few days, and trackers that fail a quality test (no peers handed out, fake peers, a dead IP family) are penalised, and slow trackers lose points for latency. Full details are in section 4 of the <a href="/about">About</a> page.</h4>
         Yes.
         <h4>How can I help newTrackon?</h4>
         If you can program in Python, or know some Javascript, I'm sure there are many improvements that could be

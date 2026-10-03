@@ -1,3 +1,4 @@
+import random
 import pprint
 import re
 import socket
@@ -65,7 +66,7 @@ class Tracker:
         self.ips = ips
         self.latency = latency
         self.last_checked = last_checked
-        self.interval = interval
+        self.interval = interval if (interval == 900 or (interval % 1800 == 0 and 1800 <= interval <= 14400)) else 1800
         self.status = status
         self.uptime = uptime
         self.countries = countries
@@ -79,6 +80,7 @@ class Tracker:
         self.to_be_deleted = False
         self.status_epoch = None
         self.status_readable = None
+        self.peer_ok = None
 
     @classmethod
     def from_url(cls, url: str) -> Tracker:
@@ -127,13 +129,27 @@ class Tracker:
                 # Expire IP history even when DNS resolution fails.
                 self.refresh_recent_ips()
         except RuntimeError as reason:
+            if not _monitor_online():  # our own outage, not the tracker's: record nothing, retry soon
+                self.to_be_deleted = False
+                self._offline_skip()
+                return
+            if _nt_local_fault(self, reason):  # works from elsewhere: our fault, not the tracker's
+                self.to_be_deleted = False
+                self._offline_skip()
+                return
+            self._last_err = str(reason)
             self.clear_tracker(reason=str(reason))
+            self._emit_events()
             return
 
         self.update_ipapi_data()
+        self._prev_checked = self.last_checked
         self.last_checked = int(time())
         pp = pprint.PrettyPrinter(width=999999, compact=True)
         t1 = time()
+        scraper.rtt.ms = None
+        scraper.rtt.probe = None
+        scraper.rtt.probe_extra = None
         try:
             if parse.urlparse(self.url).scheme == "udp":
                 response, _ = scraper.announce_udp(self.url)
@@ -141,8 +157,9 @@ class Tracker:
                 response = scraper.announce_http(self.url)
 
             interval = response.get("interval")
+            _ann_iv_set(self.url, interval if isinstance(interval, int) else None)
             if isinstance(interval, int):
-                self.interval = interval
+                pass  # interval is set adaptively in is_up()/is_down()
             pretty_data = scraper.redact_origin(pp.pformat(response))
             debug: HistoryData = {
                 "url": self.url,
@@ -152,11 +169,60 @@ class Tracker:
                 "status": 1,
             }
             persistence.raw_data.appendleft(debug)
-            self.latency = int((time() - t1) * 1000)
+            self.latency = scraper.rtt.ms if getattr(scraper.rtt, "ms", None) is not None else int((time() - t1) * 1000)
+            self.latency = _nt_region_avg(self.url) or self.latency
+            self.peer_ok = scraper.peer_probe()
+            PEER_OK[self.url] = self.peer_ok
+            _ex = getattr(scraper.rtt, "probe_extra", None) or {}
+            FAKE_N[self.url] = _ex.get("foreign")
+            INFLATED[self.url] = _ex.get("inflated")
+            STALE[self.url] = _ex.get("stale")
+            CID_OK[self.url] = _ex.get("cid_ok")
+            _fr = scraper.family_probe(self.url)
+            _df = next((k for k, v in _fr.items() if not v), None) if len(_fr) == 2 and sum(_fr.values()) == 1 else None
+            _fam_set(self.url, _df, _fr)
+            try:
+                _region_set(self.url, scraper.region_latency(self.url, _fr))
+            except Exception:
+                pass
+            if _df:
+                logger.info("%s DEAD FAMILY: published %s address does not answer", self.url, _df)
+            _probe_save()
+            debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": _ex.get("cid_ok")}
+            if _ex.get("stale"):
+                logger.info("%s STALE PEERS: still hands out a peer after it sent stopped", self.url)
+            if _ex.get("cid_ok") is False:
+                logger.info("%s CONNID NOT ENFORCED: accepted an announce with a made-up connection ID", self.url)
+            if _ex.get("foreign") is not None:
+                _ctr_set(FAKE_FAILS, _FAKE_FAILS_FILE, self.url, FAKE_FAILS.get(self.url, 0) + 1 if _ex["foreign"] > 0 else 0)
+                if _ex["foreign"]:
+                    logger.info("%s FAKE PEERS: %d fake peer(s) on a random hash", self.url, _ex["foreign"])
+            if _ex.get("inflated"):
+                logger.info("%s INFLATED COUNTS: %s seeders / %s leechers on a random hash", self.url, *_ex["inflated"])
+            if self.peer_ok is True:
+                _peer_hist_add(self.url, True)
+            elif self.peer_ok is False:
+                _peer_hist_add(self.url, False)
+            logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             self.is_up()
+            _FAILSTREAK[0] = 0  # a success: not an outage
             logger.info("%s status is UP", self.url)
         except RuntimeError as e:
+            if not _monitor_online():  # our own outage, not the tracker's: record nothing, retry soon
+                self._offline_skip()
+                return
+            if _nt_local_fault(self, e):  # works from elsewhere: our fault, not the tracker's
+                self._offline_skip()
+                return
+            self._last_err = str(e) + (" - answers from other regions" if getattr(self, "_nt_partial", False) else "")
             logger.info("%s status is DOWN. Cause: %s", self.url, e)
+            self.peer_ok = None
+            PEER_OK.pop(self.url, None)
+            FAKE_N.pop(self.url, None)
+            INFLATED.pop(self.url, None)
+            STALE.pop(self.url, None)
+            CID_OK.pop(self.url, None)
+            _probe_save()
             debug_down: HistoryData = {
                 "url": self.url,
                 "ip": next(iter(self.ips)) if self.ips else "",
@@ -165,10 +231,12 @@ class Tracker:
                 "status": 0,
             }
             persistence.raw_data.appendleft(debug_down)
+            _nt_down_why_set(self.url, e)
             self.is_down()
         if self.uptime == 0:
-            self.interval = 10800
+            pass  # interval is set in is_up()/is_down()
         self.update_uptime()
+        self._emit_events()
 
     def update_scheme_from_bep_34(self) -> None:
         valid_bep_34, bep_34_info = scraper.get_bep_34(self.host)
@@ -215,11 +283,13 @@ class Tracker:
     def clear_tracker(self, reason: str) -> None:
         self.countries, self.networks, self.country_codes = None, None, None
         self.latency = None
+        self._prev_checked = self.last_checked
         self.last_checked = int(time())
+        _nt_down_why_set(self.url, reason)
         self.is_down()
         self.update_uptime()
         if self.uptime == 0:
-            self.interval = 10800
+            pass  # interval is set in is_up()/is_down()
         debug: HistoryData = {
             "url": self.url,
             "ip": "",
@@ -245,10 +315,59 @@ class Tracker:
             raise RuntimeError("Invalid announce URL")
 
     def update_uptime(self) -> None:
-        uptime = float(0)
-        for s in self.historic:
-            uptime += s
-        self.uptime = (uptime / len(self.historic)) * 100
+        # Recency-weighted availability * recency-weighted stability.
+        # historic appends newest at the right.
+        # Half-life 336 slots (7 days of 30-minute slots).
+        # One maintenance outage = two flips = tiny penalty.
+        # Constant flapping = flip_rate ~1 = reliability collapses.
+        n = len(self.historic)
+        if n == 0:
+            self.uptime = 0.0
+            return
+        availability, stability = _nt_avail_stab(self.historic)
+        self.uptime = availability * stability * 100.0
+        # new trackers earn a top score: the ceiling rises from 80 to 100 over the first 7 days (336 slots) of history
+        self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
+        if (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:  # dead published family N times in a row
+            self.uptime = min(self.uptime, 50)  # still works on its other family
+        if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers N times in a row
+            self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
+        if PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # failed the peer test N times in a row
+            self.uptime = 0  # no peers handed out = effectively down
+        # Evict trackers that are dead, or too flaky to be of use as measured from Wellington:
+        #   - listed 3+ days, AND
+        #   - no successful check in 5 days, OR (144+ checks, i.e. 3+ days, and availability x stability under 15%:
+        #     answers too rarely or drops out too often to be of use; peer/latency penalties are not counted here).
+        # Milder flappers stay listed (orange) so users can see them. Auto-bans expire after 30 days (see ingest.py).
+        now_ts = int(time())
+        age_days = (now_ts - int(self.added or now_ts)) / 86400.0
+        dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
+        if age_days >= 3 and (dead_days >= 5 or (n >= 144 and availability * stability < 0.15)):
+            logger.info(
+                "Evicting %s (score=%.2f%%, availability=%.1f%%, no success for %.1f days, samples=%s, age_days=%.1f)",
+                self.url,
+                self.uptime,
+                availability * 100.0,
+                dead_days,
+                n,
+                age_days,
+            )
+            self.to_be_deleted = True
+            try:
+                host = (self.host or "").strip().lower()
+                path = "data/denylist.txt"
+                existing = ""
+                try:
+                    existing = open(path, encoding="utf-8").read().lower()
+                except OSError:
+                    pass
+                if host and host not in existing.split():
+                    with open(path, "a", encoding="utf-8") as fh:
+                        fh.write(f"{host} {int(time())}\n")
+            except OSError:
+                logger.exception("failed to append denylist for %s", self.url)
+
+
 
     def update_ips(self) -> None:
         self.ips = []
@@ -265,8 +384,16 @@ class Tracker:
             # is_global alone also accepts some reserved, multicast and site-local addresses.
             for ip in parsed_ips:
                 if not ip.is_global or ip.is_reserved or ip.is_multicast or (isinstance(ip, IPv6Address) and ip.is_site_local):
+                    # cross-check: ask Cloudflare and Quad9 directly; delete only if neither gives a public address
+                    pub = _nt_public_ips(self.host)
+                    if pub is None or any(_nt_ip_public(x) for x in pub):
+                        self.ips = None
+                        raise RuntimeError(f"IP {ip} is not globally routable, but the cross-check says {sorted(pub) if pub else 'no resolver answered'}: check skipped, tracker kept")
                     self.ips = None
                     self.to_be_deleted = True
+                    if len(_NT_DEL_REASON) > 200:
+                        _NT_DEL_REASON.clear()
+                    _NT_DEL_REASON[self.url] = "its hostname no longer points to a public IP address"
                     raise RuntimeError(f"IP {ip} is not globally routable, removed")
             for ip in parsed_ips:
                 if ip.version == 6:
@@ -295,15 +422,163 @@ class Tracker:
                     self.country_codes.append(ip_data[1].lower())
                     self.networks.append(ip_data[2])
 
+    # --- Adaptive (NTP-style) check interval, three tiers ----------------------------------
+    #   healthy (no failure in the last 12 slots / 6 h): 30 -> 60 -> 90 -> 120 min, one step per success
+    #   flaky   (up or down, but a failure in the last 6 h): every 15 min
+    #   dead    (down, and no success in the last 6 h): every 30 min, no point hammering it
+    # History is stored as wall-clock-aligned 30-minute slots. Two checks in the same slot
+    # merge, and a failure anywhere in a slot makes the whole slot down. When a check lands
+    # after a longer gap, the missing slots are filled with the previous state, or split
+    # evenly between old and new state if it changed. The gap is capped so an outage of
+    # this server itself can't hand out free uptime.
+    SLOT = 1800
+    ADAPT_MAX = 14400
+    NORMAL_MAX = 3600
+    PREMIUM_SCORE = 95  # displayed score 95 or above
+    PREMIUM_CLEAN = 43200
+    PREMIUM_LADDER = ((5400, 12), (7200, 24), (9000, 30), (10800, 36), (12600, 42), (14400, 48))  # (interval s, clean hours)
+
+    def _emit_events(self) -> None:
+        """Compare this tracker's state with last time and log any change to the event feed."""
+        try:
+            url, now = self.url, int(time())
+            if self.status == 1:
+                bad = []
+                if PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
+                    bad.append("hands out no peers (3+ of its last 6 peer tests failed)")
+                if FAKE_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
+                    bad.append("returns fake peers (3+ checks in a row)")
+                df = FAM_FAILS.get(url) or {}
+                if df.get("n", 0) >= PEER_FAIL_LIMIT:
+                    bad.append(f"its published IPv{str(df.get('fam', '?'))[-1]} address is dead")
+                if bad:
+                    st = "up_bad"
+                else:  # same ladder as the page/API, with a little hysteresis so borderline trackers don't flap
+                    sc = round(float(self.uptime or 0))
+                    ms = _nt_region_avg(url) or self.latency or 0
+                    pst = (LAST_STATE.get(url) or {}).get("st")
+                    if sc < (52 if pst == "up_junk" else 50):
+                        st = "up_junk"
+                    elif _nt_region_avg(url) is None and _nt_is_new(self, sc, 0):  # just added: no real latency yet
+                        st = "up_good"
+                    elif ms >= (290 if pst == "up_slow" else 300) and _nt_reliable(self, pst):
+                        st = "up_slow"
+                    elif sc < (91 if pst == "up_unreliable" else 90):
+                        st = "up_good" if _nt_is_new(self, sc, ms) else ("up_slow" if (_nt_region_avg(self.url) or 0) >= 200 and round(float(self.uptime or 0) + _nt_lat_penalty(_nt_region_avg(self.url))) >= (91 if pst == "up_unreliable" else 90) else "up_unreliable")  # slow = under 90 from latency alone;  # new = held back only by the age ceiling
+                    else:
+                        st = "up_good"
+            else:
+                bad, st = [], "down"
+            df = FAM_FAILS.get(url) or {}
+            dead = [df["fam"]] if st != "down" and df.get("n", 0) >= PEER_FAIL_LIMIT and df.get("fam") else []
+            prev = LAST_STATE.get(url)
+            if self.to_be_deleted:
+                _event(url, "removed", "removed from the list (" + _NT_DEL_REASON.pop(url, "no answer for 5+ days, or too unreliable: under 15% once dropouts are counted") + ")")
+                LAST_STATE.pop(url, None)
+                _jsave(LAST_STATE, _LAST_STATE_FILE)
+                return
+            cur = {"st": st, "bad": bad, "dead": dead}
+            if prev is None:
+                if now - int(self.added or 0) < 86400:
+                    _event(url, "added", "added to the list")
+                cur["since"] = now
+            elif {k: prev.get(k) for k in ("st", "bad", "dead")} != cur:
+                ago = _dur(prev.get("since") or now).replace("\u2007", "").strip()
+                if st == "down" and prev["st"] != "down":
+                    _nt_quiet(self) or _event(url, "down", f"went Down ({getattr(self, '_last_err', 'no answer')})")
+                elif st != "down" and prev["st"] == "down":
+                    _nt_quiet(self) or _event(url, "up", f"is back Up after {ago} down" + (f", but {_nt_bad_lbl(bad)}: {'; '.join(bad)}" if bad else (f", but {_NT_LBL[st]}: {_nt_why(st, self)}" if st in _NT_LBL else "")))
+                elif st == "up_bad" and prev["st"] != "up_bad":
+                    _event(url, "bad", "is " + _nt_bad_lbl(bad) + ": " + "; ".join(bad))
+                elif st == "up_bad" and prev.get("bad") != bad:
+                    _event(url, "bad", "is " + ("still Up/Bad, now" if _nt_bad_lbl(bad) == "Up/Bad" else "now Up/Broken") + ": " + "; ".join(bad))
+                elif st == "up_good" and prev["st"] != "up_good":
+                    _event(url, "good", "is Up/Good again")
+                elif st in _NT_LBL and prev["st"] != st:
+                    _event(url, "bad", f"is {_NT_LBL[st]}: {_nt_why(st, self)}")
+                if st != "down" and prev["st"] != "down":
+                    for f in set(dead) - set(prev.get("dead") or []):
+                        _event(url, "family", f"IPv{f[-1]} address confirmed dead")
+                    for f in set(prev.get("dead") or []) - set(dead):
+                        _event(url, "family", f"IPv{f[-1]} address answering again")
+                cur["since"] = now if prev["st"] != st else prev.get("since", now)
+            else:
+                cur["since"] = prev.get("since", now)
+            if prev != cur:
+                LAST_STATE[url] = cur
+                _jsave(LAST_STATE, _LAST_STATE_FILE)
+        except Exception:
+            logger.exception("event feed: failed for %s", self.url)
+
+    def _offline_skip(self) -> None:
+        """This monitor is offline: record nothing for the tracker and look again in ~5 minutes."""
+        self.last_checked = int(time()) - int(self.interval or 900) + 300
+        logger.info("%s check skipped: this monitor is offline", self.url)
+
+    def _record(self, status: int) -> None:
+        now = int(time())
+        # history can't be older than the tracker: trim legacy per-check entries beyond its age in slots
+        cap = max(1, (now - int(self.added or 0)) // self.SLOT + 2) if self.added else None
+        while cap and len(self.historic) > cap:
+            self.historic.popleft()
+        prev = int(getattr(self, "_prev_checked", 0) or 0)
+        if not len(self.historic) or prev <= 0:
+            self.historic.append(status)
+            return
+        gap = now // self.SLOT - prev // self.SLOT
+        if gap <= 0:
+            self.historic[-1] = min(self.historic[-1], status)
+            return
+        gap = min(gap, self.ADAPT_MAX // self.SLOT + 1)
+        last = self.historic[-1]
+        fill = gap - 1
+        old = fill // 2 if status != last else fill
+        for _ in range(old):
+            self.historic.append(last)
+        for _ in range(fill - old):
+            self.historic.append(status)
+        self.historic.append(status)
+
+    def _next_interval(self) -> int:
+        recent = list(self.historic)[-12:]
+        if self.status == 0:
+            if 1 in recent:
+                return 900  # just dropped / flapping: watch closely
+            # dead ramp: 60 min, then +30 min per failed check, up to ADAPT_MAX
+            return min(self.ADAPT_MAX, max(3600, (self.interval // 1800 + 1) * 1800))
+        if 0 in recent:
+            return 900
+        if len(recent) < 3 or self.interval < 1800:
+            return 1800
+        # Premium ladder: score >= 95 and a clean record that grows with the interval (the longer
+        # we look away, the longer the tracker must have been flawless). Everyone else tops out at NORMAL_MAX.
+        step = (self.interval // 1800 + 1) * 1800
+        if step <= self.NORMAL_MAX:
+            return step
+        if int(float(getattr(self, "_nt_base", self.uptime) or 0) + 0.5) < self.PREMIUM_SCORE:
+            return self.NORMAL_MAX
+        h = list(self.historic)
+        clean = (len(h) - 1 - max(i for i, v in enumerate(h) if v == 0) if 0 in h else len(h)) * self.SLOT
+        if self.last_downtime:
+            clean = min(clean, int(time()) - int(self.last_downtime))
+        best = self.NORMAL_MAX
+        for iv, hrs in self.PREMIUM_LADDER:
+            if iv <= step and clean >= hrs * 3600:
+                best = iv
+        return best
+
     def is_up(self) -> None:
         self.status = 1
         self.last_uptime = int(time())
-        self.historic.append(self.status)
+        self._record(1)
+        self.interval = self._next_interval()
 
     def is_down(self) -> None:
         self.status = 0
         self.last_downtime = int(time())
-        self.historic.append(self.status)
+        self._record(0.5 if getattr(self, "_nt_partial", False) else 0)
+        self._nt_partial = False
+        self.interval = self._next_interval()
 
     @staticmethod
     def ip_api(ip: str) -> str:
@@ -319,18 +594,725 @@ class Tracker:
 def format_uptime_and_downtime_time(trackers_unprocessed: list[Tracker]) -> list[Tracker]:
     for tracker in trackers_unprocessed:
         if tracker.status == 1:
+            tracker.peer_ok = PEER_OK.get(tracker.url)
+            tracker.peer_fails = PEER_FAILS.get(tracker.url, 0)
+            tracker.fake_n = FAKE_N.get(tracker.url)
+            tracker.fake_fails = FAKE_FAILS.get(tracker.url, 0)
+            tracker.deadfam = FAM_FAILS.get(tracker.url)
+            tracker.fams = FAMS.get(tracker.url)
+            tracker.inflated = INFLATED.get(tracker.url)
+            tracker.stale = STALE.get(tracker.url)
+            tracker.cid_ok = CID_OK.get(tracker.url)
             tracker.status_epoch = tracker.last_downtime
             if not tracker.last_downtime:
-                tracker.status_readable = "Working"
+                tracker.status_readable = "Up"
             else:
-                time_string = format_time(tracker.last_downtime)
-                tracker.status_readable = "Working for " + time_string
+                tracker.status_readable = "Up " + _dur(tracker.last_downtime)
         elif tracker.status == 0:
             tracker.status_epoch = sys.maxsize
+            tracker.down_why = DOWN_WHY.get(tracker.url)
+            tracker.down_label = _nt_down_label(tracker.down_why)
             if not tracker.last_uptime:
                 tracker.status_readable = "Down"
             else:
-                time_string = format_time(tracker.last_uptime)
-                tracker.status_readable = "Down for " + time_string
+                tracker.status_readable = "Down " + _dur(tracker.last_uptime)
 
+    _attach_extras(trackers_unprocessed)
     return trackers_unprocessed
+
+
+def _q15(epoch):
+    """Round a 'down for / working for' duration to the nearest 15 min (min 15): checks run at 15-min resolution."""
+    if not epoch:
+        return epoch
+    now = int(time())
+    d = max(0, now - int(epoch))
+    return now - max(900, int((d + 450) // 900) * 900)
+
+
+def _dur(epoch):
+    """Status duration as 'Dd HHh' (whole hours elapsed), e.g. '3d 04h'."""
+    d = max(0, int(time()) - int(epoch))
+    if d < 3600:
+        return f"{d // 60:2d}m".replace(" ", "\u2007")  # under an hour: minutes
+    h = f"{d % 86400 // 3600:2d}h".replace(" ", "\u2007")  # figure-space pad: digits line up
+    return f"{d // 86400}d {h}" if d >= 86400 else h
+
+
+# Peer-test results by URL, kept in memory (the web page builds Tracker objects from the DB, which has no column for this).
+PEER_OK: dict = {}
+
+
+# Consecutive peer-test failures per URL, persisted so a restart doesn't wipe the penalty.
+import json as _json, os as _os
+PEER_FAIL_LIMIT = 3      # this many FAILs in a row ...
+PEER_FAIL_CAP = 50.0     # ... caps the score here (1 star, red, out of every score-based API list)
+_PEER_FAILS_FILE = "data/peer_fails.json"
+try:
+    with open(_PEER_FAILS_FILE) as _f:
+        PEER_FAILS: dict = _json.load(_f)
+except Exception:
+    PEER_FAILS = {}
+
+
+def _peer_fail_set(url, n):
+    if PEER_FAILS.get(url, 0) == n:
+        return
+    if n:
+        PEER_FAILS[url] = n
+    else:
+        PEER_FAILS.pop(url, None)
+    try:
+        tmp = _PEER_FAILS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(PEER_FAILS, f)
+        _os.replace(tmp, _PEER_FAILS_FILE)
+    except OSError:
+        pass
+
+
+# Fake-peer / inflated-count checks (random-hash authenticity tests).
+FAKE_N: dict = {}      # url -> fake peers seen at latest test
+INFLATED: dict = {}    # url -> (seeders, leechers) reported when the truth is 1/1
+_FAKE_FAILS_FILE = "data/fake_fails.json"
+try:
+    with open(_FAKE_FAILS_FILE) as _f:
+        FAKE_FAILS: dict = _json.load(_f)
+except Exception:
+    FAKE_FAILS = {}
+
+
+def _ctr_set(d, path, url, n):
+    if d.get(url, 0) == n:
+        return
+    if n:
+        d[url] = n
+    else:
+        d.pop(url, None)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(d, f)
+        _os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+# Informational tracker-hygiene checks (no score effect).
+STALE: dict = {}   # url -> True if it keeps handing out a peer after 'stopped'
+CID_OK: dict = {}  # url -> True if it rejects a made-up UDP connection ID, False if it accepts one
+
+
+# Persist latest probe results so restarts don't blank the status marks.
+_PROBE_FILE = "data/probe_state.json"
+
+
+def _probe_save():
+    try:
+        tmp = _PROBE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump({"peer_ok": PEER_OK, "fake_n": FAKE_N, "inflated": INFLATED, "stale": STALE, "cid_ok": CID_OK}, f)
+        _os.replace(tmp, _PROBE_FILE)
+    except OSError:
+        pass
+
+
+try:
+    with open(_PROBE_FILE) as _f:
+        _st = _json.load(_f)
+    PEER_OK.update(_st.get("peer_ok", {}))
+    FAKE_N.update(_st.get("fake_n", {}))
+    INFLATED.update({k: (tuple(v) if v else v) for k, v in _st.get("inflated", {}).items()})
+    STALE.update(_st.get("stale", {}))
+    CID_OK.update(_st.get("cid_ok", {}))
+except Exception:
+    pass
+
+
+# Dual-stack test. FAMS: {url: {"v4": bool, "v6": bool}}; FAM_FAILS: {url: {"n": consecutive fails, "fam": "v4"|"v6"}}
+_FAM_FAILS_FILE = "data/fam_fails.json"
+_FAMS_FILE = "data/fams.json"
+
+
+def _jload(path):
+    try:
+        with open(path) as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def _jsave(d, path):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(d, f)
+        _os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+FAM_FAILS: dict = _jload(_FAM_FAILS_FILE)
+FAMS: dict = _jload(_FAMS_FILE)
+_DOWN_WHY_FILE = "data/down_why.json"
+DOWN_WHY: dict = _jload(_DOWN_WHY_FILE)
+
+
+def _nt_down_label(raw):
+    """Short label for a recorded failure cause. None if unrecognised (the page then shows plain Down)."""
+    r = str(raw or "").lower()
+    if not r:
+        return None
+    if "try again" in r or "name or service" in r or "resolve" in r or "nodename" in r or "getaddrinfo" in r or "no address" in r:
+        return "DNS"
+    if "timeout" in r or "timed out" in r:
+        return "Timeout"
+    if "refused" in r or "connection failed" in r or "unreachable" in r or "reset" in r:
+        return "Refused"
+    if "ssl" in r or "tls" in r or "certificate" in r:
+        return "TLS"
+    if "http" in r and __import__("re").search(r"\b[45]\d\d\b", r):
+        return "HTTP error"
+    return None
+
+
+def _nt_down_why_set(url, raw):
+    try:
+        DOWN_WHY[url] = str(raw)[:200]
+        _jsave(DOWN_WHY, _DOWN_WHY_FILE)
+    except Exception:
+        pass
+
+
+
+
+def _fam_set(url, fam, res=None):
+    if res is not None and FAMS.get(url) != res:
+        if res:
+            FAMS[url] = res
+        else:
+            FAMS.pop(url, None)
+        _jsave(FAMS, _FAMS_FILE)
+    cur = FAM_FAILS.get(url)
+    new = {"n": (cur or {}).get("n", 0) + 1 if (cur or {}).get("fam") == fam else 1, "fam": fam} if fam else None
+    if new != cur:
+        if new:
+            FAM_FAILS[url] = new
+        else:
+            FAM_FAILS.pop(url, None)
+        _jsave(FAM_FAILS, _FAM_FAILS_FILE)
+
+
+# Peer test: judge the last PEER_WINDOW conclusive results (n/a ignored), not just a streak.
+# PEER_FAILS[url] = fails within that window, so every existing consumer (>= 3 -> Junk / score 0) is unchanged.
+PEER_WINDOW = 6
+_PEER_HIST_FILE = "data/peer_hist.json"
+try:
+    with open(_PEER_HIST_FILE) as _f:
+        PEER_HIST: dict = _json.load(_f)
+except Exception:
+    PEER_HIST = {}
+
+
+def _peer_hist_add(url, ok):
+    h = PEER_HIST.get(url)
+    if h is None:  # seed from the old streak counter
+        h = [0] * min(PEER_FAILS.get(url, 0), PEER_WINDOW)
+    h = (h + [1 if ok else 0])[-PEER_WINDOW:]
+    PEER_HIST[url] = h
+    try:
+        tmp = _PEER_HIST_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(PEER_HIST, f)
+        _os.replace(tmp, _PEER_HIST_FILE)
+    except OSError:
+        pass
+    _peer_fail_set(url, h.count(0))
+
+
+_ONLINE = [0.0, True]
+_FAILSTREAK = [0]  # consecutive failed checks across all trackers (reset by any success)
+
+
+def _monitor_online() -> bool:
+    """Is this monitor itself online (network AND DNS)? Asked only when a tracker check fails.
+    'online' is cached 5 min, 'offline' 60 s; 2+ failures in a row with no success between bypass the cache,
+    so an outage is spotted within one failed check."""
+    import socket as _s
+    now = time()
+    _FAILSTREAK[0] += 1
+    age = now - _ONLINE[0]
+    if (_ONLINE[1] and age < 300 and _FAILSTREAK[0] < 2) or (not _ONLINE[1] and age < 60):
+        return _ONLINE[1]
+    ok = False
+    for host in ("1.1.1.1", "8.8.8.8", "9.9.9.9", "2606:4700:4700::1111", "2001:4860:4860::8888"):
+        try:
+            with _s.create_connection((host, 443), timeout=3):
+                ok = True
+                break
+        except OSError:
+            continue
+    if ok:  # network works; also require working DNS, or every tracker lookup fails and gets blamed on the trackers
+        ok = False
+        for name in ("one.one.one.one", "dns.google", "quad9.net"):
+            try:
+                _s.getaddrinfo(name, 443)
+                ok = True
+                break
+            except OSError:
+                continue
+    _ONLINE[0], _ONLINE[1] = now, ok
+    if ok:
+        _FAILSTREAK[0] = 0  # confirmed online: these failures are the trackers' own
+    else:
+        logger.warning("monitor has no internet or DNS: tracker failures are not being recorded")
+    return ok
+
+
+# ---- extras: tracker's own announce interval, latency by region, stats, same-operator groups ----
+_ANN_IV_FILE = "data/ann_iv.json"
+_REGION_FILE = "data/region_lat.json"
+ANN_IV: dict = _jload(_ANN_IV_FILE)
+REGION_LAT: dict = _jload(_REGION_FILE)
+
+
+def _ann_iv_set(url, iv):
+    if ANN_IV.get(url) != iv:
+        ANN_IV[url] = iv
+        _jsave(ANN_IV, _ANN_IV_FILE)
+
+
+_REGION_TS_FILE = "data/region_ts.json"  # {url: {region: [[ts, ms], ...]}}
+_rs = _jload(_REGION_TS_FILE)
+REGION_SAMPLES: dict = _rs if all(isinstance(v, dict) and all(isinstance(x, list) for x in v.values()) for v in _rs.values()) else {}
+
+
+def _region_set(url, d):
+    """One figure per region: median of its last 12 samples (48 h), whichever server that region's exit was using."""
+    now = int(time())
+    per = REGION_SAMPLES.setdefault(url, {})
+    for k, v in (d or {}).items():
+        per.setdefault(k.split(":")[0].strip(), []).append([now, int(v)])
+    for reg in list(per):
+        per[reg] = [x for x in per[reg] if now - x[0] <= 172800][-12:]
+        if not per[reg]:
+            per.pop(reg)
+    med = {reg: sorted(x[1] for x in ss)[len(ss) // 2] for reg, ss in per.items()}
+    REGION_LAT[url] = {k: med[k] for k in sorted(med, key=lambda x: (x != "Oceania", x))}
+    _jsave(REGION_LAT, _REGION_FILE)
+    _jsave(REGION_SAMPLES, _REGION_TS_FILE)
+
+
+_PSL2 = {"co.nz", "org.nz", "net.nz", "co.uk", "org.uk", "com.au", "net.au", "org.au", "co.jp", "com.br", "com.cn",
+         "net.cn", "org.cn", "com.tr", "co.za", "com.ru", "co.in", "co.kr", "com.tw", "com.hk"}
+_DDNS = {"duckdns.org", "ydns.eu", "ddnsfree.com", "ddns.net", "no-ip.org", "no-ip.com", "dynu.net", "kro.kr", "hopto.org",
+         "zapto.org", "mooo.com", "eu.org", "github.io", "afraid.org", "dns.army", "linkpc.net", "servehttp.com",
+         "sytes.net", "myftp.org", "freeddns.org", "dnsfor.me", "airdns.org"}
+
+
+def _base_domain(host):
+    p = (host or "").lower().strip(".").split(".")
+    return ".".join(p[-3:]) if len(p) >= 3 and ".".join(p[-2:]) in _PSL2 else ".".join(p[-2:])
+
+
+def _runs(seq, val):
+    out, n = [], 0
+    for s in seq:
+        if s == val:
+            n += 1
+        elif n:
+            out.append(n)
+            n = 0
+    if n:
+        out.append(n)
+    return out
+
+
+def _nt_avail_stab(historic):
+    """Recency-weighted availability and stability (each 0..1): the two factors of the score.
+    Half-life 336 slots (7 days of 30-minute slots). stability = (1 - flip rate) squared."""
+    seq = list(reversed(historic or []))  # newest first
+    n = len(seq)
+    weighted = total_w = flips_w = pairs_w = 0.0
+    for age, s in enumerate(seq):
+        w = 0.5 ** (age / 336.0)
+        weighted += float(s) * w
+        total_w += w
+        if age + 1 < n:
+            pairs_w += w
+            if s != seq[age + 1]:
+                flips_w += w
+    availability = weighted / total_w if total_w else 0.0
+    flip_rate = flips_w / pairs_w if pairs_w else 0.0
+    return availability, (1.0 - flip_rate) ** 2
+
+
+def _stats(t):
+    h = [int(x) for x in (t.historic or [])]
+    w = h[-336:]
+    st = {"days": round(len(h) * 0.5 / 24, 1)}
+    if w:
+        st["avail7"] = round(100.0 * sum(w) / len(w), 1)
+        st["outages7"] = len(_runs(w, 0))
+    if h:
+        st["avail_all"] = round(100.0 * sum(h) / len(h), 1)
+        _av, _sb = _nt_avail_stab(t.historic)
+        st["avail_weighted"] = round(100.0 * _av, 1)
+        st["stability"] = round(100.0 * _sb, 1)
+        _base = 100.0 * _av * _sb
+        st["base"] = round(_base, 1)
+        st["base_r"] = int(_base + 0.5)  # rounded once from the real figure, same as the displayed score
+        if len(h) < 336:
+            st["ceiling_r"] = int(80.0 + 20.0 * len(h) / 336.0 + 0.5)
+            st["ceiling"] = round(80.0 + 20.0 * len(h) / 336.0, 1)  # new-tracker ceiling, rises to 100 over 7 days
+        _ms = _nt_region_avg(t.url)
+        _pen = _nt_lat_penalty(_ms)
+        st["lat_ms"] = _ms
+        st["lat_penalty"] = round(_pen, 1)
+        if min(_base, st.get("ceiling", 100.0)) - _pen - float(t.uptime or 0) > 1.0:
+            st["capped"] = True  # a quality-test cap (fake peers, dead IP family, failed peer test) is holding the score down
+        r = _runs(h, 0)
+        st["longest_h"] = max(r) * 0.5 if r else 0
+    ph = PEER_HIST.get(t.url)
+    if ph:
+        st["peer"] = f"{sum(ph)}/{len(ph)}"
+    st["ann_iv"] = ANN_IV.get(t.url)
+    return st
+
+
+def _attach_extras(trackers):
+    parent = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    seen_ip, seen_dom = {}, {}
+    for t in trackers:
+        u = t.url
+        find(u)
+        cf = any("cloudflare" in str(n).lower() for n in (t.networks or []))
+        ri = getattr(t, "recent_ips", None) or {}
+        ips = set(t.ips or []) | set(ri.keys() if isinstance(ri, dict) else ri)
+        if not cf:  # anycast CDN IPs are shared by unrelated sites
+            for ip in ips:
+                if ip in seen_ip:
+                    parent[find(u)] = find(seen_ip[ip])
+                else:
+                    seen_ip[ip] = u
+        d = _base_domain(t.host)
+        if d and d not in _DDNS:
+            if d in seen_dom:
+                parent[find(u)] = find(seen_dom[d])
+            else:
+                seen_dom[d] = u
+    groups = {}
+    for t in trackers:
+        groups.setdefault(find(t.url), []).append(t.url)
+    for t in trackers:
+        t.region_lat = REGION_LAT.get(t.url)
+        if t.latency and _nt_region_avg(t.url):
+            t.latency = _nt_region_avg(t.url)
+        t.stats = _stats(t)
+        t.group_id = find(t.url)
+        t.operator_peers = sorted(x for x in groups[t.group_id] if x != t.url)
+    return trackers
+
+
+# ---- event feed: state changes, newest last (last 500) ----
+_EVENTS_FILE = "data/events.json"
+_LAST_STATE_FILE = "data/last_state.json"
+_ev = _jload(_EVENTS_FILE)
+EVENTS: list = _ev if isinstance(_ev, list) else []
+LAST_STATE: dict = _jload(_LAST_STATE_FILE)
+
+
+def _event(url, kind, text):
+    from urllib.parse import urlparse as _up
+    EVENTS.append({"t": int(time()), "url": url, "host": _up(url).hostname or url, "type": kind, "text": text})
+    del EVENTS[:-500]
+    _jsave(EVENTS, _EVENTS_FILE)
+    logger.info("EVENT %s %s %s", kind, url, text)
+    _notify(EVENTS[-1])
+
+
+# ---- Telegram alerts for chosen trackers / event types (config: data/notify.json, re-read on every event) ----
+_NOTIFY_FILE = "data/notify.json"
+_NT_ICON = {"down": "\U0001F534", "up": "\U0001F7E2", "good": "\U0001F7E2", "bad": "\U0001F7E0", "family": "\U0001F7E0",
+            "added": "\U0001F195", "removed": "\U0001F5D1"}
+
+
+def _notify(ev):
+    try:
+        with open(_NOTIFY_FILE) as f:
+            cfg = _json.load(f)
+    except Exception:
+        return
+    tg = cfg.get("telegram") or {}
+    if not tg.get("token") or not tg.get("chat_id"):
+        return
+    trs = [str(t).lower() for t in cfg.get("trackers", ["*"])]
+    if "*" not in trs and not any(t in ev["url"].lower() for t in trs):
+        return
+    if ev["type"] not in cfg.get("types", list(_NT_ICON)):
+        return
+    text = f'{_NT_ICON.get(ev["type"], "*")} {ev["host"]} {ev["text"]}\n{ev["url"]}'
+
+    def send():
+        import urllib.parse
+        import urllib.request
+        try:
+            data = urllib.parse.urlencode({"chat_id": tg["chat_id"], "text": text, "disable_web_page_preview": "true"}).encode()
+            urllib.request.urlopen(f'https://api.telegram.org/bot{tg["token"]}/sendMessage', data=data, timeout=15).read()
+        except Exception as e:
+            logger.warning("telegram notify failed: %s", type(e).__name__)
+
+    __import__("threading").Thread(target=send, daemon=True).start()
+
+
+# --- nt: latency column = mean of region medians; latency penalty on score ---
+def _nt_region_avg(url):
+    d = REGION_LAT.get(url) or {}
+    v = [int(x) for x in d.values() if isinstance(x, (int, float))]
+    return round(sum(v) / len(v)) if len(v) >= 2 else None
+
+
+def _nt_lat_penalty(ms):
+    # gentle up to 1 s (0.02/ms over 150 ms, max 17), steeper beyond (0.05/ms), capped at 40
+    if not ms or ms <= 150:
+        return 0.0
+    if ms <= 1000:
+        return (ms - 150) * 0.02
+    return min(40.0, 17.0 + (ms - 1000) * 0.05)
+
+
+_nt_orig_uu = Tracker.update_uptime
+
+
+def _nt_uu(self, *a, **k):
+    r = _nt_orig_uu(self, *a, **k)
+    self._nt_base = self.uptime  # reliability score before the latency penalty (used for premium checks)
+    try:
+        p = _nt_lat_penalty(_nt_region_avg(self.url))
+        if p and self.uptime:
+            self.uptime = max(0.0, float(self.uptime) - p)
+    except Exception:
+        pass
+    return r
+
+
+Tracker.update_uptime = _nt_uu
+
+
+def _nt_reliable(t, pst=None):
+    # reliability score (availability x stability, before the latency penalty) is 90 or more
+    try:
+        a, s = _nt_avail_stab(t.historic)
+        return round(a * s * 100) >= (89 if pst == "up_slow" else 90)
+    except Exception:
+        return True
+
+
+def _nt_bad_lbl(bad):
+    # a dead IP family on its own is Up/Broken (same rule as the page); anything else is Up/Bad
+    try:
+        b = [str(x).lower() for x in (bad or [])]
+        if b and all(("ipv4" in x or "ipv6" in x) and "peer" not in x for x in b):
+            return "Up/Broken"
+    except Exception:
+        pass
+    return "Up/Bad"
+
+
+_NT_LBL = {"up_junk": "Up/Junk", "up_slow": "Up/Slow", "up_unreliable": "Up/Unreliable"}
+
+
+def _nt_why(st, t):
+    sc = round(float(t.uptime or 0))
+    if st == "up_slow":
+        _ms = _nt_region_avg(t.url) or t.latency or 0
+        return f"averages {_ms} ms across regions" if _ms >= 290 else f"reliable, but {_ms} ms latency pulls its score to {sc}, under 90"
+    if st == "up_junk":
+        return f"score {sc}, under 50"
+    return f"score {sc}, under 90"
+
+
+def _nt_quiet(t):
+    """Junk trackers (score under 50) flap all day; don't log their down/up churn to the feed."""
+    try:
+        return round(float(t.uptime or 0)) < 50
+    except Exception:
+        return False
+
+
+# ---- second opinion before blaming a tracker: our DNS or our network path may be the problem ----
+_NT_SKIPS: dict = {}
+_NT_SIGNAL_FILE = "data/local_faults.json"
+
+
+def _nt_signal(kind, host):
+    try:
+        d = _jload(_NT_SIGNAL_FILE)
+        d = d if isinstance(d, list) else []
+        d.append({"t": int(time()), "kind": kind, "host": host})
+        _jsave(d[-200:], _NT_SIGNAL_FILE)
+    except Exception:
+        pass
+
+
+_NT_DEL_REASON: dict = {}
+
+
+def _nt_dns_skip(r, i):
+    while True:
+        n = r[i]
+        if n == 0:
+            return i + 1
+        if n & 0xC0 == 0xC0:
+            return i + 2
+        i += 1 + n
+
+
+def _nt_public_ips(host):
+    """Addresses 1.1.1.1 and 9.9.9.9 give for host (A and AAAA). None if neither resolver answered at all."""
+    import socket as _s, struct as _st, random as _r, ipaddress as _ipa
+    try:
+        q = b"".join(bytes([len(x)]) + x.encode() for x in host.strip(".").split(".")) + b"\0"
+    except Exception:
+        return None
+    out, answered = set(), False
+    for srv in ("1.1.1.1", "9.9.9.9"):
+        for qt in (1, 28):
+            tid = _r.getrandbits(16)
+            pkt = _st.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0) + q + _st.pack(">HH", qt, 1)
+            sk = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+            sk.settimeout(3)
+            try:
+                sk.sendto(pkt, (srv, 53))
+                r = sk.recv(4096)
+                rid, fl, qd, an = _st.unpack(">HHHH", r[:8])
+                if rid != tid or not fl & 0x8000:
+                    continue
+                answered = True
+                i = 12
+                for _ in range(qd):
+                    i = _nt_dns_skip(r, i) + 4
+                for _ in range(an):
+                    i = _nt_dns_skip(r, i)
+                    typ, _c, _t, rdl = _st.unpack(">HHIH", r[i:i + 10])
+                    i += 10
+                    if (typ, rdl) in ((1, 4), (28, 16)):
+                        out.add(str(_ipa.ip_address(r[i:i + rdl])))
+                    i += rdl
+            except Exception:
+                pass
+            finally:
+                sk.close()
+    return out if answered else None
+
+
+def _nt_ip_public(x):
+    try:
+        ip = ip_address(x)
+    except Exception:
+        return False
+    return bool(ip.is_global and not ip.is_reserved and not ip.is_multicast and not (ip.version == 6 and ip.is_site_local))
+
+
+def _nt_public_dns_has(host):
+    """Ask 1.1.1.1 / 9.9.9.9 directly (bypassing the local resolver) whether the name exists (A or AAAA)."""
+    import socket as _s, struct as _st, random as _r
+    try:
+        q = b"".join(bytes([len(p)]) + p.encode() for p in host.strip(".").split(".")) + b"\0"
+    except Exception:
+        return False
+    for srv in ("1.1.1.1", "9.9.9.9"):
+        for qt in (1, 28):
+            tid = _r.getrandbits(16)
+            pkt = _st.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0) + q + _st.pack(">HH", qt, 1)
+            s = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+            s.settimeout(3)
+            try:
+                s.sendto(pkt, (srv, 53))
+                r = s.recv(1500)
+                if len(r) >= 12:
+                    rid, fl, _qd, an = _st.unpack(">HHHH", r[:8])
+                    if rid == tid and (fl & 0xF) == 0 and an > 0:
+                        return True
+            except OSError:
+                pass
+            finally:
+                s.close()
+    return False
+
+
+def _nt_reachable_elsewhere(url):
+    """Does the tracker answer through any of the VPN exits?"""
+    try:
+        import socket as _s
+        for e in (scraper._exits() or {}).values():
+            src = e.get("src4")
+            if src and scraper._rtt_via(url, _s.AF_INET, src) is not None:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _nt_local_fault(t, err):
+    """True = the failure is ours (DNS lying, or our path broken while VPN exits reach the tracker): skip, don't record.
+    Capped at 6 skips in a row (~30 min) so a tracker that has banned this server still gets recorded eventually."""
+    host = (getattr(t, "host", "") or "").lower()
+    msg = str(err).lower()
+    if _NT_SKIPS.get(t.url, 0) >= 6:
+        _NT_SKIPS.pop(t.url, None)
+        return False
+    kind = None
+    if "resolve" in msg and host and _nt_public_dns_has(host):
+        kind = "dns"
+    elif "timeout" in msg and not _nt_vps_retry_ok(t.url) and _nt_reachable_elsewhere(t.url):  # still dead from here, alive elsewhere
+        kind = "path"
+    if not kind:
+        _NT_SKIPS.pop(t.url, None)
+        return False
+    _nt_signal(kind, host)
+    if kind == "path":  # down from Wellington, up elsewhere: record it as half an outage instead of skipping
+        t._nt_partial = True
+        logger.warning("%s PARTIAL: '%s' from Wellington but answers via VPN exits - recorded as half down", t.url, err)
+        return False
+    _NT_SKIPS[t.url] = _NT_SKIPS.get(t.url, 0) + 1
+    logger.warning("%s LOCAL FAULT (%s): '%s' here, but it works from elsewhere - not counted", t.url, kind, err)
+    return True
+
+
+def _nt_is_new(t, sc, ms):
+    """Under 7 days old and sitting at the age ceiling (minus its latency penalty): healthy, just new."""
+    age = (time() - int(getattr(t, "added", 0) or 0)) / 86400.0
+    if age >= 7:
+        return False
+    return sc >= 80.0 + 20.0 * min(1.0, age / 7.0) - _nt_lat_penalty(ms) - 1.5
+
+
+def _nt_vps_retry_ok(url):
+    """Re-try from this server first: if it answers now, the failure was a blip, not our network path."""
+    try:
+        import socket as _s
+        return scraper._rtt_via(url, _s.AF_INET, None) is not None
+    except Exception:
+        return False
+
+
+# ---- display order: up trackers by score then latency; down trackers last, least time down first ----
+_nt_ae_orig = _attach_extras
+
+
+def _attach_extras(trackers):
+    r = _nt_ae_orig(trackers)
+    try:
+        _now = time()
+        trackers.sort(key=lambda t: (0, -round(float(t.uptime or 0)), t.latency or 99999) if t.status == 1 else (1, _now - int(t.last_uptime or 0), 0))
+    except Exception:
+        pass
+    return r

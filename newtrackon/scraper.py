@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from logging import getLogger
 from os import urandom
+import threading
 from time import time
 from typing import NamedTuple, TypedDict, cast
 from urllib.parse import ParseResult, urlencode, urlparse
@@ -21,6 +22,10 @@ from urllib3.response import HTTPResponse
 from newtrackon.bdecode import BDecodedValue, bdecode
 from newtrackon.persistence import HistoryData, submitted_data
 from newtrackon.utils import ProtocolPref, build_httpx_url, process_txt_prefs
+
+# Round-trip time of the last successful UDP announce, per thread (connect request -> reply only,
+# so DNS lookups and retry timeouts are not counted as latency).
+rtt = threading.local()
 
 # Socket address types for getaddrinfo results
 SockAddr = tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]
@@ -153,19 +158,19 @@ def attempt_all_protocols(submitted_url: ParseResult, failover_ip: str) -> Scrap
 
 
 def attempt_https_http(failover_ip: str, url: ParseResult, log_to_submitted: bool = True) -> ScraperResult | None:
-    # HTTPS scrape
-    https_result = attempt_httpx(failover_ip, url, tls=True, log_to_submitted=log_to_submitted)
-    if https_result.status and https_result.interval is not None:
-        return ScraperResult(https_result.interval, https_result.url, https_result.latency)
-
-    logger.info("%s HTTPS failed", https_result.url)
-
-    # HTTP scrape
+    # HTTP scrape first (plain HTTP preferred over HTTPS)
     http_result = attempt_httpx(failover_ip, url, tls=False, log_to_submitted=log_to_submitted)
     if http_result.status and http_result.interval is not None:
         return ScraperResult(http_result.interval, http_result.url, http_result.latency)
 
     logger.info("%s HTTP failed", http_result.url)
+
+    # HTTPS scrape as last resort
+    https_result = attempt_httpx(failover_ip, url, tls=True, log_to_submitted=log_to_submitted)
+    if https_result.status and https_result.interval is not None:
+        return ScraperResult(https_result.interval, https_result.url, https_result.latency)
+
+    logger.info("%s HTTPS failed", https_result.url)
     return None
 
 
@@ -310,7 +315,7 @@ def announce_http(url: str) -> HTTPAnnounceResponse:
 
     args_dict = {
         "info_hash": thash,
-        "peer_id": generate_peer_id(),
+        "peer_id": (_pid := generate_peer_id()),
         "port": HTTP_PORT,
         "uploaded": 0,
         "downloaded": 0,
@@ -348,6 +353,7 @@ def announce_http(url: str) -> HTTPAnnounceResponse:
     if "peers" not in tracker_response and "peers6" not in tracker_response:
         raise RuntimeError(f"Invalid response, both 'peers' and 'peers6' field are missing: {tracker_response}")
     check_peer_count(tracker_response)
+    rtt.probe = ("http", thash, url.split("?", 1)[0], None, _pid)
     logger.info("%s response: %s", url, tracker_response)
     return tracker_response
 
@@ -377,7 +383,10 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
         logger.info("%s UDP attempt %d", udp_url, attempt + 1)
 
         sock: socket.socket | None = None
-        for res in getaddr_responses:
+        _order = list(getaddr_responses)
+        if attempt and len({r[0] for r in _order}) > 1:  # retry on the other IP family: one dead A/AAAA can't mark the tracker down
+            _order = [r for r in _order if r[0] != _order[0][0]] + [r for r in _order if r[0] == _order[0][0]]
+        for res in _order:
             af, socktype, proto, _, sa = res
             ip = str(sa[0])
             try:
@@ -399,8 +408,10 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
         try:
             # Get connection ID
             req, transaction_id = udp_create_binary_connection_request()
+            _t0 = time()
             sock.sendall(req)
             buf = sock.recv(2048)
+            _rtt_ms = int((time() - _t0) * 1000)
             connection_id = udp_parse_connection_response(buf, transaction_id)
 
             # Announce
@@ -412,6 +423,8 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
 
             parsed_response = udp_parse_announce_response(buf, transaction_id, ip_family)
             check_peer_count(parsed_response)
+            rtt.ms = _rtt_ms
+            rtt.probe = ("udp", thash, af, sa, peer_id)
             logger.info("%s response: %s", udp_url, parsed_response)
             return parsed_response, ip
         except ConnectionRefusedError:
@@ -456,7 +469,7 @@ def udp_parse_connection_response(buf: bytes, sent_transaction_id: int) -> int |
         raise RuntimeError(f"Error while trying to get a connection response: {error}")
 
 
-def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id: bytes) -> tuple[bytes, int]:
+def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id: bytes, left: int = 0, port: int = 0x76FD, event: int = 2) -> tuple[bytes, int]:
     action = 0x1  # action (1 = announce)
     transaction_id = udp_get_transaction_id()
     buf = struct.pack("!q", connection_id)  # first 8 bytes is connection id
@@ -465,14 +478,14 @@ def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id
     buf += struct.pack("!20s", thash)  # hash
     buf += struct.pack("!20s", peer_id)
     buf += struct.pack("!q", 0x0)  # number of bytes downloaded
-    buf += struct.pack("!q", 0x0)  # number of bytes left
+    buf += struct.pack("!q", left)  # number of bytes left
     buf += struct.pack("!q", 0x0)  # number of bytes uploaded
-    buf += struct.pack("!i", 0x2)  # event 0 denotes start of downloading
+    buf += struct.pack("!i", event)  # event: 0 none, 1 completed, 2 started, 3 stopped
     buf += struct.pack("!i", 0x0)  # IP address set to 0. Response received to the sender of this packet
     key = udp_get_transaction_id()  # Unique key randomized by client
     buf += struct.pack("!i", key)
     buf += struct.pack("!i", -1)  # Number of peers required. Set to -1 for default
-    buf += struct.pack("!H", 0x76FD)  # port on which response will be sent
+    buf += struct.pack("!H", port)  # port on which response will be sent
     return buf, transaction_id
 
 
@@ -528,3 +541,497 @@ def redact_origin(response: str) -> str:
     for port in to_redact:
         response = response.replace(port, "redacted")
     return response
+
+
+def _probe_peers(resp):
+    return [x for x in list(resp.get("peers", []) or []) + list(resp.get("peers6", []) or []) if isinstance(x, dict)]
+
+
+def _probe_eval(resp, want, extra):
+    peers = _probe_peers(resp)
+    # Only our own probe clients can know this random hash: anything else is fake by the tracker.
+    extra["foreign"] = sum(1 for x in peers if x.get("port") not in (want, want + 1))
+    seeds = resp.get("seeds", resp.get("complete"))
+    leech = resp.get("leechers", resp.get("incomplete"))
+    extra["inflated"] = (seeds, leech) if isinstance(seeds, int) and isinstance(leech, int) and (seeds > 2 or leech > 2) else None
+    return any(x.get("port") == want for x in peers)
+
+
+def _probe_src(family):
+    """Source IP for the second test client (the AirVPN exit), from data/probe_src.json; None = no tunnel."""
+    try:
+        import json as _pj
+        with open("data/probe_src.json") as f:
+            d = _pj.load(f)
+        return d.get("ip6" if family == socket.AF_INET6 else "ip4") or None
+    except Exception:
+        return None
+
+
+_PREF_FILE = "data/probe_pref.json"
+try:
+    with open(_PREF_FILE) as _pf:
+        _PREF = __import__("json").load(_pf)
+except Exception:
+    _PREF = {}
+
+
+def _pref_set(key, src):
+    """Remember which VPN exit this tracker last answered, so it is tried first next time."""
+    if _PREF.get(key) == src:
+        return
+    _PREF[key] = src
+    try:
+        with open(_PREF_FILE + ".tmp", "w") as f:
+            __import__("json").dump(_PREF, f)
+        __import__("os").replace(_PREF_FILE + ".tmp", _PREF_FILE)
+    except OSError:
+        pass
+
+
+def _probe_srcs(family, key=None):
+    """Every VPN exit source IP for this family: the one this tracker last answered first, the rest shuffled."""
+    try:
+        import json as _pj
+        import random as _pr
+        with open("data/probe_src.json") as f:
+            d = _pj.load(f)
+        k = "ip6" if family == socket.AF_INET6 else "ip4"
+        l = [x.get(k) for x in d.get("all", [])] or [d.get(k)]
+        l = [x for x in l if x]
+        _pr.shuffle(l)
+        pref = _PREF.get(key) if key else None
+        if pref in l:
+            l.remove(pref)
+            l.insert(0, pref)
+        return l if len(l) > 1 else l * 2  # single exit: try it twice
+    except Exception:
+        return []
+
+
+class _SrcAdapter(requests.adapters.HTTPAdapter):
+    def __init__(self, src, **kw):
+        self._src = src
+        super().__init__(**kw)
+
+    def init_poolmanager(self, *args, **kw):
+        kw["source_address"] = (self._src, 0)
+        return super().init_poolmanager(*args, **kw)
+
+
+def _udp_session(family, sa, src):
+    s = socket.socket(family, socket.SOCK_DGRAM)
+    s.settimeout(5)
+    try:
+        if src:
+            s.bind((src, 0))
+        s.connect(sa)
+        req, tid = udp_create_binary_connection_request()
+        s.sendall(req)
+        cid = udp_parse_connection_response(s.recv(2048), tid)
+    except Exception:
+        s.close()
+        raise
+
+    def ann(peer_id, left, port, event, th):
+        rq, t = udp_create_announce_request(cid, th, peer_id, left=left, port=port, event=event)
+        s.sendall(rq)
+        return udp_parse_announce_response(s.recv(2048), t, s.family)
+
+    return s, ann
+
+
+def _two_distinct(r):
+    """Same-IP fallback only counts if the tracker stored both clients separately (1+ seeder AND 1+ leecher).
+    Trackers that key peers by IP alone merge them into one entry and would fake a pass."""
+    s = r.get("seeds", r.get("complete"))
+    l = r.get("leechers", r.get("incomplete"))
+    return isinstance(s, int) and isinstance(l, int) and s >= 1 and l >= 1
+
+
+def peer_probe() -> bool | None:
+    """Authenticity tests on the random hash the check just announced from the VPS (as seeder A).
+    The second client B announces from a DIFFERENT IP (the AirVPN exit), so trackers that merge
+    clients sharing an IP can't fail unfairly. No tunnel -> peer test is n/a (never a fail).
+    peer test  - B must be handed A;  fake peers - nothing else may appear; counts ~1/1;
+    stale      - after A sends 'stopped', B must no longer be handed A;
+    cid (UDP)  - an announce with a made-up connection ID must be refused (BEP 15)."""
+    p = getattr(rtt, "probe", None)
+    extra = {"foreign": None, "inflated": None, "stale": None, "cid_ok": None}
+    rtt.probe_extra = extra
+    if not p:
+        return None
+    kind, thash, a, b, pid_a = p
+    pid_b = generate_peer_id()
+    sleep = __import__("time").sleep
+    if kind == "udp":
+        want = 0x76FD
+        ok = None
+        sb = sa_ = None
+        fb = False
+        try:
+            _pk = f"{b[0]}:{b[1]}"
+            for src in _probe_srcs(a, _pk):  # preferred exit first, then the rest until one answers
+                try:
+                    sb, annb = _udp_session(a, b, src)
+                    ok = _probe_eval(annb(pid_b, 1, want + 1, 2, thash), want, extra)
+                    _pref_set(_pk, src)
+                    break
+                except Exception:
+                    if sb:
+                        sb.close()
+                    sb = None
+                    sleep(0.5)
+            if ok is None:  # VPN exit ignored/rate-limited: fall back to a VPS client; only a PASS counts
+                s2 = None
+                try:
+                    s2, an2 = _udp_session(a, b, None)
+                    r2 = an2(pid_b, 1, want + 1, 2, thash)
+                    if _two_distinct(r2) and _probe_eval(r2, want, extra):
+                        if sb:
+                            sb.close()
+                        ok, sb, annb, s2, fb = True, s2, an2, None, True
+                except Exception:
+                    pass
+                finally:
+                    if s2:
+                        s2.close()
+            sa_, anna = _udp_session(a, b, None)
+            try:
+                if ok:
+                    anna(pid_a, 0, want, 3, thash)
+                    extra["stale"] = any(x.get("port") == want for x in _probe_peers(annb(pid_b, 1, want + 1, 0, thash)))
+                if sb:
+                    annb(pid_b, 1, want + 1, 3, thash)
+            except Exception:
+                pass
+            if fb and extra.get("stale"):  # same-IP pass whose peer outlives "stopped" = echoed IP entry, not real peer sharing
+                ok, extra["stale"], extra["inconclusive"] = None, None, True  # a fallback result only ever counts as a pass, never a fail
+            try:
+                bogus = struct.unpack("!q", urandom(8))[0]
+                rq, t = udp_create_announce_request(bogus, urandom(20), generate_peer_id(), left=1, port=want + 2, event=2)
+                sa_.settimeout(3)
+                sa_.sendall(rq)
+                try:
+                    udp_parse_announce_response(sa_.recv(2048), t, sa_.family)
+                    extra["cid_ok"] = False
+                except Exception:
+                    extra["cid_ok"] = True
+            except OSError:
+                pass
+        except Exception:
+            pass
+        finally:
+            for s_ in (sb, sa_):
+                if s_:
+                    s_.close()
+        return ok
+
+    want = HTTP_PORT
+    from urllib.parse import urlparse as _up
+    _u = _up(a)
+    host, hport = _u.hostname, _u.port or (443 if _u.scheme == "https" else 80)
+
+    def hsess(src):
+        s_ = requests.Session()
+        ad = _SrcAdapter(src)
+        s_.mount("http://", ad)
+        s_.mount("https://", ad)
+        return s_
+
+    def hann(sess, peer_id, left, port, event):
+        args = {"info_hash": thash, "peer_id": peer_id, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1}
+        if event:
+            args["event"] = event
+        response = sess.get(a + "?" + urlencode(args), headers=SCRAPING_HEADERS, timeout=10, allow_redirects=False)
+        content = response.content[:65536]
+        if response.status_code != 200 or not content:
+            raise RuntimeError("probe: HTTP error")
+        r = parse_http_tracker_response(content)
+        if "failure reason" in r:
+            raise RuntimeError("probe: failure reason")
+        return r
+
+    # A and B must share an address family: trackers only hand out peers of the asker's family.
+    fam = sa_s = None
+    for f in (socket.AF_INET, socket.AF_INET6):
+        if not _probe_src(f):
+            continue
+        try:
+            socket.getaddrinfo(host, hport, f)
+            s_try = hsess("0.0.0.0" if f == socket.AF_INET else "::")  # A = VPS, pinned to this family
+            hann(s_try, pid_a, 0, want, "started")
+        except Exception:
+            continue  # this family is dead: try the other
+        fam, sa_s = f, s_try
+        break
+    if fam is None:
+        return None
+    ok = None
+    fb = False
+    sb_s = None
+    for src in _probe_srcs(fam, a):  # preferred exit first, then the rest until one answers
+        try:
+            s_try = hsess(src)
+            ok = _probe_eval(hann(s_try, pid_b, 1, want + 1, "started"), want, extra)
+            sb_s = s_try
+            _pref_set(a, src)
+            break
+        except Exception:
+            sleep(0.5)
+    if ok is None:  # VPN exit ignored/rate-limited: fall back to a VPS client; only a PASS counts
+        try:
+            sv = hsess("0.0.0.0" if fam == socket.AF_INET else "::")
+            r2 = hann(sv, pid_b, 1, want + 1, "started")
+            if _two_distinct(r2) and _probe_eval(r2, want, extra):
+                ok, sb_s, fb = True, sv, True
+        except Exception:
+            pass
+    if ok is None:
+        return None
+    try:
+        if ok:
+            hann(sa_s, pid_a, 0, want, "stopped")
+            try:  # also retire the main check's own registration (other family / ipv4+ipv6 params)
+                memory_limited_get(a + "?" + urlencode({"info_hash": thash, "peer_id": pid_a, "port": want, "uploaded": 0,
+                    "downloaded": 0, "left": 0, "compact": 1, "event": "stopped", "ipv6": my_ipv6, "ipv4": my_ipv4}))
+            except Exception:
+                pass
+            extra["stale"] = any(x.get("port") == want for x in _probe_peers(hann(sb_s, pid_b, 1, want + 1, "")))
+        hann(sb_s, pid_b, 1, want + 1, "stopped")
+    except Exception:
+        pass
+    if fb and extra.get("stale"):  # same-IP pass whose peer outlives "stopped" = echoed IP entry, not real peer sharing
+        ok, extra["stale"], extra["inconclusive"] = None, None, True  # a fallback result only ever counts as a pass, never a fail
+    return ok
+
+
+def family_probe(url):
+    """Dual-stack test. A family only counts as dead if NO vantage point gets an answer on it:
+    the VPS (twice) and then every VPN exit. One lossy path can't fake a dead family.
+    Returns {"v4": bool, "v6": bool} for the published families only."""
+    from urllib.parse import urlparse as _up
+    p = _up(url)
+    port = p.port or (443 if p.scheme == "https" else 80)
+    res = {}
+    for fam, name, wild in ((socket.AF_INET, "v4", "0.0.0.0"), (socket.AF_INET6, "v6", "::")):
+        try:
+            addr = socket.getaddrinfo(p.hostname, port, fam)[0][4]
+        except OSError:
+            continue
+        srcs = [None, None] + list(dict.fromkeys(_probe_srcs(fam)))
+        ok = False
+        for i, src in enumerate(srcs):
+            try:
+                if p.scheme == "udp":
+                    s_, an = _udp_session(fam, addr, src)
+                    try:
+                        an(generate_peer_id(), 1, 0x76FF, 0, urandom(20))
+                    finally:
+                        s_.close()
+                else:
+                    ss = requests.Session()
+                    ad = _SrcAdapter(src or wild)
+                    ss.mount("http://", ad)
+                    ss.mount("https://", ad)
+                    q = {"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": 0x76FF, "uploaded": 0,
+                         "downloaded": 0, "left": 1, "compact": 1}
+                    r = ss.get(url + "?" + urlencode(q), headers=SCRAPING_HEADERS, timeout=6, allow_redirects=False)
+                    parse_http_tracker_response(r.content[:65536])
+                ok = True
+                break
+            except Exception:
+                if i == 0:
+                    __import__("time").sleep(1)
+        res[name] = ok
+    return res
+
+
+# ---- latency by region: handshake via each VPN exit minus that tunnel's own round trip ----
+_EXITS = [0.0, {}]
+_TUN_RTT: dict = {}
+
+
+def _exits():
+    if time() - _EXITS[0] > 60:
+        try:
+            with open("data/exits.json") as f:
+                _EXITS[1] = __import__("json").load(f)
+        except Exception:
+            _EXITS[1] = {}
+        _EXITS[0] = time()
+    return _EXITS[1]
+
+
+def _tunnel_rtt(src, fam):
+    """Round trip VPS <-> AirVPN server: DNS queries to the in-tunnel resolver, median of 3, cached 60 s."""
+    k = (src, fam)
+    c = _TUN_RTT.get(k)
+    if c and time() - c[0] < 60:
+        return c[1]
+    gw = "10.128.0.1" if fam == socket.AF_INET else "fd7d:76ee:e68f:a993::1"
+    q = urandom(2) + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x06airvpn\x03org\x00\x00\x01\x00\x01"
+    samples = []
+    for _ in range(3):
+        s = socket.socket(fam, socket.SOCK_DGRAM)
+        s.settimeout(2)
+        try:
+            s.bind((src, 0))
+            t0 = time()
+            s.sendto(q, (gw, 53))
+            s.recv(512)
+            samples.append((time() - t0) * 1000)
+        except OSError:
+            pass
+        finally:
+            s.close()
+    v = sorted(samples)[len(samples) // 2] if samples else None
+    if v is not None:  # never cache a failure
+        _TUN_RTT[k] = (time(), v)
+    return v
+
+
+def _rtt_via(url, fam, src):
+    p = urlparse(url)
+    port = p.port or (443 if p.scheme == "https" else 80)
+    addr = socket.getaddrinfo(p.hostname, port, fam)[0][4]
+    if p.scheme == "udp":
+        s = socket.socket(fam, socket.SOCK_DGRAM)
+        s.settimeout(3)
+        try:
+            if src:
+                s.bind((src, 0))
+            s.connect(addr)
+            best = None
+            s.settimeout(2)
+            for _ in range(3):  # a lost sample is skipped, not fatal
+                try:
+                    req, tid = udp_create_binary_connection_request()
+                    t0 = time()
+                    s.sendall(req)
+                    buf = s.recv(2048)
+                    ms = (time() - t0) * 1000
+                    udp_parse_connection_response(buf, tid)
+                    best = ms if best is None else min(best, ms)
+                    if best is not None and _ >= 1:
+                        break
+                except (OSError, RuntimeError):
+                    continue
+            return best
+        finally:
+            s.close()
+    return _http_rtt(url, p, addr, src)
+
+
+def _http_rtt(url, p, addr, src):
+    """HTTP(S) announce round trip with TCP and TLS set up *before* the clock starts: one request/response,
+    no handshakes, whether or not the server keeps connections alive. Best of 2 samples, like UDP."""
+    import ssl
+    q = urlencode({"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": 0x76FF, "uploaded": 0,
+                   "downloaded": 0, "left": 1, "compact": 1})
+    host = p.hostname if not p.port else f"{p.hostname}:{p.port}"
+    ua = (SCRAPING_HEADERS or {}).get("User-Agent", "newTrackon") if isinstance(SCRAPING_HEADERS, dict) else "newTrackon"
+    req = (f"GET {p.path or '/'}?{q} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\n"
+           f"Accept: */*\r\nConnection: close\r\n\r\n").encode()
+    best = None
+    for _ in range(2):
+        s = socket.socket(addr and (socket.AF_INET6 if len(addr) == 4 else socket.AF_INET), socket.SOCK_STREAM)
+        s.settimeout(6)
+        try:
+            if src:
+                s.bind((src, 0))
+            s.connect(addr)
+            if p.scheme == "https":
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                s = ctx.wrap_socket(s, server_hostname=p.hostname)
+            t0 = time()
+            s.sendall(req)
+            first = s.recv(1)
+            if not first:
+                continue
+            ms = (time() - t0) * 1000
+            buf = first  # only a genuine tracker answer counts: HTTP 200 + bencoded body (not a CDN error page)
+            while b"\r\n\r\n" not in buf and len(buf) < 16384:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            if not head.startswith(b"HTTP/") or b" 200" not in head.split(b"\r\n", 1)[0]:
+                continue
+            if not body:
+                body = s.recv(256)
+            if b"chunked" in head.lower() and b"\r\n" in body:
+                body = body.split(b"\r\n", 1)[1]
+            if not body.lstrip().startswith(b"d"):
+                continue
+            best = ms if best is None else min(best, ms)
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return best
+
+
+def _lbl(e, name):
+    """'Region: City' for a VPN exit, e.g. 'Europe: Alblasserdam'."""
+    city = (e.get("location") or e.get("server") or name).split(",")[0].strip()
+    return f"{e['region']}: {city}" if e.get("region") else city
+
+
+def region_latency(url, fams=None):
+    """{exit city: ms} - the tracker's latency as seen from each AirVPN exit location (estimate, +-10-20 ms)."""
+    from concurrent.futures import ThreadPoolExecutor
+    ex = _exits()
+    if not ex:
+        return {}
+    fam = socket.AF_INET if (not fams or fams.get("v4")) else socket.AF_INET6
+    try:  # is the tracker this very server? (local addresses skip the VPN routing and answer over loopback)
+        _ip = socket.getaddrinfo(urlparse(url).hostname, None, fam)[0][4][0]
+        _t = socket.socket(fam, socket.SOCK_DGRAM)
+        try:
+            _t.bind((_ip, 0))
+            is_self = True
+        finally:
+            _t.close()
+    except OSError:
+        is_self = False
+
+    def one(item):
+        name, e = item
+        src = e.get("src4" if fam == socket.AF_INET else "src6")
+        if not src:
+            return None
+        if is_self:  # the tracker is this server: from that city the round trip is just the tunnel leg
+            tun = _tunnel_rtt(src, fam)
+            return (_lbl(e, name), max(1, int(round(tun)))) if tun else None
+        try:
+            tr = None
+            for _ in range(2):  # one retry: a single lost packet shouldn't lose the city
+                try:
+                    tr = _rtt_via(url, fam, src)
+                except Exception:
+                    tr = None
+                if tr is not None:
+                    break
+            tun = _tunnel_rtt(src, fam)
+            if tr is None or tun is None:
+                return None
+            label = _lbl(e, name)
+            return label, max(1, int(round(tr - tun)))
+        except Exception:
+            return None
+
+    out = {}
+    try:  # this server, measured the same way, so every city in the tooltip is comparable
+        # self-hosted tracker: loopback means nothing, so count Oceania as a typical NZ user's trip to Wellington
+        own = 20 if is_self else _rtt_via(url, fam, None)
+        if own is not None:
+            out["Oceania: Wellington"] = max(1, int(round(own)))
+    except Exception:
+        pass
+    with ThreadPoolExecutor(max(1, len(ex))) as pool:
+        out.update(r for r in pool.map(one, ex.items()) if r)
+    return out

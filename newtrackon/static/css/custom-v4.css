@@ -49,7 +49,7 @@ hr {
 
 /* Custom green navbar styling for Bootstrap 5 */
 .navbar {
-  background-color: #087f23 !important;
+  background-color: #0d2b5e !important;
 }
 
 .navbar .navbar-brand {
@@ -115,15 +115,15 @@ td {
 
 /* Green primary buttons to match color palette */
 .btn-primary {
-  background-color: #087f23;
-  border-color: #087f23;
+  background-color: #0d2b5e;
+  border-color: #0d2b5e;
 }
 
 .btn-primary:hover,
 .btn-primary:focus,
 .btn-primary:active {
-  background-color: #065a19;
-  border-color: #065a19;
+  background-color: #081a3a;
+  border-color: #081a3a;
 }
 
 .btn-secondary {
@@ -180,4 +180,15 @@ pre {
   border-radius: 4px;
   color: var(--bs-body-color);
   padding: 10px;
+}
+
+body {
+    background-color: #0a1628 !important;
+    color: #e8eef6;
+}
+.navbar {
+    background-color: #0d2b5e !important;
+}
+.footer {
+    background-color: #07101c !important;
 }

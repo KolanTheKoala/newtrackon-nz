@@ -147,20 +147,22 @@ def get_api_data(
     params: tuple[int, ...] = ()
 
     if query == "/api/http":
-        sql = 'SELECT URL, IP FROM STATUS WHERE URL LIKE "http%" AND UPTIME >= 95'
+        sql = 'SELECT URL, IP FROM STATUS WHERE URL LIKE "http%" AND STATUS = 1 AND ROUND(UPTIME) >= 90'
     elif query == "/api/udp":
-        sql = 'SELECT URL, IP FROM STATUS WHERE URL LIKE "udp://%" AND UPTIME >= 95'
+        sql = 'SELECT URL, IP FROM STATUS WHERE URL LIKE "udp://%" AND STATUS = 1 AND ROUND(UPTIME) >= 90'
     elif query == "/api/live":
         sql = "SELECT URL, IP FROM STATUS WHERE STATUS = 1"
     elif query == "percentage":
-        sql = "SELECT URL, IP FROM STATUS WHERE UPTIME >= ?"
+        sql = "SELECT URL, IP FROM STATUS WHERE ROUND(UPTIME) >= ?"
         params = (uptime,)
+        if uptime > 0:  # live-only for score lists; /api/all (0) stays complete
+            sql += " AND STATUS = 1"
 
     if added_before is not None:
         sql += " AND ADDED <= ?"
         params += (added_before,)
 
-    sql += " ORDER BY UPTIME DESC"
+    sql += " ORDER BY (STATUS = 1) DESC, ROUND(UPTIME) DESC, COALESCE(LATENCY, 99999) ASC"
     _ = c.execute(sql, params)
 
     raw_rows = cast(list[tuple[str, str]], c.fetchall())

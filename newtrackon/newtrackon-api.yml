@@ -2,18 +2,151 @@ openapi: 3.0.3
 info:
   title: newTrackon API
   version: 1.0.1
-  description: API for retrieving and submitting trackers to newTrackon
+  description: |
+    API for retrieving and submitting trackers to newTrackon (Wellington NZ mirror).
+
+    **Which list should I use?**
+
+    | Endpoint | Status filter | Score | Min. days listed | One per operator | Use it for |
+    |---|---|---|---|---|---|
+    | `/clean` | never Junk, Bad or down | 90+ (adjustable) | 3 (adjustable) | yes (adjustable) | Pasting into a torrent client. Recommended. |
+    | `/stable` | none, score only | 90+ | 7 (adjustable) | no | The list shown on the List page. |
+    | `/{score}` | none, score only | your choice | 0 | no | A custom score cut-off. |
+    | `/udp`, `/http` | none, score only | 90+ | 0 | no | Clients or networks limited to one protocol. |
+    | `/live` | responding right now | any | 0 | no | Maximum coverage, including flaky trackers. |
+    | `/all` | none | any | 0 | no | Building your own checker. Includes dead trackers. |
+
+    All of these return plain text: announce URLs separated by blank lines. `/details` returns the full state of
+    every tracker as JSON, and `/feed.xml` is an Atom feed of tracker events.
+
+    Only `/clean` checks a tracker's current status. The other lists filter on score alone. The score already
+    reflects quality faults, but a tracker that has just gone down can still appear until its score drops.
   contact:
-    name: Miguel Angel Corral
-    url: https://keybase.io/corralpeltzer
-    email: corral.miguelangel@gmail.com
+    name: Kolan Koala
+    url: https://newtrackon.co.nz/about
   license:
     name: MIT
     url: https://github.com/CorralPeltzer/newTrackon/blob/master/LICENSE.txt
 servers:
-  - url: https://newtrackon.com/api
+  - url: https://newtrackon.co.nz/api
+
+tags:
+  - name: Recommended
+    description: Start here. /clean is the list to give a torrent client; /details and /feed.xml are for scripts and monitoring.
+  - name: newTrackon-compatible
+    description: The original newTrackon list endpoints, kept so tools written for newtrackon.com work here unchanged. They filter on score only.
+  - name: Submitting
+    description: Add trackers to be checked.
 
 paths:
+  /clean:
+    get:
+      summary: Clean list for torrent clients (NZ mirror)
+      tags: [Recommended]
+      description: >-
+        Trackers that are up and not Junk, Bad or Broken (Up/Good or Up/Slow; also Up/New or Up/Unreliable if they still reach min_score), listed at least min_age_days days, with a score of at least min_score, no confirmed
+        dead IP family, and by default only the best tracker from each operator. The list to paste into a client.
+      parameters:
+        - name: min_score
+          in: query
+          required: false
+          description: Minimum score (as displayed, rounded).
+          schema: {type: number, default: 90, minimum: 0, maximum: 100}
+        - name: max_latency
+          in: query
+          required: false
+          description: Maximum latency in milliseconds, average across regions. 0 means no limit.
+          schema: {type: integer, default: 0, minimum: 0}
+        - name: min_age_days
+          in: query
+          description: Minimum days listed (monitoring history). 0 means no minimum.
+          schema: {type: number, default: 3, minimum: 0}
+        - name: require_ipv4
+          in: query
+          required: false
+          description: Only trackers with a working IPv4 address.
+          schema: {type: boolean, default: false}
+        - name: dedupe
+          in: query
+          required: false
+          description: Keep only the best tracker per operator (same servers or same domain).
+          schema: {type: boolean, default: true}
+      responses:
+        "200":
+          description: Announce URLs, one per line, separated by blank lines (same format as the other lists).
+          content:
+            text/plain:
+              schema: {type: string}
+              example: "udp://tracker.example.org:1337/announce\n\nhttps://tracker.example.net:443/announce\n"
+        "400":
+          description: min_score, min_age_days or max_latency is not a number.
+  /details:
+    get:
+      summary: Full state of every tracker as JSON (NZ mirror)
+      tags: [Recommended]
+      description: >-
+        Everything the site knows about each tracker - status (up_good / up_new / up_slow / up_unreliable / up_junk / up_broken / up_bad / down) and problems, score, latency
+        and latency by city, IP families, peer-test record, fake-peer streak, flags, the tracker's own announce interval,
+        availability stats, same-operator group, IPs, countries and networks.
+      responses:
+        "200":
+          description: One object per tracker.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                      url: {}
+                      host: {}
+                      status: {}
+                      problems: {}
+                      score: {}
+                      latency_ms: {}
+                      latency_by_region_ms: {}
+                      families: {}
+                      peer_test: {}
+                      fake_peers: {}
+                      stale_peers: {}
+                      spoof_proof: {}
+                      announce_interval_s: {}
+                      check_interval_s: {}
+                      stats: {}
+                      down_reason: {}
+                      down_cause: {}
+                      same_operator_as: {}
+                      ips: {}
+                      countries: {}
+                      networks: {}
+                      added: {}
+                      last_checked: {}
+  /feed.xml:
+    servers:  # feed-root-server: the feed lives at the site root, not under /api
+      - url: https://newtrackon.co.nz
+    get:
+      summary: Atom/RSS feed of tracker events (NZ mirror)
+      tags: [Recommended]
+      description: >-
+        A tracker going down or coming back up, turning Up/Bad, Up/Broken, Up/Slow, Up/Unreliable, Up/Junk or Up/Good, an IP family dying or recovering, trackers
+        added and removed. Newest first, up to 100 entries.
+      parameters:
+        - name: tracker
+          in: query
+          required: false
+          description: Only events for trackers whose URL contains this text, e.g. opentrackr.
+          schema: {type: string}
+        - name: type
+          in: query
+          required: false
+          description: Comma-separated event types - down, up, bad, good, family, added, removed.
+          schema: {type: string}
+      responses:
+        "200":
+          description: Atom feed.
+          content:
+            application/atom+xml:
+              schema: {type: string}
   /stable:
     parameters:
       - $ref: "#/components/parameters/IncludeIPv4OnlyTrackers"
@@ -22,8 +155,8 @@ paths:
     get:
       summary: Get stable trackers
       tags:
-        - Tracker operations
-      description: Returns a two line delimited list of trackers that have an uptime of equal or more than 95% and have been tracked for at least min_age_days days (default 10)
+        - newTrackon-compatible
+      description: Announce URLs, separated by blank lines, of trackers with a score of 90 or more that have been listed for at least min_age_days days (default 7). Filters on score only - no status check and no one-per-operator rule. For a client-ready list use /clean.
       responses:
         "200":
           description: Stable trackers
@@ -31,24 +164,24 @@ paths:
             text/plain:
               schema:
                 $ref: "#/components/schemas/Trackers"
-  /{uptime}:
+  /{score}:
     parameters:
       - $ref: "#/components/parameters/IncludeIPv4OnlyTrackers"
       - $ref: "#/components/parameters/IncludeIPv6OnlyTrackers"
       - $ref: "#/components/parameters/MinAgeDays"
-      - name: uptime
+      - name: score
         in: path
-        description: Uptime percentage
+        description: Minimum score (0-100)
         required: true
         schema:
           type: integer
           minimum: 0
           maximum: 100
     get:
-      summary: Get trackers with given uptime
+      summary: Get trackers with a minimum score
       tags:
-        - Tracker operations
-      description: Returns a two line delimited list of trackers that have an uptime of equal or more than the given percentage
+        - newTrackon-compatible
+      description: Announce URLs, separated by blank lines, of trackers with a score equal to or above the given value. Same rule as /stable with your own cut-off, and no minimum age unless you set min_age_days. The score is uptime adjusted for stability, latency and quality checks (see the About page).
       responses:
         "200":
           description: Stable trackers
@@ -64,8 +197,8 @@ paths:
     get:
       summary: Get working trackers
       tags:
-        - Tracker operations
-      description: Returns a two line delimited list of currently active and responding trackers
+        - newTrackon-compatible
+      description: Announce URLs, separated by blank lines, of every tracker that answered its last check, whatever its score. Includes Up/Unreliable, Up/Junk, Up/Bad and Up/Broken trackers.
       responses:
         "200":
           description: Working trackers
@@ -79,8 +212,8 @@ paths:
     get:
       summary: Get stable UDP trackers
       tags:
-        - Tracker operations
-      description: Returns a two line delimited list of stable UDP trackers
+        - newTrackon-compatible
+      description: Announce URLs, separated by blank lines, of UDP trackers with a score of 90 or more. Same rule as /stable but with no minimum age unless you set min_age_days.
       responses:
         "200":
           description: UDP trackers
@@ -100,8 +233,8 @@ paths:
     get:
       summary: Get stable HTTP/HTTPS trackers
       tags:
-        - Tracker operations
-      description: Returns a two line delimited list of stable and HTTP/HTTPS trackers
+        - newTrackon-compatible
+      description: Announce URLs, separated by blank lines, of HTTP and HTTPS trackers with a score of 90 or more. Same rule as /stable but with no minimum age unless you set min_age_days.
       responses:
         "200":
           description: HTTP/HTTPS trackers
@@ -124,8 +257,8 @@ paths:
     get:
       summary: Get all trackers
       tags:
-        - Tracker operations
-      description: Returns a two line delimited list of all monitored trackers, dead or alive
+        - newTrackon-compatible
+      description: Announce URLs, separated by blank lines, of every tracker in the database, dead or alive. No filtering at all.
       responses:
         "200":
           description: All trackers
@@ -137,7 +270,7 @@ paths:
     post:
       summary: Submit new trackers
       tags:
-        - Tracker operations
+        - Submitting
       description: Submits new trackers to be checked and either accepted or discarded
       requestBody:
         required: true
@@ -190,7 +323,7 @@ components:
     MinAgeDays:
       in: query
       name: min_age_days
-      description: Minimum tracker age in days. Default is 10 for /stable and 0 for all other list endpoints.
+      description: Minimum tracker age in days. Default is 7 for /stable and 0 for all other list endpoints.
       schema:
         type: integer
         minimum: 0

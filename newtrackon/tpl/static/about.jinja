@@ -1,28 +1,167 @@
 {% extends "base.jinja" %}
 {% block body %}
-    <div class="container">
-        <h2>About newTrackon.com</h2>
+    <div class="container nt-about">
+        <h2>About newtrackon.co.nz</h2>
+<p>This is a New Zealand (Wellington) mirror of newTrackon, a service that monitors open/public BitTorrent trackers and publishes
+which ones actually work. It runs the upstream code with patches that change how trackers are checked, scored and retired, plus
+test clients on three continents. Everything below describes how <em>this</em> site works.</p>
+
+<h4>1. How a tracker is checked</h4>
+<p>Every check is a real announce, the same request a BitTorrent client sends, made from Wellington:</p>
+<ul>
+<li><b>UDP trackers</b> (BEP 15): a <em>connect</em> request, then an <em>announce</em> with the returned connection ID. Each step has a
+10-second timeout and the exchange is tried twice. If the tracker publishes both IPv4 and IPv6, the retry uses the other family, so one
+dead address can't make a working tracker look down.</li>
+<li><b>HTTP/HTTPS trackers</b>: a standard announce with a 10-second timeout (every published address is tried).</li>
+<li>A check passes only on a valid, well-formed announce response. Timeouts, refusals, error replies and garbage all fail.</li>
+<li>A BEP 34 DNS TXT record, if published, sets the preferred protocol and port.</li>
+<li><b>Peer test</b>: after each successful check, a second client (new peer ID, different port, as a leecher) announces the same random
+torrent <b>from a different IP address</b>: one of three VPN exits, in Europe, North America and Asia. Exits are tried in random order,
+starting with the one that last answered that tracker, and each exit moves to a different server every 6 hours, so a tracker can't dodge
+the test by blocking one address. A tracker that really tracks peers hands the first client to the second. If all three exits are ignored,
+a second client from this server is tried: it can prove a pass (only if the tracker kept the two clients separate and dropped the first
+when it left), but a miss from the same IP proves nothing, so it never counts as a fail. The verdict uses the <b>last 6 conclusive
+tests</b>: <b>3 or more fails sets the score to 0</b> and the status to <b>Up/Bad</b>. This catches trackers that answer every announce but
+never hand out peers, or only sometimes do because their servers don't share data.</li>
+<li><b>Fake-peer test</b>: the test torrent is a random one only this site knows, so the only real peers are our own test clients. Any
+other peer in the reply was fake (anti-piracy decoys, stale junk). <b>3 checks in a row sets the score to 0</b> (Up/Bad).</li>
+<li><b>Dual-stack test</b>: every IP family a tracker publishes (IPv4 and/or IPv6) is tried each check, from this server and then from every
+VPN exit. A family counts as dead only if <em>nobody</em> gets an answer on it, so one lossy path can't fake it. A dead published address
+breaks the tracker for every client on that family (most clients are IPv4-only). <b>3 dead checks in a row caps the score at 50</b> (Up/Broken: it still works over the other family).</li>
+<li><b>Count check</b>: the true seeder/leecher count for the random torrent is 1 / 1. Reporting more is inflating. Flagged, no penalty.</li>
+<li><b>Stopped test</b>: the first client announces &ldquo;stopped&rdquo; and the second asks again. A well-run tracker drops the departed
+peer at once. Flagged, no penalty. Both clients then leave, so no test peers are left behind.</li>
+<li><b>Spoofing test</b> (UDP): an announce with a made-up connection ID must be refused (BEP 15). A tracker that accepts it can be abused
+to aim swarm traffic at a third party. Shield, no penalty. HTTP/HTTPS trackers always get the green shield (TCP can't be spoofed).</li>
+<li>Hostnames resolving to non-public addresses (private, reserved, multicast, site-local) are removed immediately.</li>
+<li><b>Monitor self-check</b>: before recording any failure, the monitor confirms it has working internet and DNS itself. If it doesn't,
+the outage is ours: nothing is recorded, no tracker is penalised or removed, and checks resume when the connection is back. If a check fails from Wellington but the tracker answers through the VPN exits, it counts as half an outage: down for NZ, up for the rest of the world. If a name won't resolve here but public DNS (Cloudflare, Quad9) knows it, the fault is our resolver's: nothing is recorded.</li>
+</ul>
+
+<h4>2. Latency</h4>
+<p>The Latency column is the average of the per-region figures below (see Latency and score at the end of this page). A dash means the tracker is down.</p>
+<p><b>Latency by region</b> (hover the figure, or open the row): one request round trip to the tracker from Wellington (Oceania) and from each VPN
+exit's region (currently in Europe, North America and Asia; the cities change as the exits rotate). The time through our own VPN tunnel is
+measured separately and subtracted, so each figure is the tracker's distance from that city, accurate to roughly &plusmn;10&ndash;20 ms. For HTTP/HTTPS trackers the TCP and TLS setup is done before the clock starts, so each figure is one request round trip; for trackers behind a CDN that includes the hop to the real server, not just the nearest edge. Each region's figure is the median of its last 12 measurements within 48 hours. Latency does affect the score: see Latency and score at the end of this page.</p>
+
+<h4>3. Check history</h4>
+<p>Results are kept as a timeline of <b>30-minute slots</b>, each up or down. A check fills in every slot since the previous one: same
+result as before fills them all; a changed result splits the gap down the middle; two checks in one slot keep the worse. The history is a
+picture of time, not a count of checks, and is never longer than the time since the tracker was added.</p>
+
+<h4>4. The score (out of 100)</h4>
+<p>The score is <b>not</b> an uptime percentage. It combines two things, both weighted towards recent history:</p>
+<ul>
+<li><b>Availability</b>: the share of slots the tracker was up, each weighted by age with a <b>half-life of 7 days</b>.</li>
+<li><b>Stability</b>: how often it flips between up and down (age-weighted flip rate); stability = (1 &minus; flip rate)&sup2;.</li>
+</ul>
+<p><b>Score = availability &times; stability &times; 100.</b> One clean outage costs little; constant flapping is punished hard, because an
+unreliable tracker is nearly as bad as a dead one. Slow trackers then lose points for latency (see Latency and score at the end of this page). A new tracker's score is capped at 80, rising to 100 over its first 7 days of history, so a top score has to be earned.</p>
+<table class="table table-sm" style="max-width:640px">
+<thead><tr><th>Behaviour (two weeks)</th><th>Availability</th><th>Score</th></tr></thead>
+<tbody>
+<tr><td>Up the whole time</td><td>100%</td><td>100</td></tr>
+<tr><td>One 6-hour outage two days ago</td><td>97%</td><td>96</td></tr>
+<tr><td>One failed half-hour every day</td><td>98%</td><td>91</td></tr>
+<tr><td>Randomly failing 1 check in 10</td><td>91%</td><td>66</td></tr>
+<tr><td>Flapping up/down every hour</td><td>50%</td><td>13</td></tr>
+</tbody></table>
+<p><b>Quality penalties</b> (the harshest applies; each lifts as soon as the tracker behaves again):</p>
+<table class="table table-sm" style="max-width:640px">
+<thead><tr><th>Fault</th><th>Rule</th><th>Score</th></tr></thead>
+<tbody>
+<tr><td>Hands out no peers</td><td>3+ fails in its last 6 peer tests</td><td>0</td></tr>
+<tr><td>Fake peers</td><td>3 checks in a row</td><td>set to 0</td></tr>
+<tr><td>A published IP family is dead</td><td>3 checks in a row</td><td>capped at 50</td></tr>
+</tbody></table>
+<p>A penalised tracker shows <b>Up/Bad</b> (or <b>Up/Broken</b> if its only problem is a dead IP family) and drops out of every score-based API list. Counts survive restarts.</p>
+<p><b>Stars</b>: ★★★★★ 90+ · ★★★★ 70–89 · ★★★ 50–69 · ★★ 30–49 · ★ 10–29 · none below 10. Scores are shown rounded, and every threshold on the site uses that
+rounded value.</p>
+
+<h4>5. How often trackers are checked</h4>
+<p>Intervals adapt like NTP polling: proven trackers are checked less often, misbehaving ones closely. All intervals are multiples of
+30 minutes apart from the 15-minute watch rate.</p>
+<table class="table table-sm">
+<thead><tr><th>Situation</th><th>Checked every</th></tr></thead>
+<tbody>
+<tr><td>Newly added (under 3 slots of history)</td><td>30 min</td></tr>
+<tr><td>Up, but had any failure in the last 6 hours</td><td>15 min</td></tr>
+<tr><td>Up and clean for the last 6 hours</td><td>+30 min after each success, up to <b>60 min</b></td></tr>
+<tr><td><b>Premium: score 95+ (before the latency penalty) and a clean record that grows with the interval</td><td><b>90 min</b> after 12 h clean &middot; <b>2 h</b> after 24 h &middot;
+<b>2 h 30</b> after 30 h &middot; <b>3 h</b> after 36 h &middot; <b>3 h 30</b> after 42 h &middot; <b>4 h</b> after 48 h</td></tr>
+<tr><td>Just went down, or flapping</td><td>15 min</td></tr>
+<tr><td>Down for more than 6 hours</td><td>60 min, then +30 min per failed check, up to <b>4 h</b></td></tr>
+</tbody></table>
+<p>A premium tracker that fails, or whose score (before the latency penalty) drops below 95, loses premium at once. Each check is scheduled at a random point within
+&plusmn;10% of its interval so checks don't land in lockstep; the Interval column shows the nominal value.</p>
+
+<h4>6. The main list</h4>
+<ul>
+<li>Rows are navy; a tracker that is <b>down right now</b> has a black row. Quality is shown by the score, stars and status, not the row colour. Text turns grey for trackers scoring under 90 (not on the stable list), except Up/New ones, which are only held back by their age.</li>
+<li><b>Latency</b>, <b>Score</b> and stars: sections 2 and 4.</li>
+<li><b>Last 7 days</b>: one dot per day; <b>Last 24 hours: one dot per 2 hours.</b> Green up, red if any check in it failed, grey not monitored yet.</li>
+<li><b>Status</b>: <b style="color:#00e676">Up/Good</b> (answering, passes every test, score 90+) · Up/Slow (reliable, but averaging 300 ms or more, or under 90 only because of the latency penalty at 200 ms or more) · Up/Unreliable (up, but under 90 because of dropouts) · Up/Broken (answers, but one of its published IP families is dead) · Up/New (healthy, but still building its first 7 days of history) · Up/Junk (score under 50) · Up/Bad (answering but fails a quality test; hover for which) &middot; <b style="color:#ff3b30">Down</b>, with how long (e.g. &ldquo;3d 14h&rdquo;, &ldquo;7h&rdquo;, &ldquo;25m&rdquo;).
+Then the main mark: &#10008; down &middot; &#9760; fake peers (red: 3 in a row) &middot; &#9888; peer test failed (red: 3+ of last 6) &middot;
+&#10004; peer test passed. Then the IP families: <b style="color:#28a745">IPv4</b> answers, <b style="color:#dc3545">IPv4</b> confirmed dead,
+<b style="color:#555">IPv6</b> not published. Then flags (no penalty): &#9650; inflated counts &middot; &#8856; keeps departed peers &middot; shield
+(green spoof-proof, red spoofable, grey not tested yet; none on down trackers).</li>
+<li><b>&#10697;N</b> after a URL: this tracker and N&minus;1 others share an operator: the same servers (current or recent IPs) or the same domain.
+Adding several of them to a torrent gains little.</li>
+<li><b>Recent events</b> (below the table): the last 10 state changes, with a link to the feed (section 7).</li>
+<li><b>&#9654; expand a row</b> for IP addresses, country, network, date added, <b>Stats</b> (availability over 7 days and all time, outage count,
+longest outage, recent peer-test record, the tracker's own announce interval, latency by region) and <b>Same operator</b>.</li>
+<li><b>Checked</b> ticks live; <b>Update interval</b> is the current nominal interval. The table refreshes itself every 2 minutes, keeping your
+sort, page and position.</li>
+</ul>
+
+<h4>7. The API</h4>
+<ul>
+<li><code>/api/stable</code> (and <code>/api/best</code>): score 90+, up right now, listed for at least 7 days.</li>
+<li><code>/api/&lt;percentage&gt;</code>, e.g. <code>/api/90</code>: score at or above that value and up right now.</li>
+<li><code>/api/udp</code>, <code>/api/http</code>: score 90+ and up right now, by protocol.</li>
+<li><code>/api/live</code>: everything that passed its latest check. <code>/api/all</code>: every tracker monitored, including down ones.</li>
+<li><code>/feed.xml</code>: an Atom/RSS feed of events: a tracker going <b>down</b>, coming back <b>up</b> (and after how long), turning Up/Bad, Up/Broken, Up/Slow, Up/Unreliable or Up/Junk (with the reason) or Up/Good again, an IP family confirmed dead or answering again, trackers <b>added</b> and <b>removed</b>. Down/up churn of trackers scoring under 50 isn't logged. Subscribe in any feed reader, or a Discord/Telegram RSS bot. Filters: <code>?tracker=example.org</code> (one tracker) and <code>?type=down,up,bad,good,family,added,removed</code>. Example: <code>/feed.xml?tracker=opentrackr&amp;type=down,bad</code></li>
+<li><code>/api/clean</code>: the list to put in your client. <b>Up/Good or Up/Slow (never Junk, Bad, Broken or down), score 90+, listed at least 3 days, no confirmed dead IP family, and one tracker per operator (the best of each group).</b> Options: <code>min_score</code> (default 90), <code>min_age_days</code> (default 3), <code>max_latency</code> (ms, region average), <code>require_ipv4=true</code>, <code>dedupe=false</code><code></code>. Example: <code>/api/clean?max_latency=500&amp;require_ipv4=true</code></li>
+<li><code>/api/details</code>: JSON with everything this page knows about every tracker: status and problems, score, latency and latency by region,
+IP families, peer-test record, fake-peer streak, flags, the tracker's announce interval, stats, same-operator group, IPs, country and network.</li>
+</ul>
+<p>Penalised (Up/Bad or Up/Broken) trackers drop out of every score-based list until they behave again.</p>
+
+<h4>8. Removal and bans</h4>
+<p>Flappers stay listed so you can see them. A tracker is removed after at least 3 days listed if it has had no passed check in 5 days, or if its availability × stability is under 15% (it answers too rarely or drops out too often to be useful). Removed hosts are auto-banned for <b>30 days</b>, then
+may be resubmitted; hosts banned by hand stay banned.</p>
+
+<h3>Credits</h3>
         <p>
-            newTrackon is a service based on the abandoned <a href="http://repo.cat-v.org/trackon/">Trackon</a> project, and
-            is dedicated to gather and display information about the status of open/public BitTorrent trackers.
+            newTrackon is the work of its original authors. It's a service based on the abandoned
+            <a href="http://repo.cat-v.org/trackon/">Trackon</a> project, dedicated to gathering and displaying information about the status
+            of open/public BitTorrent trackers. The upstream project is by
+            <a href="https://github.com/CorralPeltzer">Miguel &Aacute;ngel Corral (CorralPeltzer)</a>.
+            For suggestions, bug reports or feedback about newTrackon itself, go to the
+            <a href="https://github.com/CorralPeltzer/newTrackon">GitHub repo</a>.
         </p>
-        <h3>Contact</h3>
-        <p>
-            For suggestions, bug reports, or any other feedback, go to the <a href="https://github.com/CorralPeltzer/newTrackon">GitHub repo</a>,
-            or contact me on <a href="https://twitter.com/CorralPeltzer">twitter</a> or <a href="mailto:corral.miguelangel@gmail.com">corral.miguelangel@gmail.com</a>
-        </p>
-        <h3>Thanks</h3>
-        <p>Thanks to everyone that has provided feedback and input about the project.</p>
-        Here is a list of some of the people and projects that have helped make newTrackon possible:
+        <p>Upstream thanks everyone who has provided feedback and input about the project, including:</p>
         <ul>
-            <li>
-                <a href="http://uriel.cat-v.org/">Uriel †</a>, the creator of Trackon.
-            </li>
-            <li>
-                <a href="https://github.com/erindru">Erin Drummond</a> for his python HTTP and UDP scraper.
-            </li>
+            <li><a href="http://uriel.cat-v.org/">Uriel &dagger;</a>, the creator of Trackon.</li>
+            <li><a href="https://github.com/erindru">Erin Drummond</a> for his Python HTTP and UDP scraper.</li>
             <li>And many others!</li>
         </ul>
+        <p>Patches, scoring, adaptive scheduling and the NZ mirror by <b>Kolan Koala</b>.</p>
     </div>
+<!-- nt-about-lat -->
+<h3 id="latency">Latency and score</h3>
+<p>The <b>Latency</b> column is the average of the per-region latencies. Oceania is measured directly from Wellington. Asia, Europe and North/South America are measured through rotating VPN exits in each region, with the tunnel's own round-trip time subtracted (accurate to about ±10&ndash;20&nbsp;ms). Each region's figure is the median of its last 12 checks within 48&nbsp;hours, so one slow check doesn't swing it. Hover over a latency figure, or expand a tracker, to see the breakdown by region.</p>
+<p>Colours: <span style="color:#00e676;font-weight:600">green</span> is under 200&nbsp;ms, <span style="color:#ff9100;font-weight:600">orange</span> is 200&ndash;299&nbsp;ms and <span style="color:#ff3b30;font-weight:600">red</span> is 300&nbsp;ms or more.</p>
+<p>Slow trackers lose score points: gently up to 1&nbsp;second (0.02 per ms over 150&nbsp;ms, at most 17), then faster (0.05 per ms beyond 1&nbsp;s), never more than 40. Clients announce every half hour and wait seconds for a reply, so moderate latency barely affects them; very slow replies usually mean an overloaded tracker. The penalty is taken off after any other penalties, and a score never goes below 0. A tracker with fewer than two regions measured isn't penalised yet.</p>
+<table class="table table-sm" style="max-width:520px">
+<thead><tr><th>Average latency</th><th>Penalty</th><th>Score if otherwise 100</th></tr></thead>
+<tbody>
+<tr><td>150&nbsp;ms or less</td><td>none</td><td>100</td></tr>
+<tr><td>400&nbsp;ms</td><td>&minus;5</td><td>95</td></tr>
+<tr><td>650&nbsp;ms</td><td>&minus;10</td><td>90</td></tr>
+<tr><td>1000&nbsp;ms</td><td>&minus;17</td><td>83</td></tr>
+<tr><td>1500&nbsp;ms</td><td>&minus;40 (maximum)</td><td>60</td></tr>
+</tbody></table>
+<p>By default <a href="/list">the list</a>, <code>/api/stable</code> and <a href="/api">/api/clean</a> only include trackers scoring 90 or more, so a tracker with perfect uptime drops out above about 650&nbsp;ms. A tracker at 300&nbsp;ms or more that is otherwise healthy shows as <b>Up/Slow</b>. Trackers with the same (rounded) score are listed fastest first.</p>
 {% endblock %}
-{% set title = "About - newTrackon" %}
+{% set title = "About - newTrackon NZ" %}

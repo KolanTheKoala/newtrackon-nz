@@ -2,16 +2,18 @@
 <html lang="en">
     <head>
         <meta charset="utf-8">
-        <title>{{ title }}</title>
+        <title>{% if title %}{{ title }} – Wellington NZ Mirror{% else %}newTrackon – Wellington NZ Mirror{% endif %}</title>
+        <link rel="canonical" href="https://newtrackon.co.nz{{ request.path }}">
+        <meta name="description" content="New Zealand (Wellington) mirror of newTrackon — public BitTorrent tracker status from an NZ vantage point.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta name="theme-color" content="#087F23">
+        <meta name="theme-color" content="#131A60">
         <meta name="author" content="Miguel Angel Corral Peltzer">
         <script data-cfasync="false" src="/static/js/theme-v2.js"></script>
         <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
         <link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32">
         <link rel="icon" type="image/png" href="/favicon-16x16.png" sizes="16x16">
         <link rel="manifest" href="/manifest.json">
-        <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#25802c">
+        <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#131A60">
         <link rel="stylesheet"
               href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css"
               integrity="sha512-2bBQCjcnw658Lho4nlXJcc6WkV/UxpE/sAokbXPxQNGqmNdQrWqtw26Ns9kFF/yG792pKR1Sx8/Y1Lf1XN4GKA=="
@@ -31,7 +33,74 @@
                 crossorigin="anonymous"></script>
         {% block head %}
         {% endblock head %}
-    </head>
+    <style id="nt-lt-theme-global">
+          /* nt-lt-theme: linuxtracker-style table (remove this block to revert) */
+          .dataTables_wrapper { background:#111a26; border:1px solid #223047; border-radius:10px; padding:10px 10px; box-shadow:0 4px 18px rgba(0,0,0,.35); }
+          :is(table.dataTable, table.table) { border-collapse:separate !important; border-spacing:0; border:1px solid #223047; border-radius:8px; overflow:hidden;
+                            font-family:"Inter","Segoe UI",Roboto,system-ui,sans-serif; }
+          :is(table.dataTable, table.table) thead th { background:linear-gradient(#22354f,#1b2b42) !important; color:#c9d6e6 !important; text-transform:uppercase;
+                                     font-size:.72rem; letter-spacing:.04em; font-weight:700; border-top:0 !important;
+                                     border-bottom:1px solid #2c3f5c !important; padding:8px 5px !important; white-space:nowrap; }
+          :is(table.dataTable, table.table) tbody td { padding:7px 5px !important; white-space:nowrap; border-top:1px solid #1d2a3b !important; vertical-align:middle; }
+          :is(table.dataTable, table.table) tbody tr:hover > td { filter:brightness(1.25); }
+          :is(table.dataTable, table.table) tbody td:first-child { font-weight:600; }
+          .dataTables_filter input, .dataTables_length select { background:#0d1520 !important; border:1px solid #2a3a52 !important; color:#dce6f2 !important;
+                                                                border-radius:6px; padding:4px 8px; }
+          .pagination .page-link { background:#16212f; border-color:#2a3a52; color:#8fb6e3; }
+          .pagination .page-item.active .page-link { background:#3a6fb0; border-color:#3a6fb0; color:#fff; }
+          .pagination .page-item.disabled .page-link { background:#111a26; color:#4c5d73; }
+          /* nt-tight: fit more columns */
+          .container:has(table) { max-width:98vw !important; }
+          .nt-st  { min-width:2.7em !important; }
+          .nt-dur { min-width:4.3em !important; }
+          .nt-dot { width:9px !important; height:9px !important; margin-right:1px !important; }
+          .nt-stars { letter-spacing:0 !important; margin-right:4px !important; }
+          .nt-peerwarn, .nt-shield { margin-left:3px !important; }
+          /* end nt-lt-theme */
+          table.table { width:100%; }
+          /* nt-bs-table-vars: repaint Bootstrap striped/bordered tables in the theme palette */
+          table.table { --bs-table-bg:#111a26; --bs-table-color:#d6e0ec; --bs-table-striped-bg:#142032; --bs-table-striped-color:#d6e0ec;
+                        --bs-table-hover-bg:#1b2a40; --bs-table-hover-color:#fff; --bs-table-border-color:#1d2a3b; --bs-border-color:#1d2a3b;
+                        box-shadow:0 4px 18px rgba(0,0,0,.35); }
+          table.table > :not(caption) > * > * { border-color:#1d2a3b !important; }
+          table.table a { color:#6ea8e0; }
+</style>
+<style id="nt-navy-rows">
+  /* one row colour everywhere (stars carry the ranking); down rows black */
+  table tbody tr:not(#_nt) > *:not(#_nt) { background:#0b1633 !important; color:#fff !important; box-shadow:none !important;
+                               border-color:rgba(255,255,255,.08) !important; --bs-table-bg:#0b1633; --bs-table-accent-bg:transparent; --bs-table-color:#fff; }
+  table tbody tr:not(#_nt) > *:not(#_nt) a:not(#_nt), table tbody tr:not(#_nt) > *:not(#_nt) a:not(#_nt):visited { color:#fff !important; }
+  table tbody tr:not(#_nt):hover > *:not(#_nt) { background:#16264d !important; }
+  table tbody tr:not(#_nt):has(.nt-peerdown) > *:not(#_nt), table tbody tr.table-dark:not(#_nt) > *:not(#_nt) { background:#000 !important; }
+</style>
+<style id="nt-st-colours">
+  table tbody tr:not(#_nt) .nt-st:not(#_nt) { color:#ff3b30 !important; font-weight:700; }
+  table tbody tr:not(#_nt) .nt-st .nt-good:not(#_nt) { color:#00e676 !important; }
+  table tbody tr:not(#_nt) .nt-st .nt-up:not(#_nt) { color:#ffa500 !important; }
+  table tbody tr:not(#_nt) .nt-st :is(.nt-junk, .nt-fakes, .nt-degraded):not(#_nt) { color:#ffa500 !important; }
+</style>
+<style id="nt-status-grid">
+  /* status cell as fixed slots: word | duration | peer | infl | stale | families | shield */
+  td:not(#_nt):has(> b > .nt-st) > b { display:grid; align-items:center; white-space:nowrap; column-gap:.3em;
+    grid-template-columns: 5.4em 4.8em 1.1em 1.1em 1em 1em 4.9em;
+    grid-template-areas: "st dur peer shield infl stale fams"; }
+  td:not(#_nt) > b > .nt-st { grid-area:st; justify-self:start; }
+  td:not(#_nt) > b > .nt-dur { grid-area:dur; justify-self:end; }
+  td:not(#_nt) > b > .nt-peerwarn { grid-area:peer; justify-self:center; margin:0 !important; }
+  td:not(#_nt) > b > .nt-peerwarn.nt-infl { grid-area:infl; }
+  td:not(#_nt) > b > .nt-peerwarn.nt-stale { grid-area:stale; }
+  td:not(#_nt) > b > .nt-fams { grid-area:fams; justify-self:start; margin:0 !important; }
+  td:not(#_nt) > b > .nt-shield { grid-area:shield; justify-self:center; margin:0 !important; }
+</style>
+<link rel="alternate" type="application/atom+xml" title="newTrackon NZ: tracker events" href="/feed.xml">
+<style id="nt-down-grey">
+  table tbody tr:not(#_nt):has(.nt-peerdown) > *:not(#_nt),
+  table tbody tr:not(#_nt):has(.nt-peerdown) > *:not(#_nt) a:not(#_nt) { color:#8b93a1 !important; }
+</style>
+<style id="nt-latcls">table tbody tr:not(#_nt) td.nt-lat-g:not(#_nt),table tbody tr:not(#_nt) td.nt-lat-g:not(#_nt) *{color:#00e676 !important;font-weight:600}table tbody tr:not(#_nt) td.nt-lat-o:not(#_nt),table tbody tr:not(#_nt) td.nt-lat-o:not(#_nt) *{color:#ff9100 !important;font-weight:600}table tbody tr:not(#_nt) td.nt-lat-r:not(#_nt),table tbody tr:not(#_nt) td.nt-lat-r:not(#_nt) *{color:#ff3b30 !important;font-weight:600}</style>
+<style id="nt-shield-na">table tbody tr:not(#_nt) .nt-shield-na:not(#_nt),table tbody tr:not(#_nt) .nt-shield-na:not(#_nt) svg{color:#6c757d !important;fill:#6c757d !important}</style>
+<style id="nt-stars-left">td:has([data-nts]){text-align:left !important;white-space:nowrap}</style>
+</head>
     <body>
         <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
             <div class="container">
@@ -81,8 +150,67 @@
         {% endblock body %}
         <footer class="footer">
             <p class="text-center">
-                A <a href="https://twitter.com/CorralPeltzer">@CorralPeltzer</a> creation based on an <a href="http://uriel.cat-v.org/">Uriel</a> project
+                A <a href="https://twitter.com/CorralPeltzer">@CorralPeltzer</a> creation based on an <a href="http://uriel.cat-v.org/">Uriel</a> project<br><span class="nt-iplinks"><a href="https://ipv4.newtrackon.co.nz/">What is my IPv4 address?</a>
+                · <a href="https://ipv6.newtrackon.co.nz/">What is my IPv6 address?</a></span>
             </p>
+            <p class="nt-credit" style="text-align:left">newTrackon is the work of its original authors.<br>Patches and the NZ mirror by Kolan Koala &middot; <a href="#" class="nt-mail" data-x="alaoknalok" data-y="zn.oc.nokcartwen" rel="nofollow">kolankoala(at)newtrackon.co.nz</a></p>
+<script>document.addEventListener("click",function(e){var a=e.target.closest(".nt-mail");if(!a)return;e.preventDefault();var r=function(v){return v.split("").reverse().join("")};location.href="mai"+"lto:"+r(a.dataset.x)+String.fromCharCode(64)+r(a.dataset.y);});</script>
         </footer>
-    </body>
+<!-- nt-lat3 -->
+<script>
+(function(){
+var C=function(v){return v<200?'#00e676':v<300?'#ff9100':'#ff3b30'};
+var RG=/(Oceania|Asia|Europe|America|Africa|Middle East)(:[^\d·\n—(]*)?\s*$/i;
+function paint(el){var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),n,L=[];while((n=w.nextNode()))L.push(n);
+  L.forEach(function(t){if(t.parentNode&&t.parentNode.dataset&&t.parentNode.dataset.ntp)return;var s=t.nodeValue,re=/(\d+(?:\.\d+)?)\s*ms\b/g,m,i=0,f=document.createDocumentFragment(),any=0;
+    while((m=re.exec(s))){if(!RG.test(s.slice(0,m.index)))continue;
+      any=1;f.appendChild(document.createTextNode(s.slice(i,m.index)));var sp=document.createElement('span');sp.dataset.ntp=1;sp.textContent=m[0];sp.style.color=C(parseFloat(m[1]));sp.style.fontWeight='700';f.appendChild(sp);i=re.lastIndex}
+    if(any){f.appendChild(document.createTextNode(s.slice(i)));t.parentNode.replaceChild(f,t)}});}
+function scan(){var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),n,L=[];while((n=w.nextNode()))if(/Latency by region/i.test(n.nodeValue))L.push(n);
+  L.forEach(function(t){var p=t.parentElement,k=0;while(p&&k<3&&!/\d\s*ms\b/.test(p.textContent)){p=p.parentElement;k++}if(p)paint(p)});}
+var tip=document.createElement('div');tip.id='nt-lattip';
+tip.style.cssText='position:fixed;display:none;z-index:9999;background:#0b1633;border:1px solid #2a3a66;border-radius:6px;padding:6px 9px;font-size:12px;line-height:1.5;color:#e6e9f0;pointer-events:none;max-width:320px;box-shadow:0 4px 14px rgba(0,0,0,.5)';
+document.body.appendChild(tip);
+function show(td,x,y){tip.innerHTML='';td._nt.split('\n').forEach(function(l){var d=document.createElement('div');d.textContent=l;paint(d);tip.appendChild(d)});
+  tip.style.display='block';var r=tip.getBoundingClientRect(),X=Math.min(x+14,innerWidth-r.width-8),Y=y+16;if(Y+r.height>innerHeight-8)Y=y-r.height-10;tip.style.left=X+'px';tip.style.top=Math.max(4,Y)+'px'}
+function hide(){tip.style.display='none'}
+function score(r){for(var i=0;i<r.cells.length;i++){var t=r.cells[i].textContent;if(/[\u2605\u2606]/.test(t)){var k=/(\d+(?:\.\d+)?)\s*$/.exec(t.trim());return k?[+k[1],r.cells[i]]:null}}return null}
+function pc(el){var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),n;while((n=w.nextNode())){var m=/(\d+(?:\.\d+)?)\s*ms\b/.exec(n.nodeValue)||/^\s*(\d+)\s*$/.exec(n.nodeValue);if(m){n.parentNode.style.setProperty('color',C(parseFloat(m[1])),'important');n.parentNode.style.setProperty('font-weight','600','important');break}}}
+function ns(r,td){var st=r.querySelector('.nt-st');if(!st||st.textContent.trim().indexOf('Up/Good')!==0)return;
+  var m=/(\d+)\s*ms/.exec(td.textContent),ms=m?+m[1]:0,s=score(r),sc=s?s[0]:null,lab=null,tp='',S=r.dataset.ntState||'';
+  var ae=r.querySelector('[data-nt-age]'),ag=ae?parseFloat(ae.dataset.ntAge):99,ce=Math.round(80+20*Math.min(1,ag/7));
+  if(S==='up_new'){lab='Up/New';r.dataset.ntnew=1;tp='New tracker ('+ag.toFixed(1)+' days old): '+(td.classList.contains('nt-haslat')?'':'just added, latency by region not measured yet. ')+'its score can\'t go above '+ce+' yet. The cap rises from 80 to 100 over its first 7 days, so a top score has to be earned.'}
+  else if(S==='up_slow'){lab='Up/Slow';tp=ms>=300?'Up and passing checks, but average latency across regions is '+ms+' ms (300 ms or more)':'Reliable, but its '+ms+' ms average latency pulls the score down to '+sc+', under 90'}
+  else if(S==='up_unreliable'){lab='Up/Unreliable';tp='Up now, but score '+sc+' is under 90: missed too many recent checks to make the stable list'}
+  if(!lab)return;st.textContent=lab;var em={'Up/New':'\uD83D\uDC23','Up/Slow':'\uD83D\uDC22','Up/Unreliable':'\uD83C\uDFB2'}[lab];if(em){var es=document.createElement('span');es.className='nt-emo';es.textContent=em;st.appendChild(es)}st.style.setProperty('color',lab==='Up/New'?'#4fc3f7':(lab==='Up/Slow'&&sc!==null&&sc>=90)?'#00e676':'#ffa500','important');st.title=tp}
+function gr(r){var s=score(r);if(!s||s[0]>=90||r.dataset.ntnew)return;r.querySelectorAll('*').forEach(function(e){
+  if(![].some.call(e.childNodes,function(n){return n.nodeType==3&&n.nodeValue.trim()}))return;
+  var c=getComputedStyle(e).color.match(/\d+/g);if(c&&+c[0]>230&&+c[1]>230&&+c[2]>230)e.style.setProperty('color','#8b93a1','important')})}
+function sr(r){var s=score(r);if(!s)return;var c=s[1],n=Math.max(0,Math.min(5,Math.round(s[0]/20)));
+  var done=c.querySelector('[data-nts]');if(done&&done.textContent.length===n)return;
+  var w=document.createTreeWalker(c,NodeFilter.SHOW_TEXT),x,L=[];while((x=w.nextNode()))if(/[\u2605\u2606]/.test(x.nodeValue))L.push(x);if(!L.length)return;
+  var fc=null,ec=null;L.forEach(function(x){var col=getComputedStyle(x.parentNode).color;if(/\u2605/.test(x.nodeValue)&&!fc)fc=col;if(/\u2606/.test(x.nodeValue)&&!ec)ec=col});fc=fc||'#f5c518';ec=ec||fc;
+  var f=document.createDocumentFragment(),a=document.createElement('span'),b=document.createElement('span');a.dataset.nts=1;a.textContent='\u2605'.repeat(n);a.style.color=fc;b.textContent='\u2606'.repeat(5-n);b.style.color=ec;f.appendChild(a);f.appendChild(b);
+  var host=L[0].parentNode;L.forEach(function(x){x.nodeValue=x.nodeValue.replace(/[\u2605\u2606]/g,'')});
+  if(host.dataset&&host.dataset.nts!==undefined)host=host.parentNode;host.insertBefore(f,host.firstChild);
+  c.querySelectorAll('[data-nts]').forEach(function(e){if(e!==a)e.remove()});}
+function cols(row){var out=[],p=0;for(var i=0;i<row.cells.length;i++){out.push([p,row.cells[i]]);p+=row.cells[i].colSpan||1}return out}
+function RUN(){document.querySelectorAll('table').forEach(function(tb){var hr=null,idx=-1;
+  tb.querySelectorAll('tr').forEach(function(r){if(idx<0){cols(r).forEach(function(c){if(c[1].tagName=='TH'&&/latency/i.test(c[1].textContent)){idx=c[0];hr=r}})}});
+  if(idx<0)return;
+  tb.querySelectorAll('tr').forEach(function(r){if(r===hr)return;cols(r).forEach(function(c){if(c[0]!==idx||c[1].tagName!='TD'||c[1].colSpan>1)return;var td=c[1];
+    try{sr(r);pc(td);ns(r,td);gr(r)}catch(e){}
+    var te=td.hasAttribute('title')?td:td.querySelector('[title]');
+    if(te&&/\d\s*ms/.test(te.getAttribute('title'))){td._nt=te.getAttribute('title');te.removeAttribute('title');td.style.cursor='help';
+      if(!td._ntL){td._ntL=1;td.addEventListener('mousemove',function(e){show(td,e.clientX,e.clientY)});td.addEventListener('mouseleave',hide);
+      td.addEventListener('click',function(e){if(tip.style.display=='block'&&tip._td===td){hide();return}tip._td=td;show(td,e.clientX,e.clientY);e.stopPropagation()})}}})})});
+  scan();}
+document.addEventListener('click',hide);addEventListener('scroll',hide,{passive:true});
+var q=0;function kick(){if(!q){q=1;setTimeout(function(){q=0;RUN()},60)}}
+RUN();document.addEventListener('DOMContentLoaded',kick);addEventListener('load',kick);setTimeout(kick,800);setTimeout(kick,2500);
+if(window.jQuery)jQuery(document).on('draw.dt init.dt',kick);
+new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){if(!tip.contains(ms[i].target)&&ms[i].target!==tip){kick();return}}}).observe(document.body,{childList:true,subtree:true,characterData:true});
+})();
+</script>
+</body>
 </html>

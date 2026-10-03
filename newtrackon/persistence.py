@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from os import path
+from os import path, replace
+from threading import get_ident
 from typing import TypedDict, cast
 
 
@@ -30,5 +31,8 @@ submitted_data: deque[HistoryData] = deque(load_history(submitted_history_file),
 
 
 def save_deque_to_disk(obj: deque[HistoryData], filename: str) -> None:
-    with open(filename, "w") as history_file:
+    # write a temp file then rename, so a kill mid-write can't leave a truncated file that breaks startup
+    tmp = f"{filename}.{get_ident()}.tmp"
+    with open(tmp, "w") as history_file:
         json.dump(list(obj), history_file)
+    replace(tmp, filename)

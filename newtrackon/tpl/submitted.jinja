@@ -16,13 +16,12 @@
         </p>
         <p>
             newTrackon respects <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP34</a>. If no BEP34 records are
-            found, trackers are tried (in this order) with UDP, HTTPS and HTTP. When one protocol succeeds, and if its
+            found, trackers are tried (in this order) with UDP, HTTP and HTTPS. When one protocol succeeds, and if its
             update interval is between 5 minutes and 3 hours,
-            it gets added to the list. If no port is specified, the tracker is tried only with HTTPS on port 443 and HTTP on
-            port 80. For HTTP/S, trackers must return a
+            it gets added to the list. If no port is specified, the tracker is tried only with HTTP on port 80 and HTTPS on port 443. For HTTP/S, trackers must return a
             <a href="https://www.bittorrent.org/beps/bep_0023.html">compact peer list</a>.
         </p>
-        <p>The queue is processed at about 10 seconds per URL tried.</p>
+        <p>The queue is processed at about 10 seconds per URL tried. If a working UDP version of a tracker already listed over HTTP/HTTPS is submitted, it replaces that entry and keeps its history.</p>
         <p>
             <b>Number of trackers in the queue: {{ size }}</b>
         </p>
