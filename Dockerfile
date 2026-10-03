@@ -1,4 +1,4 @@
-FROM python:3.14.7-alpine
+FROM python:3.14.8-alpine
 
 COPY --chown=newtrackon:newtrackon . /app/newTrackon
 WORKDIR /app/newTrackon
