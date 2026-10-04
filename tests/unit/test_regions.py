@@ -291,3 +291,10 @@ class TestMap:
 
     def test_nav_has_map(self, flask_client: FlaskClient) -> None:
         assert 'href="/map"' in flask_client.get("/").get_data(as_text=True)
+
+
+@pytest.mark.usefixtures("region_db")
+class TestLatencyFlag:
+    def test_latency_cell_has_country_flag(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/").get_data(as_text=True)
+        assert 'class="fi fi-nz nt-latflag"' in html
