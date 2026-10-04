@@ -105,6 +105,11 @@ class TestBadge:
         svg = r.get_data(as_text=True)
         assert "<script" not in svg.lower() and r.headers["X-Content-Type-Options"] == "nosniff"
 
+    def test_no_snippet_for_unhealthy_trackers(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/tracker/down.example").get_data(as_text=True)
+        assert "Status badge" not in html and "/badge/down.example.svg" not in html
+        assert flask_client.get("/badge/down.example.svg").status_code == 200  # the badge itself still answers honestly
+
     def test_snippet_on_tracker_page(self, flask_client: FlaskClient) -> None:
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert '<img src="/badge/akl.example.svg"' in html

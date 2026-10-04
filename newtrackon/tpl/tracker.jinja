@@ -118,6 +118,7 @@
     </table>
     {% else %}<p class="mb-4">No status changes recorded recently.</p>{% endif %}
 
+    {% if d.status in ("up_good", "up_new", "up_slow") %}{# only healthy trackers are offered a badge; an embedded one stays honest if it later degrades #}
     {% set bu = "https://newtrackon.co.nz/badge/" ~ (t.host|urlencode) ~ ".svg" %}{% set pu = "https://newtrackon.co.nz/tracker/" ~ (t.host|urlencode) %}
     <h5 class="mt-4">Status badge</h5>
     <p>For the tracker's own site or README: it shows the live status and links back here.</p>
@@ -126,5 +127,6 @@
     <input class="form-control form-control-sm mb-2 font-monospace" readonly onclick="this.select()" value="[![newTrackon NZ status]({{ bu }})]({{ pu }})">
     <label class="form-label small mb-1">HTML</label>
     <input class="form-control form-control-sm mb-4 font-monospace" readonly onclick="this.select()" value='<a href="{{ pu }}"><img src="{{ bu }}" alt="newTrackon NZ status" height="20"></a>'>
+    {% endif %}
 </div>
 {% endblock %}
