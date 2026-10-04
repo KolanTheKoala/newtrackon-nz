@@ -1791,12 +1791,16 @@ def _nt_local_fault(t, err):
     return True
 
 
-def _nt_is_new(t, sc, ms):
-    """Under 7 days old and sitting at the age ceiling (minus its latency penalty): healthy, just new."""
+def _nt_is_new(t, sc=None, ms=None):
+    """Still in probation (under 7 days of history, score held under the age ceiling) and reliable on its own record:
+    healthy, just new. Judged on the uncapped availability x stability, so the ceiling alone can never make a new tracker
+    look unreliable; real misses still can. (sc and ms are unused, kept for the callers.)"""
     age = (time() - int(getattr(t, "added", 0) or 0)) / 86400.0
-    if age >= 7:
+    h = list(getattr(t, "historic", None) or [])
+    if age >= 7 or len(h) >= 336:
         return False
-    return sc >= 80.0 + 20.0 * min(1.0, age / 7.0) - _nt_lat_penalty(ms) - 1.5
+    availability, stability = _nt_avail_stab(h)
+    return availability * stability * 100.0 >= 90.0
 
 
 def _nt_vps_retry_ok(url):

@@ -229,3 +229,29 @@ class TestFamilyHysteresis:
             T._fam_set(self.U, None, {"v4": True, "v6": v6})
         assert T.FAM_HIST[self.U] == {"v4": [1, 1, 1, 1], "v6": [0, 1, 0, 0]}
         assert ntextra._fam_answers(self.U) == {"v6": (1, 4)}
+
+
+class TestProbation:
+    def _new(self, t, hist):
+        from collections import deque
+        from time import time
+        t.added, t.last_uptime, t.status = int(time()) - 86400, int(time()), 1
+        t.historic = deque(hist, maxlen=1440)
+        t.update_uptime()
+        return t
+
+    def test_capped_but_perfect_is_new_not_unreliable(self, sample_tracker) -> None:
+        t = self._new(sample_tracker, [1] * 48)  # one perfect day: held at the ~83 ceiling
+        assert t.uptime < 90 and T._nt_is_new(t) is True
+        assert ntextra._state(t)[0] == "up_new"
+
+    def test_real_misses_are_still_unreliable(self, sample_tracker) -> None:
+        t = self._new(sample_tracker, [1] * 30 + [0] * 4 + [1] * 14)  # a 2-hour outage on its first day
+        assert T._nt_is_new(t) is False
+        assert ntextra._state(t)[0] == "up_unreliable"
+
+    def test_probation_ends_at_7_days(self, sample_tracker) -> None:
+        from time import time
+        t = self._new(sample_tracker, [1] * 48)
+        t.added = int(time()) - 8 * 86400
+        assert T._nt_is_new(t) is False
