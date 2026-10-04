@@ -10,9 +10,14 @@
         '192': '#c62828',  // Cuba
         '643': '#7f0000',  // Russia
         '304': '#f2f2f2',  // Greenland
-        '076': '#2e9d48'   // Brazil
+        '076': '#2e9d48',  // Brazil
+        '124': '#43a047',  // Canada
+        '036': '#c9a227'   // Australia (gold)
     };
-    var PALETTE = ['#3f6f9f', '#a0884a', '#7d5f9a', '#4f9a96', '#9a6a4f', '#6b7fb0', '#8a9a4f'];  // no reds, white or Brazil green
+    // countries whose main landmass reaches within EQUATOR_BAND degrees of the equator form a band of greens
+    var EQUATOR_BAND = 10;
+    var GREENS = ['#2e9d48', '#1b5e20', '#7cb342', '#4caf50', '#9ccc65', '#388e3c', '#00897b'];
+    var PALETTE = ['#3f6f9f', '#a0884a', '#7d5f9a', '#4f9a96', '#9a6a4f', '#6b7fb0', '#b07aa1'];  // no reds, greens or white
     // neighbours across a narrow sea, which must not share a colour either
     var SEA_NEIGHBORS = [['036', '554'], ['036', '360'], ['826', '372'], ['826', '250'], ['392', '410'], ['392', '156'],
         ['158', '156'], ['144', '356'], ['450', '508'], ['840', '192'], ['124', '304'], ['352', '304']];
@@ -40,15 +45,17 @@
     function host(u) { try { return new URL(u).hostname; } catch (e) { return u; } }
     function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]; }); }
 
-    // centroid of a country's largest part, so e.g. France isn't pulled towards French Guiana
-    function mainCentroid(f) {
-        if (f.geometry.type !== 'MultiPolygon') { return d3.geoCentroid(f); }
+    // a country's largest part, so e.g. France isn't pulled towards French Guiana
+    function mainPolygon(f) {
         var best = null, bestA = -1;
         f.geometry.coordinates.forEach(function (poly) {
             var p = {type: 'Polygon', coordinates: poly}, a = d3.geoArea(p);
             if (a > bestA) { bestA = a; best = p; }
         });
-        return d3.geoCentroid(best);
+        return best;
+    }
+    function mainCentroid(f) {
+        return d3.geoCentroid(f.geometry.type === 'MultiPolygon' ? mainPolygon(f) : f);
     }
 
     Promise.all([
@@ -58,6 +65,7 @@
     ]).then(function (r) {
         var topo = r[0], iso = r[1], trackers = r[2];
         var geoms = topo.objects.countries.geometries;
+        geoms.forEach(function (g, i) { if (!g.id) { g.id = 'x' + i; } });   // Kosovo, Somaliland, N. Cyprus have no ISO number
         var countries = topojson.feature(topo, topo.objects.countries).features.filter(function (f) { return f.id !== '010'; });  // no Antarctica
         var projection = d3.geoMercator().fitExtent([[8, 8], [width - 8, height - 8]], {type: 'FeatureCollection', features: countries});
         var path = d3.geoPath(projection);
@@ -69,13 +77,19 @@
             var a = index[p[0]], b = index[p[1]];
             if (a !== undefined && b !== undefined) { neighbors[a] = neighbors[a].concat([b]); neighbors[b] = neighbors[b].concat([a]); }
         });
-        geoms.map(function (g, i) { return i; })
-            .sort(function (a, b) { return neighbors[b].length - neighbors[a].length; })
-            .forEach(function (i) {
-                if (color[i]) { return; }
-                var used = {}; neighbors[i].forEach(function (n) { if (color[n]) { used[color[n]] = 1; } });
-                color[i] = PALETTE.filter(function (c) { return !used[c]; })[0] || PALETTE[i % PALETTE.length];
-            });
+        var equatorial = {};
+        countries.forEach(function (f) {
+            var main = f.geometry.type === 'MultiPolygon' ? mainPolygon(f) : f;
+            var b = d3.geoBounds(main);   // [[west, south], [east, north]]
+            if (b[0][1] <= EQUATOR_BAND && b[1][1] >= -EQUATOR_BAND) { equatorial[f.id] = 1; }
+        });
+        function pick(i, choices) {   // first colour none of the neighbours (land or sea) already has
+            var used = {}; neighbors[i].forEach(function (n) { if (color[n]) { used[color[n]] = 1; } });
+            return choices.filter(function (c) { return !used[c]; })[0];
+        }
+        var order = geoms.map(function (g, i) { return i; }).sort(function (a, b) { return neighbors[b].length - neighbors[a].length; });
+        order.forEach(function (i) { if (!color[i] && equatorial[geoms[i].id]) { color[i] = pick(i, GREENS) || pick(i, PALETTE); } });
+        order.forEach(function (i) { if (!color[i]) { color[i] = pick(i, PALETTE) || pick(i, GREENS) || PALETTE[i % PALETTE.length]; } });
         var colorById = {};
         geoms.forEach(function (g, i) { colorById[g.id] = color[i]; });
 
