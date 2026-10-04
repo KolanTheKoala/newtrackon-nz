@@ -435,7 +435,7 @@ def _recheck(host):
 
 def _fix_page():
     from flask import render_template
-    return render_template("static/fix.jinja", active="", titles=FIX_TITLES)
+    return render_template("static/fix.jinja", active="Fix", titles=FIX_TITLES)
 
 
 def _ago(epoch):

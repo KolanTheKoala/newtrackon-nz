@@ -151,3 +151,8 @@ def test_dying_trackers_are_dark_grey() -> None:
         assert ntextra._dying(SimpleNamespace(url="udp://d.example:1/announce", last_uptime=now - 2 * 86400), now) is None  # down, but not close yet
     with patch.object(ntextra, "_rowcls", return_value="orange"):
         assert ntextra._dying(t, now) is None  # answering again
+
+
+def test_fix_page_in_the_menu(flask_client: FlaskClient) -> None:
+    html = flask_client.get("/fix").get_data(as_text=True)
+    assert 'href="/fix"' in html.split("</nav>")[0] and "fa-wrench" in html.split("</nav>")[0]
