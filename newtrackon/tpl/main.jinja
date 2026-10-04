@@ -40,6 +40,7 @@
         .nt-lg .r { display: inline-block !important; line-height: 1.45; margin: 0 1.1em 6px 0 !important; }  /* short entries sit side by side */
         .nt-lg .k { display: inline; min-width: 0 !important; margin-right: .45em; }
         .nt-lg .s { display: inline-block; min-width: 1.6em; text-align: left; }
+        .nt-lg .nt-24h { display: none; }  /* the 24 h dots aren't shown on phones */
         /* events: time and host on one line, what happened underneath */
         .nt-ev { grid-template-columns: auto 1fr !important; column-gap: .8em !important; row-gap: 0 !important; line-height: 1.45 !important;
                  padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, .08); }
@@ -402,7 +403,7 @@ fmt();setInterval(fmt,1000)})();</script>
 <div class="r"><span class="k" style="color:#00e676">&#9679;</span>up</div>
 <div class="r" title="Any failed check in that period"><span class="k" style="color:#ff3b30">&#9679;</span>down</div>
 <div class="r"><span class="k">&#9675;</span>not monitored yet</div>
-<div class="r"><span class="k">Scale</span>7 days: 1/day &middot; 24 h: 1 per 2&nbsp;h</div></div>
+<div class="r"><span class="k">Scale</span>7 days: 1/day<span class="nt-24h"> &middot; 24 h: 1 per 2&nbsp;h</span></div></div>
 </div>
         <div class="nt-uptime-note">
             <p><b>* Score out of 100, not uptime %:</b> recent checks count more, and dropping in and out costs more than one outage. Details in <a href="/about">About</a>.</p>
