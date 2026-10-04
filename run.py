@@ -58,6 +58,10 @@ if __name__ == "__main__":
     submission_worker.daemon = True
     submission_worker.start()
 
+    restore_queue = Thread(target=ingest.restore_saved_queue)  # submissions saved before the last restart
+    restore_queue.daemon = True
+    restore_queue.start()
+
     get_trackerlist_project_list = Thread(target=trackerlist_project.main)
     get_trackerlist_project_list.daemon = True
     get_trackerlist_project_list.start()

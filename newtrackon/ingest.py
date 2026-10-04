@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from collections import deque
 from ipaddress import ip_address
 from queue import Empty, Full, Queue
@@ -19,6 +21,12 @@ from newtrackon.tracker import Tracker
 
 submitted_queue: Queue[Tracker] = Queue(maxsize=10000)
 list_lock: Lock = Lock()
+
+# The queue is kept in memory; its URLs are also saved here, so a restart doesn't drop submissions.
+QUEUE_FILE = "data/submit_queue.json"
+_queue_file_lock: Lock = Lock()
+_in_flight: list[str] = []  # the URL being processed now: saved too, so a restart mid-check doesn't lose it
+_restoring: list[bool] = [False]  # while the saved queue is being re-queued, don't overwrite the file
 
 logger: logging.Logger = logging.getLogger("newtrackon")
 
@@ -76,6 +84,49 @@ def log_ip_conflicts(tracker_candidate: Tracker, trackers: list[Tracker]) -> boo
     if recent_conflicts:
         log_grouped_ip_conflicts(recent_conflicts, "recent", tracker_candidate.url)
     return bool(current_conflicts or recent_conflicts)
+
+
+def save_queue() -> None:
+    if _restoring[0]:
+        return
+    with submitted_queue.mutex:
+        urls = [t.url for t in cast("deque[Tracker]", submitted_queue.queue)]
+    urls = list(dict.fromkeys(_in_flight + urls))
+    with _queue_file_lock:
+        try:
+            tmp = f"{QUEUE_FILE}.tmp"
+            with open(tmp, "w") as f:
+                json.dump(urls, f)
+            os.replace(tmp, QUEUE_FILE)
+        except OSError:
+            logger.exception("Could not save the submission queue")
+
+
+def restore_saved_queue() -> None:
+    """Re-queue the URLs saved before the last restart. They go through the normal checks again (denylist, duplicates, same server)."""
+    try:
+        with open(QUEUE_FILE) as f:
+            saved = json.load(f)
+        urls = [u for u in saved if isinstance(u, str)] if isinstance(saved, list) else []
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError):
+        logger.warning("Saved submission queue unreadable, ignored")
+        return
+    if not urls:
+        return
+    logger.info("Restoring %d saved submissions", len(urls))
+    _restoring[0] = True
+    try:
+        for url in urls:
+            try:
+                add_one_tracker_to_submitted_queue(url)
+            except Exception:
+                logger.exception("Could not restore saved submission %s", url)
+    finally:
+        _restoring[0] = False
+    save_queue()
+    logger.info("Restored saved submissions: %d of %d back in the queue", submitted_queue.qsize(), len(urls))
 
 
 def enqueue_new_trackers(input_string: str) -> None:
@@ -150,6 +201,7 @@ def add_one_tracker_to_submitted_queue(url: str) -> None:
         logger.info("Tracker %s denied, submission queue is full", url)
         return
     logger.info("Tracker %s added to the submitted queue", url)
+    save_queue()
 
 
 def process_submitted_queue() -> None:
@@ -158,21 +210,29 @@ def process_submitted_queue() -> None:
             tracker = submitted_queue.get_nowait()
         except Empty:
             break
-        process_new_tracker(tracker)
-        save_deque_to_disk(submitted_data, submitted_history_file)
-        submitted_queue.task_done()
+        _in_flight[:] = [tracker.url]
+        try:
+            process_new_tracker(tracker)
+            save_deque_to_disk(submitted_data, submitted_history_file)
+        finally:
+            _in_flight.clear()
+            submitted_queue.task_done()
+            save_queue()
 
 
 def submission_worker() -> NoReturn:
     while True:
         tracker = submitted_queue.get()
+        _in_flight[:] = [tracker.url]
         try:
             process_new_tracker(tracker)
             save_deque_to_disk(submitted_data, submitted_history_file)
         except Exception:
             logger.exception("Unhandled error while processing submitted tracker %s", tracker.url)
         finally:
+            _in_flight.clear()
             submitted_queue.task_done()
+            save_queue()
 
 
 def process_new_tracker(tracker_candidate: Tracker) -> None:
@@ -200,6 +260,7 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
             submitted_queue.put_nowait(tracker_candidate)
         except Full:
             pass
+        save_queue()
         return
     if tracker_candidate.ips and trackers_in_db and log_ip_conflicts(tracker_candidate, trackers_in_db):
         return
