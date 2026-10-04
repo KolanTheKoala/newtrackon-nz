@@ -164,3 +164,5 @@ class TestOfflineLatency:
     def test_down_tracker_shows_offline(self, flask_client: FlaskClient) -> None:
         html = flask_client.get("/").get_data(as_text=True)
         assert html.count('<span class="nt-offl">Offline</span>') == 1  # down.example only
+        cell = html[:html.index('<span class="nt-offl">')].rsplit("<td", 1)[1]
+        assert "nt-lat-" not in cell  # the latency colour rules (green/orange/red, !important) would override the red
