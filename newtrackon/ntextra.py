@@ -35,10 +35,10 @@ def _dying(t, now=None):
     now = now or time.time()
     if _rowcls(t) == "offline":
         days = (now - int(t.last_uptime or 0)) / 86400.0
-        return "No answer for %d+ days: removed and banned for 30 days after %d" % (int(days), T.REMOVE_DAYS) if days >= _DYING_DAYS else None
+        return "No answer for %d+ days: removed and banned after %d" % (int(days), T.REMOVE_DAYS) if days >= _DYING_DAYS else None
     ub = T._nt_upbad_days(t.url, now)
     if ub is not None and ub >= _DYING_DAYS:
-        return "Up/Bad for %d+ days: removed and banned for 30 days after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
+        return "Up/Bad for %d+ days: removed and banned after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
     return None
 
 
@@ -377,13 +377,16 @@ def _evidence(t, d):
     ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") else None
     if ub is not None:
         left = T.UPBAD_DAYS - ub
-        out.append("Up/Bad for %s (passing again for under 12 hours doesn't reset this). Trackers that stay Up/Bad for %d days are removed and banned for 30 days: %s."
+        out.append("Up/Bad for %s (passing again for under 12 hours doesn't reset this). Trackers that stay Up/Bad for %d days are removed and banned: %s."
                    % ("under a day" if ub < 1 else "%d day%s" % (int(ub), "" if int(ub) == 1 else "s"), T.UPBAD_DAYS,
                       "it's due now" if left <= 0 else "about %s left to fix it" % ("%d h" % max(1, round(left * 24)) if left < 1 else "%d day%s" % (int(left), "" if int(left) == 1 else "s"))))
+    if fix == "no-peers" and T.PEER_LAST.get(t.url) and __import__("time").time() - T.PEER_LAST[t.url] >= T.PEER_NA_DAYS * 86400:
+        out.append("No conclusive peer test for %d+ days: only our first test client is ever answered, so it can't show that "
+                   "it shares peers. Each check now counts as a failed test." % T.PEER_NA_DAYS)
     if fix == "no-peers":
         out.append("Peer test passed %d of the last %d times: a second test client wasn't told about the first." % (d["peer_test"]["passed"], d["peer_test"]["of"]))
     if fix == "fake-peers":
-        out.append("Returned %s peer(s) for a random torrent only this site knows, %d checks in a row."
+        out.append("Returned %s peer(s) for a random torrent only this site knows, in %d of its last 6 checks."
                    % (d["fake_peers"]["latest"] if d["fake_peers"]["latest"] is not None else "unknown", d["fake_peers"]["streak"]))
     if fix == "dead-address":
         df = T.FAM_FAILS.get(t.url) or {}
@@ -647,21 +650,15 @@ def _ban(host, now=None):
     host = (host or "").lower()
     if host not in T.REMOVED:
         return None
-    try:
-        lines = open("data/denylist.txt", encoding="utf-8").read().splitlines()
-    except OSError:
-        return None
     now = now or time.time()
     out = None
-    for ln in lines:
-        p = ln.split()
-        if not p or p[0].startswith("#") or p[0].lower() != host:
+    for h, since, days in T._nt_ban_entries():
+        if h != host:
             continue
-        if len(p) > 1 and p[1].isdigit():
-            since = int(p[1])
-            b = {"since": since, "until": since + _BAN_DAYS * 86400, "active": now - since <= _BAN_DAYS * 86400}
-        else:
+        if since is None:
             b = {"since": None, "until": None, "active": True}
+        else:
+            b = {"since": since, "until": since + days * 86400, "active": now - since <= days * 86400}
         if out is None or b["active"] or (b["until"] or 0) > (out["until"] or 0):
             out = b
     return out

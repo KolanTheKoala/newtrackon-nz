@@ -203,21 +203,10 @@ def _lift_ban(host: str) -> None:
 
 
 def _denylist_hosts() -> set[str]:
-    # "host" on its own = permanent manual ban. "host <epoch>" = auto-ban, expires after 30 days.
-    try:
-        lines = open("data/denylist.txt", encoding="utf-8").read().splitlines()
-    except OSError:
-        return set()
+    """Hosts banned right now: permanent entries, and dated ones (30 or 90 days) that haven't run out."""
+    from newtrackon.tracker import _nt_ban_entries
     now = time()
-    hosts: set[str] = set()
-    for ln in lines:
-        parts = ln.split()
-        if not parts or parts[0].startswith("#"):
-            continue
-        if len(parts) > 1 and parts[1].isdigit() and now - int(parts[1]) > 30 * 86400:
-            continue
-        hosts.add(parts[0].lower())
-    return hosts
+    return {h for h, since, days in _nt_ban_entries() if since is None or now - since <= days * 86400}
 
 
 def add_one_tracker_to_submitted_queue(url: str) -> None:
@@ -363,6 +352,8 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         return
     # Any announce interval is accepted: this instance sets its own adaptive check interval and never uses the tracker's.
     tracker_candidate.update_ipapi_data()
+    if _reinstating((cand_host or "").lower()):
+        _restore_history(tracker_candidate, (cand_host or "").lower())
     if old is not None:
         for a in ("historic", "added", "last_downtime", "last_uptime", "recent_ips"):
             if hasattr(old, a):
@@ -384,6 +375,18 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         _lift_ban(host)
         _keep_upbad_clock(host, tracker_candidate.url)
         logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
+
+
+def _restore_history(t: Tracker, host: str) -> None:
+    """A reinstated tracker gets back its last week of uptime and its listing date, so a tracker that's still flaky
+    is judged at its next checks (the 15% rule) instead of starting clean."""
+    from newtrackon import tracker as _t
+    r = _t.REMOVED.get(host) or {}
+    hist = str(r.get("hist") or "")
+    if hist:
+        t.historic = deque(({"1": 1, "h": 0.5}.get(c, 0) for c in hist), maxlen=_t.HISTORIC_SLOTS)
+    if r.get("added"):
+        t.added = int(r["added"])
 
 
 def _keep_upbad_clock(host: str, url: str) -> None:

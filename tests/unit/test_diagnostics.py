@@ -147,7 +147,7 @@ class TestUpBadClock:
             self._state(AKL, 2.5, self.NOPEERS)
             assert ntextra._dying(t) is None
             self._state(AKL, 3.2, self.NOPEERS)
-            assert ntextra._dying(t) == "Up/Bad for 3+ days: removed and banned for 30 days after 5 unless fixed"
+            assert ntextra._dying(t) == "Up/Bad for 3+ days: removed and banned after 5 unless fixed"
 
     def _check(self, t, days: float, peer_fails: int, monkeypatch: pytest.MonkeyPatch) -> None:
         from collections import deque

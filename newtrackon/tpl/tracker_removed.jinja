@@ -24,7 +24,7 @@
     <dl class="mb-3">
         <dt>Why</dt><dd>{{ r.reason or "no reason recorded" }}</dd>
         <dt>Can it come back?</dt>
-        <dd>{% if ban and ban.active and ban.until %}Yes, once it's fixed: press <b>Check again now</b> below. Otherwise not until {{ until }} (in {{ left }}): it's banned for 30 days after removal, so other submissions are refused until then.
+        <dd>{% if ban and ban.active and ban.until %}Yes, once it's fixed: press <b>Check again now</b> below. Otherwise not until {{ until }} (in {{ left }}): it's banned until then, so other submissions are refused.
             {% elif ban and ban.active %}No: it's banned from the list.
             {% else %}Yes: if it's working again, <a href="/">submit it on the status page</a> and it's checked like any new tracker.{% endif %}</dd>
         {% if r.country %}<dt>Was located in</dt><dd>{{ r.country }}{% if r.network %} &middot; {{ r.network }}{% endif %}</dd>{% endif %}
@@ -61,7 +61,7 @@
     </table>
     {% else %}<p class="mb-4">No events kept for it.</p>{% endif %}
 
-    <p class="small">Trackers are removed after 5 days with no answer or 5 days Up/Bad, or when they answer too rarely to be of use, and banned for 30 days.
+    <p class="small">Trackers are removed after 5 days with no answer or 5 days Up/Bad, or when they answer too rarely to be of use, and banned: 30 days the first time, 90 the second, for good after that.
        See the <a href="/submitted#banned">banned trackers</a> and the <a href="/">trackers listed now</a>.</p>
 </div>
 {% endblock body %}

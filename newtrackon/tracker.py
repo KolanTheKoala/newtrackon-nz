@@ -198,7 +198,7 @@ class Tracker:
             if _ex.get("cid_ok") is False:
                 logger.info("%s CONNID NOT ENFORCED: accepted an announce with a made-up connection ID", self.url)
             if _ex.get("foreign") is not None:
-                _ctr_set(FAKE_FAILS, _FAKE_FAILS_FILE, self.url, FAKE_FAILS.get(self.url, 0) + 1 if _ex["foreign"] > 0 else 0)
+                _fake_hist_add(self.url, _ex["foreign"] > 0)
                 if _ex["foreign"]:
                     logger.info("%s FAKE PEERS: %d fake peer(s) on a random hash", self.url, _ex["foreign"])
             if _ex.get("inflated"):
@@ -207,6 +207,7 @@ class Tracker:
                 _peer_hist_add(self.url, True)
             elif self.peer_ok is False:
                 _peer_hist_add(self.url, False)
+            _peer_conclusive(self.url, self.peer_ok)
             logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             self.is_up()
             _FAILSTREAK[0] = 0  # a success: not an outage
@@ -336,7 +337,7 @@ class Tracker:
         self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
         if (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:  # dead published family N times in a row
             self.uptime = min(self.uptime, 50)  # still works on its other family
-        if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers N times in a row
+        if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers in N of its last PEER_WINDOW checks
             self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
         if PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # failed the peer test N times in a row
             self.uptime = 0  # no peers handed out = effectively down
@@ -358,9 +359,18 @@ class Tracker:
         # Up/Bad (no peers or fake peers, not a dead address) for UPBAD_DAYS in a row, and still failing now: fixed or gone.
         ub = _nt_upbad_days(self.url, now_ts)
         fake = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
-        if ub is not None and ub >= UPBAD_DAYS and (fake or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT):
-            _NT_DEL_REASON[self.url] = "%s for %d days (Up/Bad)" % ("returned fake peers" if fake else "handed out no peers", int(ub))
-            logger.info("Evicting %s (Up/Bad for %.1f days)", self.url, ub)
+        failing = fake or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
+        share = _nt_bad_share(self.url, now_ts) if ub is not None else 0.0
+        listed_days = (now_ts - int(self.added or now_ts)) / 86400.0
+        what = "returned fake peers" if fake else "handed out no peers"
+        why = None
+        if ub is not None and failing and ub >= UPBAD_DAYS:
+            why = "%s for %d days (Up/Bad)" % (what, int(ub))
+        elif ub is not None and failing and share >= BAD_SHARE and listed_days >= BAD_SHARE_DAYS:
+            why = "%s %d%% of the last %d days (Up/Bad)" % (what, round(100 * share), BAD_SHARE_DAYS)
+        if why:
+            _NT_DEL_REASON[self.url] = why
+            logger.info("Evicting %s (Up/Bad: %.1f days in a row, %.0f%% of the last week)", self.url, ub, 100 * share)
             self.to_be_deleted = True
             self._nt_ban()
             return
@@ -383,24 +393,17 @@ class Tracker:
             self._nt_ban()
 
     def _nt_ban(self) -> None:
-        """Ban the host for 30 days (data/denylist.txt): a fresh entry unless it already has an active ban."""
+        """Ban the host (data/denylist.txt): 30 days the first time it's removed, 90 the second, for good after that.
+        A fresh entry unless it already has an active ban."""
         try:
             host = (self.host or "").strip().lower()
-            path = "data/denylist.txt"
-            existing = ""
-            try:
-                existing = open(path, encoding="utf-8").read().lower()
-            except OSError:
-                pass
-            # an expired old entry doesn't count as active
-            active = False
-            for ln in existing.splitlines():
-                parts = ln.split()
-                if parts and parts[0] == host and (len(parts) == 1 or not parts[1].isdigit() or int(time()) - int(parts[1]) <= 30 * 86400):
-                    active = True
-            if host and not active:
-                with open(path, "a", encoding="utf-8") as fh:
-                    fh.write(f"{host} {int(time())}\n")
+            if not host or _nt_banned(host):
+                return
+            r = REMOVED.get(host)
+            prior = int(r.get("count", 1)) if r else 0  # removals before this one
+            days = BAN_STEPS[min(prior, len(BAN_STEPS) - 1)]
+            with open(_DENY_FILE, "a", encoding="utf-8") as fh:
+                fh.write(f"{host}\n" if days is None else (f"{host} {int(time())}\n" if days == 30 else f"{host} {int(time())} {days}\n"))
         except OSError:
             logger.exception("failed to append denylist for %s", self.url)
 
@@ -482,7 +485,7 @@ class Tracker:
                 if PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
                     bad.append("hands out no peers (3+ of its last 6 peer tests failed)")
                 if FAKE_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
-                    bad.append("returns fake peers (3+ checks in a row)")
+                    bad.append("returns fake peers (3+ of its last 6 checks)")
                 df = FAM_FAILS.get(url) or {}
                 if df.get("n", 0) >= PEER_FAIL_LIMIT:
                     bad.append(f"its published IPv{str(df.get('fam', '?'))[-1]} address is dead")
@@ -541,7 +544,7 @@ class Tracker:
                 cur["since"] = now if prev["st"] != st else prev.get("since", now)
             else:
                 cur["since"] = prev.get("since", now)
-            cur.update(_bad_track(prev, st, now))
+            cur.update(_bad_track(prev, st, now, bad))
             if prev != cur:
                 LAST_STATE[url] = cur
                 _jsave(LAST_STATE, _LAST_STATE_FILE)
@@ -719,6 +722,32 @@ try:
         FAKE_FAILS: dict = _json.load(_f)
 except Exception:
     FAKE_FAILS = {}
+
+
+# Fake peers: judged over the last PEER_WINDOW probe results like the peer test, not a streak, so returning
+# fake peers every other check can't dodge it. FAKE_FAILS[url] = fakes in that window (consumers unchanged).
+_FAKE_HIST_FILE = "data/fake_hist.json"
+try:
+    with open(_FAKE_HIST_FILE) as _f:
+        FAKE_HIST: dict = _json.load(_f)
+except Exception:
+    FAKE_HIST = {}
+
+
+def _fake_hist_add(url, fake):
+    h = FAKE_HIST.get(url)
+    if h is None:  # seed from the old streak counter
+        h = [1] * min(FAKE_FAILS.get(url, 0), PEER_WINDOW)
+    h = (h + [1 if fake else 0])[-PEER_WINDOW:]
+    FAKE_HIST[url] = h
+    try:
+        tmp = _FAKE_HIST_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(FAKE_HIST, f)
+        _os.replace(tmp, _FAKE_HIST_FILE)
+    except OSError:
+        pass
+    _ctr_set(FAKE_FAILS, _FAKE_FAILS_FILE, url, h.count(1))
 
 
 def _ctr_set(d, path, url, n):
@@ -902,6 +931,43 @@ def _peer_hist_add(url, ok):
     _peer_fail_set(url, h.count(0))
 
 
+# A peer test that's never conclusive (only our first test client is ever answered) would freeze its last 6 results
+# for good. After PEER_NA_DAYS with no conclusive result, while the test works for other trackers, each check counts
+# as a failure: it can't show that it shares peers.
+PEER_NA_DAYS = 7
+_PEER_LAST_FILE = "data/peer_last.json"
+try:
+    with open(_PEER_LAST_FILE) as _f:
+        PEER_LAST: dict = _json.load(_f)  # url -> last conclusive peer test (or when we started waiting for one)
+except Exception:
+    PEER_LAST = {}
+_PEER_ANY = [0.0]  # last conclusive peer test for any tracker: the test itself works
+
+
+def _peer_conclusive(url, ok, now=None):
+    now = now or time()
+    if ok is not None:
+        _PEER_ANY[0] = now
+        if now - PEER_LAST.get(url, 0) < 3600:
+            return  # saved at most hourly
+        PEER_LAST[url] = int(now)
+    elif url not in PEER_LAST:
+        PEER_LAST[url] = int(now)  # start waiting from now
+    elif now - PEER_LAST[url] >= PEER_NA_DAYS * 86400 and now - _PEER_ANY[0] < 3600:
+        logger.info("%s peer test inconclusive for %d+ days: counted as a failure", url, PEER_NA_DAYS)
+        _peer_hist_add(url, False)
+        return
+    else:
+        return
+    try:
+        tmp = _PEER_LAST_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(PEER_LAST, f)
+        _os.replace(tmp, _PEER_LAST_FILE)
+    except OSError:
+        pass
+
+
 _ONLINE = [0.0, True]
 _FAILSTREAK = [0]  # consecutive failed checks across all trackers (reset by any success)
 
@@ -967,6 +1033,33 @@ def _warn_set(url, msg):
 
 REMOVE_DAYS = 5  # Down (no answer) or Up/Bad (no or fake peers) this long and it's removed and banned for 30 days
 UPBAD_DAYS = REMOVE_DAYS  # one clock for both
+BAN_STEPS = (30, 90, None)  # ban days for a host's 1st, 2nd and 3rd+ removal (None: for good)
+_DENY_FILE = "data/denylist.txt"
+
+
+def _nt_ban_entries():
+    """The denylist as (host, since, days): 'host' = for good (None, None); 'host <epoch>' = 30 days; 'host <epoch> <days>'."""
+    try:
+        lines = open(_DENY_FILE, encoding="utf-8").read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for ln in lines:
+        p = ln.split()
+        if not p or p[0].startswith("#"):
+            continue
+        if len(p) > 1 and p[1].isdigit():
+            out.append((p[0].lower(), int(p[1]), int(p[2]) if len(p) > 2 and p[2].isdigit() else 30))
+        else:
+            out.append((p[0].lower(), None, None))
+    return out
+
+
+def _nt_banned(host, now=None):
+    """Is the host banned right now (a permanent entry, or a dated one that hasn't run out)?"""
+    now = now or time()
+    host = (host or "").lower()
+    return any(h == host and (since is None or now - since <= days * 86400) for h, since, days in _nt_ban_entries())
 
 
 BAD_BRIDGE = 12 * 3600  # an Up/Good spell shorter than this doesn't restart the Up/Bad clock
@@ -983,9 +1076,39 @@ def _nt_upbad_days(url, now=None):
     return (now - int(now if start is None else start)) / 86400.0
 
 
-def _bad_track(prev, st, now):
-    """The bad-stretch fields for a tracker's new state: bad_since (start of the stretch) and bad_left (when it last
-    stopped being Up/Bad, kept while a return within BAD_BRIDGE would continue the stretch)."""
+BAD_SHARE_DAYS, BAD_SHARE = 7, 0.8  # Up/Bad for 80% of the last 7 days is removed too, whatever its good spells
+
+
+def _peer_bad(st, bad):
+    return st == "up_bad" and any("no peers" in b or "fake peers" in b for b in (bad or []))
+
+
+def _nt_bad_share(url, now=None):
+    """Share of the last BAD_SHARE_DAYS it was Up/Bad for no or fake peers (closed spells in bad_log, plus the current one)."""
+    s = LAST_STATE.get(url) or {}
+    now = now or time()
+    w0, span = now - BAD_SHARE_DAYS * 86400, BAD_SHARE_DAYS * 86400
+    tot = sum(max(0, min(e, now) - max(b, w0)) for b, e in (s.get("bad_log") or []))
+    if _peer_bad(s.get("st"), s.get("bad")):
+        tot += max(0, now - max(int(s.get("since", now)), w0))
+    return tot / span
+
+
+def _bad_track(prev, st, now, bad=None):
+    """The bad-stretch fields for a tracker's new state: bad_since (start of the stretch), bad_left (when it last
+    stopped being Up/Bad, kept while a return within BAD_BRIDGE would continue the stretch) and bad_log (its closed
+    Up/Bad spells over the last BAD_SHARE_DAYS)."""
+    d = _bad_stretch(prev, st, now)
+    prev = prev or {}
+    log = [x for x in (prev.get("bad_log") or []) if now - x[1] <= BAD_SHARE_DAYS * 86400]
+    if _peer_bad(prev.get("st"), prev.get("bad")) and not _peer_bad(st, bad):
+        log.append([int(prev.get("since", now)), int(now)])
+    if log:
+        d["bad_log"] = log
+    return d
+
+
+def _bad_stretch(prev, st, now):
     prev = prev or {}
     was = prev.get("st") == "up_bad"
     start = prev.get("bad_since")
@@ -999,6 +1122,31 @@ def _bad_track(prev, st, now):
     if recent:
         return {"bad_since": int(start), "bad_left": int(prev["bad_left"])}
     return {}
+
+
+def _bad_log_seed(now=None):
+    """Fill in bad_log (closed Up/Bad spells over the last week) from the event history for states saved before it existed."""
+    now = now or time()
+    changed = False
+    for url, s in LAST_STATE.items():
+        if not isinstance(s, dict) or "bad_log" in s:
+            continue
+        log, start = [], None
+        for e in EVENTS:
+            if e.get("url") != url:
+                continue
+            txt, kind, t = str(e.get("text") or ""), e.get("type"), int(e.get("t") or 0)
+            if (kind == "bad" and txt.startswith("is Up/Bad")) or (kind == "up" and ", but Up/Bad" in txt):
+                start = t if start is None else start
+            elif start is not None and kind in ("good", "down", "up", "bad") and not txt.startswith("is still Up/Bad"):
+                log.append([start, t])
+                start = None
+        log = [x for x in log if now - x[1] <= BAD_SHARE_DAYS * 86400]
+        if log:
+            s["bad_log"] = log
+            changed = True
+    if changed:
+        _jsave(LAST_STATE, _LAST_STATE_FILE)
 
 
 def _bad_seed(now=None):
@@ -1336,8 +1484,12 @@ def _removed_add(t, reason, now=None):
         return
     if CLOSED.pop(t.url, None) is not None:
         _jsave(CLOSED, _CLOSED_FILE)
+    prev = REMOVED.get(host)
+    hist = "".join("1" if float(x) >= 1 else ("h" if float(x) > 0 else "0") for x in list(getattr(t, "historic", None) or [])[-336:])
     REMOVED[host] = {"url": t.url, "t": int(now or time()), "reason": reason, "added": int(t.added or 0),
-                     "country": (t.countries or [""])[0], "network": (t.networks or [""])[0]}
+                     "country": (t.countries or [""])[0], "network": (t.networks or [""])[0],
+                     "count": (int(prev.get("count", 1)) if prev else 0) + 1,  # removals so far, for longer bans
+                     "hist": hist}  # its last week of uptime, restored if it's reinstated
     _jsave(REMOVED, _REMOVED_FILE)
 
 
@@ -1351,12 +1503,17 @@ def _removed_seed():
             why = txt[len("removed from the list ("):-1] if txt.startswith("removed from the list (") and txt.endswith(")") else txt
             REMOVED[h] = {"url": e.get("url"), "t": int(e["t"]), "reason": why, "added": 0, "country": "", "network": ""}
             n += 1
+    for h, r in REMOVED.items():  # how many times each was removed, for records from before the count existed
+        if "count" not in r:
+            r["count"] = max(1, sum(1 for e in EVENTS if e.get("type") == "removed" and str(e.get("host") or "").lower() == h))
+            n += 1
     if n:
         _jsave(REMOVED, _REMOVED_FILE)
 
 
 _removed_seed()
 _bad_seed()
+_bad_log_seed()
 
 
 def _event(url, kind, text):
