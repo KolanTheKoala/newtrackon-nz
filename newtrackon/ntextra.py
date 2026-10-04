@@ -126,6 +126,9 @@ def _detail(t):
 
 
 _BASE = "https://newtrackon.co.nz"
+# When the feed entries' content last changed (2026-10-05: tracker links added). Entries older than this get it as
+# <updated>, so feed readers refresh their copies once; <published> keeps the event's own time for display.
+_FEED_REV = 1791117960
 
 
 def _feed():
@@ -147,7 +150,7 @@ def _feed():
            '<title>newTrackon NZ: tracker events</title>',
            '<subtitle>Trackers going down, coming back, turning Up/Bad or recovering</subtitle>',
            f'<link href="{_BASE}/"/>', f'<link rel="self" href="{escape(_BASE + request.full_path.rstrip("?"))}"/>',
-           f'<id>{_BASE}/feed.xml</id>', f'<updated>{iso(evs[0]["t"] if evs else now)}</updated>',
+           f'<id>{_BASE}/feed.xml</id>', f'<updated>{iso(max(evs[0]["t"], _FEED_REV) if evs else now)}</updated>',
            '<author><name>newtrackon.co.nz</name></author>']
     for e in evs:
         eid = hashlib.md5(f'{e["t"]}|{e["url"]}|{e["type"]}|{e["text"]}'.encode()).hexdigest()
@@ -155,7 +158,8 @@ def _feed():
         page = _BASE + "/tracker/" + quote(host, safe=".-")  # removed trackers keep a page too
         html = '<a href="%s">%s</a>: %s' % (escape(page, {'"': "&quot;"}), escape(e["url"]), escape(e["text"]))
         out.append(f'<entry><title>{escape(host + " " + e["text"])}</title>'
-                   f'<link href="{escape(page)}"/><id>tag:newtrackon.co.nz,2026:{eid}</id><updated>{iso(e["t"])}</updated>'
+                   f'<link href="{escape(page)}"/><id>tag:newtrackon.co.nz,2026:{eid}</id>'
+                   f'<published>{iso(e["t"])}</published><updated>{iso(max(e["t"], _FEED_REV))}</updated>'
                    f'<category term="{escape(e["type"])}"/><content type="html">{escape(html)}</content></entry>')
     out.append('</feed>')
     return Response("\n".join(out), mimetype="application/atom+xml", headers={"Access-Control-Allow-Origin": "*"})

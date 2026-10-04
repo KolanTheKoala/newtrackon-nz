@@ -129,3 +129,19 @@ def test_feed_links_each_entry_to_its_tracker_page(flask_client: FlaskClient, mo
     assert content.get("type") == "html"
     assert content.text == ('<a href="https://newtrackon.co.nz/tracker/akl.example">udp://akl.example:1/announce</a>: '
                             "went Down (&lt;b&gt;timeout&lt;/b&gt;)")  # the tracker's own text stays escaped
+
+
+def test_feed_entries_refresh_once_after_the_link_change(flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import xml.etree.ElementTree as ET
+
+    from newtrackon import ntextra
+
+    old, new = ntextra._FEED_REV - 3600, ntextra._FEED_REV + 3600
+    monkeypatch.setattr(T, "EVENTS", [{"t": t, "url": "udp://akl.example:1/announce", "host": "akl.example", "type": "down", "text": "x"}
+                                      for t in (old, new)])
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    es = ET.fromstring(flask_client.get("/feed.xml").get_data()).findall("a:entry", ns)
+    stamp = lambda t: __import__("datetime").datetime.fromtimestamp(t, __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    newest, oldest = es
+    assert oldest.find("a:published", ns).text == stamp(old) and oldest.find("a:updated", ns).text == stamp(ntextra._FEED_REV)
+    assert newest.find("a:published", ns).text == stamp(new) and newest.find("a:updated", ns).text == stamp(new)
