@@ -31,6 +31,9 @@
         /* same strength as base.jinja's nt-navy-rows (white text in every cell), so this wins */
         table tbody tr.nt-pending:not(#_nt) > *:not(#_nt), table tbody tr.nt-pending:not(#_nt) > *:not(#_nt) * { color: #8b93a1 !important; }
         table tbody tr.nt-pending:not(#_nt) > td.pending:not(#_nt) { background: #1f2a3d !important; }
+        /* Result: Accepted always green, Rejected always red (outranks the white text of the site-wide row rule) */
+        table tbody tr:not(#_nt) > td.up:not(#_nt), table tbody tr:not(#_nt) > td.up:not(#_nt) * { color: #00e676 !important; }
+        table tbody tr:not(#_nt) > td.rejected:not(#_nt), table tbody tr:not(#_nt) > td.rejected:not(#_nt) * { color: #ff3b30 !important; }
         /* phones: no IP column; URLs and messages wrap so Result stays on screen */
         @media (max-width: 576px) {
             table.nt-sub .c-ip { display: none; }
@@ -38,7 +41,7 @@
             table.nt-sub td.u { overflow-wrap: anywhere; word-break: break-all; }
             table.nt-sub td.t { white-space: nowrap !important; }
             table.nt-sub { display: table !important; width: 100% !important; table-layout: fixed; }  /* fixed widths: the URL gets most of the room */
-            table.nt-sub th.t { width: 4.6em; } table.nt-sub th.r { width: 5.4em; } table.nt-sub th.u { width: 44%; }
+            table.nt-sub th.t { width: 5.6em; } table.nt-sub th.r { width: 5.4em; } table.nt-sub th.u { width: 44%; }
         }
     </style>
     <div class="container">

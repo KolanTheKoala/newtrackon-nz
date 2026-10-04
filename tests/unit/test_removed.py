@@ -124,3 +124,10 @@ class TestRefusedRows:
         logging.getLogger("newtrackon").info("Tracker %s denied, already in the queue", "udp://c.example:1/announce")
         html = flask_client.get("/submitted").get_data(as_text=True)
         assert '<tr class="nt-pending">' in html and "<b>Refused</b>" in html and "Already waiting in the queue" in html
+
+
+@pytest.mark.usefixtures("region_db")
+def test_result_colours_outrank_the_row_rule(flask_client: FlaskClient) -> None:
+    html = flask_client.get("/submitted").get_data(as_text=True)
+    assert "table tbody tr:not(#_nt) > td.rejected:not(#_nt), table tbody tr:not(#_nt) > td.rejected:not(#_nt) * { color: #ff3b30 !important; }" in html
+    assert "table tbody tr:not(#_nt) > td.up:not(#_nt), table tbody tr:not(#_nt) > td.up:not(#_nt) * { color: #00e676 !important; }" in html
