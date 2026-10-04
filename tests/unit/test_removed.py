@@ -143,3 +143,8 @@ def test_accepted_submissions_link_to_the_tracker_page(flask_client: FlaskClient
         assert '<a href="/tracker/ok.example" class="nt-tlink"' in html and '/tracker/no.example"' not in html
     finally:
         persistence.submitted_data.clear()
+
+
+def test_api_removed_lists_active_bans_only(flask_client: FlaskClient, removed: None) -> None:
+    d = flask_client.get("/api/removed").get_json()
+    assert [x["host"] for x in d] == [GONE] and d[0]["banned_until"] == NOW + 28 * 86400 and d[0]["url"] == URL

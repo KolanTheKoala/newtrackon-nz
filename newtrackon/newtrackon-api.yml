@@ -184,6 +184,20 @@ paths:
             application/json:
               schema:
                 type: object
+  /removed:
+    get:
+      summary: Trackers removed and still banned (NZ fork)
+      description: >-
+        Trackers this site removed (no answer or Up/Bad for 5 days, too unreliable, private or whitelist-only) whose
+        30-day ban hasn't ended. Each has host, url, removed (Unix time), reason and banned_until (Unix time, or null if
+        permanent). Their /tracker/{host} pages stay up.
+      responses:
+        "200":
+          description: A list, soonest ban end first.
+          content:
+            application/json:
+              schema:
+                type: array
   /feed.xml:
     servers:  # feed-root-server: the feed lives at the site root, not under /api
       - url: https://newtrackon.co.nz

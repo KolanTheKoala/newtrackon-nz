@@ -703,6 +703,14 @@ def register(app):
     app.add_url_rule("/badge/<host>", "nt_badge", _badge)
     app.jinja_env.globals["nt_health"] = _monitor_health
 
+    @app.route("/api/removed")
+    def api_removed():
+        """Trackers this site removed whose 30-day ban is still running (their pages stay up, e.g. for the sitemap)."""
+        r = jsonify([{"host": b["host"], "url": b["url"], "removed": b["removed"], "reason": b["reason"], "banned_until": b["until"]}
+                     for b in _bans()])
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        return r
+
     @app.route("/api/tracker/<host>")
     def api_tracker(host):
         host = host.lower()
