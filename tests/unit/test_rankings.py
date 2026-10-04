@@ -74,3 +74,13 @@ def test_tools_page(flask_client: FlaskClient) -> None:
 def test_menu_bar_is_sticky_not_fixed(flask_client: FlaskClient) -> None:
     html = flask_client.get("/about").get_data(as_text=True)
     assert 'navbar-dark sticky-top"' in html and "fixed-top" not in html
+
+
+def test_clients_page(flask_client: FlaskClient) -> None:
+    r = flask_client.get("/clients")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200
+    for s in ("qBittorrent", "Automatically append trackers from URL to new downloads", "default-trackers", "Default Trackers", 'href="/tools"'):
+        assert s in html, s
+    assert 'href="/clients"' in flask_client.get("/").get_data(as_text=True)
+    assert 'href="/clients"' in flask_client.get("/faq").get_data(as_text=True)

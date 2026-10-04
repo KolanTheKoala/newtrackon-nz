@@ -1,11 +1,26 @@
 {% extends "base.jinja" %}
 {% block head %}
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.30.1/moment.min.js"
-            integrity="sha512-QoJS4DOhdmG8kbbHkxmB/rtPdN62cGWXAdAFWWJPvUFF1/zxcPSdAnn4HhYZSIlVoLVEJ0LesfNlusgm2bPfnA=="
-            crossorigin="anonymous"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/livestamp/1.1.2/livestamp.min.js"
-            integrity="sha512-C3RIeaJCWeK5MLPSSrVssDBvSwamZW7Ugygc4r21guVqkeroy9wRBDaugQssAQ+m3HZsMWVvEigcNMr7juGXKA=="
-            crossorigin="anonymous"></script>
+    <script>
+    // "… ago" for the submission times (replaces moment.js + livestamp)
+    (function () {
+      function f(s) {
+        var m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+        if (s < 60) return 'just now';
+        if (d > 0) return d + 'd ' + (h % 24) + 'h ago';
+        if (h > 0) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '') + ' ago';
+        return m + 'm ago';
+      }
+      function run() {
+        var n = Date.now() / 1000;
+        document.querySelectorAll('[data-nt-ago]').forEach(function (e) {
+          var t = +e.getAttribute('data-nt-ago');
+          if (t) { e.textContent = f(Math.max(0, n - t)); e.title = new Date(t * 1000).toLocaleString(); }
+        });
+      }
+      document.addEventListener('DOMContentLoaded', run);
+      setInterval(run, 30000);
+    })();
+    </script>
 {% endblock head %}
 {% block body %}
     <div class="container">
@@ -41,7 +56,7 @@
                     {% for response in data %}
                         <tr>
                             <td>
-                                <span data-livestamp="{{ response['time'] }}"></span>
+                                <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
                             <td>{{ response['url'] }}</td>
                             <td>{{ response.get('ip', '') }}</td>

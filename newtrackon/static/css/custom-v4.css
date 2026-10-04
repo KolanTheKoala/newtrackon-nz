@@ -198,6 +198,9 @@ body {
     background-color: #07101c !important;
 }
 
+/* code blocks take the page's text colour (Bootstrap's default is dark grey, invisible on the dark theme) */
+pre { color: inherit; }
+
 /* footer: lines stacked and centred, one link per line (phones and desktop alike) */
 .footer { flex-direction: column; gap: .5rem; padding: 14px 16px; text-align: center; font-size: .82rem; line-height: 1.5; }
 .footer p { margin: 0; text-wrap: balance; }

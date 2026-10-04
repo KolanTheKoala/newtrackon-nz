@@ -1,0 +1,76 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <script src="/static/js/region-guess.js"></script>
+    <style>
+    .nt-cl h4 { margin-top: 2rem; }
+    .nt-cl ol li { margin-bottom: .35rem; }
+    .nt-cl .nt-url { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .4rem 0 .2rem; }
+    .nt-cl .nt-url code { font-size: .95rem; word-break: break-all; }
+    .nt-cl .nt-note { font-size: .88rem; opacity: .75; }
+    .nt-cl pre { background: rgba(127, 127, 127, .12); padding: .6rem .8rem; border-radius: 6px; font-size: .82rem; white-space: pre-wrap; word-break: break-all; }
+    </style>
+{% endblock head %}
+{% block body %}
+<div class="container nt-cl" style="max-width: 900px">
+    <h2>Use the trackers in your torrent client</h2>
+    <p>More trackers means more peers and faster downloads, especially for older or less popular torrents.
+       The best way is to give your client this site's list <b>as a link</b>, so it stays up to date by itself.</p>
+
+    <p class="mb-0"><b>Your list</b> (working trackers, fast from <span id="nt-where">anywhere</span>):</p>
+    <div class="nt-url"><code id="nt-list">https://newtrackon.co.nz/api/clean</code>
+        <button id="nt-copy" class="btn btn-secondary btn-sm">Copy</button></div>
+    <p class="nt-note">For a different region or other options, see the <a href="/list">List</a> page.</p>
+
+    <h4 id="qbittorrent">qBittorrent</h4>
+    <ol>
+        <li>Open <b>Tools &rarr; Options &rarr; BitTorrent</b> (on a Mac: <b>qBittorrent &rarr; Preferences &rarr; BitTorrent</b>).</li>
+        <li>Tick <b>Automatically append trackers from URL to new downloads</b> and paste your list link into the box.</li>
+        <li>Click <b>OK</b>. New torrents get the trackers from then on.</li>
+    </ol>
+    <p class="nt-note">Older versions don't have that option: tick <b>Automatically add these trackers to new downloads</b> instead
+       and paste the list itself (open the link, copy everything). That copy won't update, so redo it now and then.
+       Torrents added from the command line while qBittorrent isn't running don't get the URL trackers.</p>
+
+    <h4 id="transmission">Transmission (4.0 or later)</h4>
+    <p>Transmission has a <code>default-trackers</code> setting, added to all public torrents. It's set in
+       <code>settings.json</code> (the GTK app, the daemon and the command-line version; not the Mac app):</p>
+    <ol>
+        <li>Quit Transmission (or stop the daemon): it rewrites <code>settings.json</code> on exit.</li>
+        <li>Open the list link and copy the trackers into <code>"default-trackers"</code>, separated by <code>\n\n</code>
+            typed literally inside the quotes, as in the example below (real line breaks would break the file).</li>
+        <li>Start Transmission again.</li>
+    </ol>
+    <pre>"default-trackers": "udp://tracker.example.org:1337/announce\n\nhttps://tracker.example.net:443/announce",</pre>
+    <p class="nt-note">Like a pasted list, this one doesn't update by itself.</p>
+
+    <h4 id="deluge">Deluge</h4>
+    <p>Deluge can't do it on its own, but the <a href="https://github.com/stefantalpalaru/deluge-default-trackers">Default Trackers</a>
+       plugin can: it adds trackers to new public torrents (never to private ones) and can reload them from a link.</p>
+    <ol>
+        <li>Install the plugin (<b>Preferences &rarr; Plugins &rarr; Install Plugin</b>, using the file for your Deluge's Python version)
+            and enable it.</li>
+        <li>In <b>Preferences &rarr; Default Trackers</b>, add your list link as the URL to load.</li>
+    </ol>
+
+    <h4 id="other">Any other client, or one download</h4>
+    <p>Most clients let you add trackers to a torrent in its properties or <b>Trackers</b> tab: paste the list there.
+       Or use <a href="/tools">Tools</a>: paste a magnet link or open a .torrent file, and get it back with the best trackers added.</p>
+
+    <h4>Private trackers</h4>
+    <p>Don't add public trackers to torrents from a private tracker: it's against their rules and can get your account banned.
+       qBittorrent, Transmission and the Deluge plugin all leave private torrents alone, and so do the Tools here.</p>
+</div>
+<script>
+(function () {
+    var r = typeof ntGuessRegion === 'function' ? ntGuessRegion() : '';
+    var url = 'https://newtrackon.co.nz/api/clean' + (r ? '?fast_from=' + r : '');
+    document.getElementById('nt-list').textContent = url;
+    if (r && typeof NT_REGION_NAMES !== 'undefined') { document.getElementById('nt-where').textContent = NT_REGION_NAMES[r]; }
+    document.getElementById('nt-copy').addEventListener('click', function () {
+        var b = this;
+        (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(function () { b.textContent = 'Copied'; },
+            function () { b.textContent = 'Select and copy it'; });
+    });
+})();
+</script>
+{% endblock %}

@@ -449,6 +449,13 @@ def _badge(host):
                     headers={"Cache-Control": "max-age=300", "Access-Control-Allow-Origin": "*", "X-Content-Type-Options": "nosniff"})
 
 
+def _clients_page():
+    from flask import render_template
+    return render_template("clients.jinja", active="", title="Use the trackers in your torrent client",
+                           description="How to add newtrackon.co.nz's list of working BitTorrent trackers to qBittorrent, Transmission "
+                                       "and Deluge, so it stays up to date by itself.")
+
+
 def _tools_page():
     from flask import render_template
     return render_template("tools.jinja", active="Tools", title="Magnet booster and torrent fixer",
@@ -508,6 +515,7 @@ def register(app):
     app.add_url_rule("/fix", "nt_fix", _fix_page)
     app.add_url_rule("/rankings", "nt_rankings", _rankings_page)
     app.add_url_rule("/tools", "nt_tools", _tools_page)
+    app.add_url_rule("/clients", "nt_clients", _clients_page)
     app.add_url_rule("/badge/<host>", "nt_badge", _badge)
     app.jinja_env.globals["nt_health"] = _monitor_health
 
