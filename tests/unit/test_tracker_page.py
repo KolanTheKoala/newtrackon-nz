@@ -19,7 +19,8 @@ class TestTrackerPage:
         r = flask_client.get("/tracker/akl.example")
         html = r.get_data(as_text=True)
         assert r.status_code == 200
-        assert "udp://akl.example:1/announce" in html and "Uptime, last 8 days" in html and "Last 48 hours" in html
+        # the heading carries <wbr> break hints so long URLs wrap on phones
+        assert "udp://akl.example:1/announce" in html.replace("<wbr>", "") and "Uptime, last 8 days" in html and "Last 48 hours" in html
         assert 'class="fi fi-nz"' in html and 'href="/#q=akl.example"' in html
 
     def test_host_is_case_insensitive(self, flask_client: FlaskClient) -> None:

@@ -206,7 +206,7 @@ def _uptime_days(historic, days=20):
     return out[::-1]
 
 
-def _latency_chart(hist, now, w=900, h=220, pad=36):
+def _latency_chart(hist, now, w=900, h=220, pad=60):  # pad fits 3-digit labels at the phone font size
     """Per-region latency lines as SVG coordinates. A gap of 3+ missing samples breaks the line."""
     series = {reg: ss for reg, ss in (hist or {}).items() if ss}
     if not series:
@@ -233,6 +233,8 @@ def _latency_chart(hist, now, w=900, h=220, pad=36):
     span_days = (now - t0) / 86400
     ticks = [{"x": round(x(now - d * 86400), 1), "label": "now" if d == 0 else "%dd ago" % d}
              for d in range(0, int(span_days) + 1, max(1, int(span_days) // 6 or 1))]
+    for tk in ticks:  # labels at the edges are anchored inwards so they aren't cut off
+        tk["anchor"] = "end" if tk["x"] > w - 60 else ("start" if tk["x"] < pad + 40 else "middle")
     return {"w": w, "h": h, "pad": pad, "lines": lines, "grid": grid, "ticks": ticks}
 
 
@@ -358,7 +360,8 @@ def register(app):
     app.jinja_env.globals["nt_fix_titles"] = FIX_TITLES
     app.jinja_env.globals["nt_tags"] = _filter_tags
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
-    app.jinja_env.globals["nt_events"] = lambda n=10: list(reversed(T.EVENTS[-n:]))
+    app.jinja_env.globals["nt_events"] = lambda n=10, days=None: list(reversed(
+        [e for e in T.EVENTS if days is None or e.get("t", 0) >= __import__("time").time() - days * 86400][-n:]))
     app.jinja_env.globals["nt_rowcls"] = _rowcls
     app.jinja_env.globals["nt_state"] = _statekey
     app.add_url_rule("/feed.xml", "nt_feed", _feed)

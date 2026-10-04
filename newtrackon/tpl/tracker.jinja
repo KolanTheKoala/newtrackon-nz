@@ -19,12 +19,24 @@
     .nt-legend span { margin-right: 1.2rem; white-space: nowrap; }
     .nt-legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: .35rem; }
     .nt-problem { border: 1px solid #ffb070; background: rgba(255, 145, 0, .08); border-radius: 6px; padding: .8rem 1rem; margin-bottom: 1rem; }
+    .nt-t .nt-stt { display: grid; grid-template-columns: max-content 1fr; gap: 2px 18px; }
+    .nt-t .nt-stt > .k { opacity: .65; } .nt-t .nt-stt > .v { font-weight: 600; }
+    .nt-t .nt-stt > .tot { opacity: 1; font-weight: 700; border-top: 1px solid rgba(127, 127, 127, .4); padding-top: 2px; }
+    .nt-t .nt-stt > .sep { grid-column: 1 / -1; height: 8px; }
+    @media (max-width: 576px) {
+        .nt-t .nt-turl { font-size: 1.15rem; }
+        .nt-chart text { font-size: 26px; }
+        .nt-t dl, .nt-t .nt-stt { grid-template-columns: 1fr; gap: 0; }
+        .nt-t dd, .nt-t .nt-stt > .v { margin-bottom: .45rem; }
+        .nt-legend span { display: block; }
+    }
     .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
     </style>
 {% endblock head %}
 {% block body %}
 <div class="container nt-t">
-    <h2 class="mt-2">{{ t.url }}</h2>
+    {% set u = t.url.split('://', 1) %}{% set hp = u[1].split('/', 1) %}
+    <h2 class="mt-2 nt-turl">{{ u[0] }}://<wbr>{{ hp[0].rsplit(':', 1)[0] }}{% if ':' in hp[0] %}<wbr>:{{ hp[0].rsplit(':', 1)[1] }}{% endif %}{% if hp|length > 1 %}<wbr>/{{ hp[1] }}{% endif %}</h2>
     <p class="mb-3">
         <span class="nt-badge {{ row }}">{{ status_text }}</span>
         &nbsp; Score <b>{{ d.score|round|int }}</b>
@@ -68,7 +80,7 @@
     {% if chart %}
     <svg class="nt-chart" viewBox="0 0 {{ chart.w }} {{ chart.h }}" width="100%" role="img" aria-label="Latency by region over time">
         {% for g in chart.grid %}<line class="grid" x1="{{ chart.pad }}" x2="{{ chart.w - 8 }}" y1="{{ g.y }}" y2="{{ g.y }}"/><text x="{{ chart.pad - 4 }}" y="{{ g.y + 4 }}" text-anchor="end">{{ g.ms }}</text>{% endfor %}
-        {% for tk in chart.ticks %}<text x="{{ tk.x }}" y="{{ chart.h - 4 }}" text-anchor="middle">{{ tk.label }}</text>{% endfor %}
+        {% for tk in chart.ticks %}<text x="{{ tk.x }}" y="{{ chart.h - 4 }}" text-anchor="{{ tk.anchor|default('middle') }}">{{ tk.label }}</text>{% endfor %}
         {% for l in chart.lines %}
             {% for pts in l.parts %}<polyline fill="none" stroke="{{ l.color }}" stroke-width="2" stroke-linejoin="round" points="{{ pts }}"/>{% endfor %}
             {% for c in l.dots %}{% set xy = c[0].split(',') %}<circle cx="{{ xy[0] }}" cy="{{ xy[1] }}" r="2.5" fill="{{ l.color }}"/>{% endfor %}
@@ -77,6 +89,9 @@
     <div class="nt-legend">{% for l in chart.lines %}<span><i style="background: {{ l.color }}"></i>From {{ l.region }}: {{ l.last }} ms now</span>{% endfor %}</div>
     <p class="small mt-1">Announce round trip, in ms, from each place latency is measured. Recorded every 2 hours, kept 30 days.</p>
     {% else %}<p>No latency measured yet.</p>{% endif %}
+
+    <h5 class="mt-4">Score</h5>
+    {% set s = t.stats or {} %}<div class="nt-stt">{% if s.base is defined %}<span class="k">Recent availability</span><span class="v">{{ s.avail_weighted }}%</span><span class="k" title="How steadily it stays up, weighted towards recent checks. 100% means it never flipped between up and down. Constantly dropping in and out pulls this down far more than one long outage does." style="cursor:help;text-decoration:underline dotted">Stability</span><span class="v" title="How steadily it stays up, weighted towards recent checks. 100% means it never flipped between up and down. Constantly dropping in and out pulls this down far more than one long outage does.">&times; {{ s.stability }}%</span><span class="k">Reliability score</span><span class="v">= {{ s.base_r }}</span>{% if s.ceiling is defined and s.ceiling < s.base %}<span class="k">New-tracker ceiling</span><span class="v">held to {{ s.ceiling_r }} (under 7 days old)</span>{% endif %}<span class="k">Latency penalty</span><span class="v">{% set nt_c = ([s.base_r, s.ceiling_r]|min if s.ceiling_r is defined else s.base_r) %}{% set nt_p = (s.lat_penalty|round|int) if s.capped else (nt_c - ((t.uptime + 0.5)|int)) %}{% if s.lat_penalty and nt_p >= 1 %}&minus;{{ nt_p }}{% elif s.lat_penalty %}under 1{% else %}none{% endif %}</span>{% if s.capped %}<span class="k">Quality cap</span><span class="v">capped for failing a quality test (see Status)</span>{% endif %}<span class="k tot">Score</span><span class="v tot">{{ (t.uptime + 0.5)|int }}</span><span class="sep"></span>{% endif %}{% if s.avail7 is defined %}<span class="k">Last 7 days</span><span class="v">answered {{ s.avail7 }}% of checks &middot; {{ s.outages7 }} outage{{ "" if s.outages7 == 1 else "s" }}</span>{% if s.avail_all is defined %}<span class="k">Since added</span><span class="v">answered {{ s.avail_all }}% over {{ s.days }} days{% if s.longest_h %} &middot; longest outage {{ s.longest_h }}&nbsp;h{% endif %}</span>{% endif %}{% endif %}</div>
 
     <h5 class="mt-4">Details</h5>
     <dl>
@@ -87,7 +102,7 @@
         <dt>Peer test</dt><dd>{{ d.peer_test.latest }} (passed {{ d.peer_test.passed }} of the last {{ d.peer_test.of }})</dd>
         <dt>Checked every</dt><dd>{{ (d.check_interval_s / 60)|round|int }} min, last {{ checked_ago }} ago</dd>
         {% if d.announce_interval_s %}<dt>Announce interval</dt><dd>{{ (d.announce_interval_s / 60)|round|int }} min</dd>{% endif %}
-        <dt>Listed</dt><dd>{{ added_ago }} ago</dd>
+        <dt>Added</dt><dd>{{ t.added|format_date }} ({{ added_ago }} ago)</dd>
         {% if d.same_operator_as %}<dt>Same operator as</dt><dd>{% for u in d.same_operator_as %}{{ u }}{% if not loop.last %}<br>{% endif %}{% endfor %}</dd>{% endif %}
     </dl>
 

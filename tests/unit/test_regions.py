@@ -204,7 +204,7 @@ class TestMainTableFilters:
     def _rows(self, client: FlaskClient) -> dict[str, dict[str, str]]:  # url -> data-nt-* attributes
         html = client.get("/").get_data(as_text=True)
         rows = {}
-        for m in re.finditer(r"<tr [^>]*data-nt-state[^>]*>\s*<td>([^<\s]+)", html):
+        for m in re.finditer(r"<tr [^>]*data-nt-state[^>]*>\s*<td[^>]*>([^<\s]+)", html):
             attrs = dict(re.findall(r'data-nt-(\w+)="([^"]*)"', m.group(0)))
             rows[m.group(1)] = attrs
         return rows

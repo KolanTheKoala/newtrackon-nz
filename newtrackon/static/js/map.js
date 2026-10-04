@@ -26,7 +26,8 @@
     // neighbours across a narrow sea, which must not share a colour either
     var SEA_NEIGHBORS = [['036', '554'], ['036', '360'], ['826', '372'], ['826', '250'], ['392', '410'], ['392', '156'],
         ['158', '156'], ['144', '356'], ['450', '508'], ['840', '192'], ['124', '304'], ['352', '304']];
-    var FLAG_W = 18, FLAG_H = 13.5, GAP = 3;
+    var FLAG_K = Math.max(0.6, Math.min(1, (document.getElementById('nt-map').clientWidth || 1100) / 1000));  // smaller flags on phones
+    var FLAG_W = 18 * FLAG_K, FLAG_H = 13.5 * FLAG_K, GAP = 3 * FLAG_K;
     // countries too small for the 110m map: [lon, lat]
     var SMALL = {sg: [103.82, 1.35], hk: [114.17, 22.32], mo: [113.54, 22.19], bh: [50.56, 26.07], mt: [14.38, 35.94],
         mc: [7.42, 43.74], li: [9.55, 47.16], sm: [12.46, 43.94], va: [12.45, 41.9], ad: [1.52, 42.51], mv: [73.22, 3.2],
