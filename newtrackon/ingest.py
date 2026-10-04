@@ -271,6 +271,18 @@ def submission_worker() -> NoReturn:
             _durations.append(time() - _started[0])
 
 
+def _closed_on_submit(url: str) -> str | None:
+    """Private or whitelist-only, by the warning in the answer just recorded for this URL: the reason, or None."""
+    import re
+    from newtrackon.tracker import _nt_closed_reason
+    row = submitted_data[0] if submitted_data else None
+    if not row or row.get("status") != 1 or row.get("url") != url:
+        return None
+    m = re.search(r"'warning message': '([^']*)'", str(row.get("info") or ""))
+    why = _nt_closed_reason(m.group(1)) if m else None
+    return f"being {why}" if why and why.startswith("a ") else (f"saying {why}" if why else None)
+
+
 def process_new_tracker(tracker_candidate: Tracker) -> None:
     logger.info("Processing new tracker: %s", tracker_candidate.url)
     with list_lock:
@@ -313,6 +325,10 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         return
     if not tracker_candidate.interval:
         log_wrong_interval_denial("missing interval field")
+        return
+    closed = _closed_on_submit(tracker_candidate.url)
+    if closed:
+        log_wrong_interval_denial(closed)
         return
     # Any announce interval is accepted: this instance sets its own adaptive check interval and never uses the tracker's.
     tracker_candidate.update_ipapi_data()

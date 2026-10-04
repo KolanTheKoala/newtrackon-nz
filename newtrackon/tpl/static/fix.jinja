@@ -336,7 +336,8 @@ EOF</pre>
 
     <h3 id="removed">Removed and banned</h3>
     <p>A tracker is removed from the list when it hasn't answered for <b>5 days</b>, or when it answers so rarely that it's no use
-        (under 15% once dropouts are counted). It's then <b>banned for 30 days</b>: submitting it again is refused until then. Its
+        (under 15% once dropouts are counted), or when its own replies say 3 checks in a row that it's private (asks for a
+        passkey) or only serves its own torrents (a whitelist). It's then <b>banned for 30 days</b>: submitting it again is refused until then. Its
         page still says when and why it was removed, and when it can come back. A tracker turns dark grey in the
         <a href="/">status table</a> once it's 2 days from removal, so there's still time to fix it. See the <a href="/submitted#banned">banned trackers</a>.</p>
     <p>Once the ban ends, fix the problem and <a href="/">submit the tracker again</a>: it's checked like any new tracker.

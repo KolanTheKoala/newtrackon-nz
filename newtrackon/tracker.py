@@ -161,6 +161,7 @@ class Tracker:
             interval = response.get("interval")
             _ann_iv_set(self.url, interval if isinstance(interval, int) else None)
             _warn_set(self.url, response.get("warning message"))
+            _closed_seen(self.url, response.get("warning message"))
             if isinstance(interval, int):
                 pass  # interval is set adaptively in is_up()/is_down()
             pretty_data = scraper.redact_origin(pp.pformat(response))
@@ -235,6 +236,8 @@ class Tracker:
             }
             persistence.raw_data.appendleft(debug_down)
             _nt_down_why_set(self.url, e)
+            if _nt_down_label(str(e)) == "Rejected":  # its own error message: it may say it's private or whitelist-only
+                _closed_seen(self.url, str(e))
             self.is_down()
         if self.uptime == 0:
             pass  # interval is set in is_up()/is_down()
@@ -343,6 +346,15 @@ class Tracker:
         #     answers too rarely or drops out too often to be of use; peer/latency penalties are not counted here).
         # Milder flappers stay listed (orange) so users can see them. Auto-bans expire after 30 days (see ingest.py).
         now_ts = int(time())
+        # Private or whitelist-only: its own replies said so CLOSED_LIMIT checks in a row, and it fails the peer test (or is
+        # down). It can never work as a public tracker: removed and banned like any other removal, whatever its age.
+        cl = CLOSED.get(self.url) or {}
+        if cl.get("n", 0) >= CLOSED_LIMIT and (self.status == 0 or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT):
+            _NT_DEL_REASON[self.url] = cl["why"]
+            logger.info("Evicting %s (%s, %d checks in a row)", self.url, cl["why"], cl["n"])
+            self.to_be_deleted = True
+            self._nt_ban()
+            return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
         if age_days >= 3 and (dead_days >= 5 or (n >= 144 and availability * stability < 0.15)):
@@ -359,27 +371,29 @@ class Tracker:
                 age_days,
             )
             self.to_be_deleted = True
+            self._nt_ban()
+
+    def _nt_ban(self) -> None:
+        """Ban the host for 30 days (data/denylist.txt): a fresh entry unless it already has an active ban."""
+        try:
+            host = (self.host or "").strip().lower()
+            path = "data/denylist.txt"
+            existing = ""
             try:
-                host = (self.host or "").strip().lower()
-                path = "data/denylist.txt"
-                existing = ""
-                try:
-                    existing = open(path, encoding="utf-8").read().lower()
-                except OSError:
-                    pass
-                # a fresh 30-day entry unless the host already has an active ban (an expired old entry doesn't count)
-                active = False
-                for ln in existing.splitlines():
-                    parts = ln.split()
-                    if parts and parts[0] == host and (len(parts) == 1 or not parts[1].isdigit() or int(time()) - int(parts[1]) <= 30 * 86400):
-                        active = True
-                if host and not active:
-                    with open(path, "a", encoding="utf-8") as fh:
-                        fh.write(f"{host} {int(time())}\n")
+                existing = open(path, encoding="utf-8").read().lower()
             except OSError:
-                logger.exception("failed to append denylist for %s", self.url)
-
-
+                pass
+            # an expired old entry doesn't count as active
+            active = False
+            for ln in existing.splitlines():
+                parts = ln.split()
+                if parts and parts[0] == host and (len(parts) == 1 or not parts[1].isdigit() or int(time()) - int(parts[1]) <= 30 * 86400):
+                    active = True
+            if host and not active:
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(f"{host} {int(time())}\n")
+        except OSError:
+            logger.exception("failed to append denylist for %s", self.url)
 
     def update_ips(self) -> None:
         self.ips = []
@@ -941,6 +955,34 @@ def _warn_set(url, msg):
     _jsave(WARNINGS, _WARN_FILE)
 
 
+_CLOSED_FILE = "data/closed.json"
+CLOSED: dict = _jload(_CLOSED_FILE)  # url -> {"why", "n"}: replies in a row saying it's private or whitelist-only
+CLOSED_LIMIT = 3
+
+
+def _nt_closed_reason(msg):
+    """Why a tracker's own message means it can't be public, or None. Strong signals only."""
+    m = str(msg or "").lower()
+    if any(k in m for k in ("passkey", "authkey", "auth key")):
+        return "a private tracker: it asks for a passkey"
+    if any(k in m for k in ("not authorized", "not authorised", "unregistered torrent", "torrent not registered", "not registered with this tracker", "whitelist")):
+        return "it only serves its own torrents (a whitelist)"
+    return None
+
+
+def _closed_seen(url, msg):
+    """Count a reply that says the tracker is private or whitelist-only; any other reply resets the count."""
+    why = _nt_closed_reason(msg)
+    cur = CLOSED.get(url)
+    if why:
+        CLOSED[url] = {"why": why, "n": (cur or {}).get("n", 0) + 1}
+    elif cur is None:
+        return
+    else:
+        CLOSED.pop(url)
+    _jsave(CLOSED, _CLOSED_FILE)
+
+
 def _ann_iv_set(url, iv):
     if ANN_IV.get(url) != iv:
         ANN_IV[url] = iv
@@ -1218,6 +1260,8 @@ def _removed_add(t, reason, now=None):
     host = (t.host or "").lower()
     if not host:
         return
+    if CLOSED.pop(t.url, None) is not None:
+        _jsave(CLOSED, _CLOSED_FILE)
     REMOVED[host] = {"url": t.url, "t": int(now or time()), "reason": reason, "added": int(t.added or 0),
                      "country": (t.countries or [""])[0], "network": (t.networks or [""])[0]}
     _jsave(REMOVED, _REMOVED_FILE)
