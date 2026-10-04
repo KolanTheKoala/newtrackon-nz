@@ -451,7 +451,7 @@ def _badge(host):
 
 def _clients_page():
     from flask import render_template
-    return render_template("clients.jinja", active="", title="Use the trackers in your torrent client",
+    return render_template("clients.jinja", active="Clients", title="Use the trackers in your torrent client",
                            description="How to add newtrackon.co.nz's list of working BitTorrent trackers to qBittorrent, Transmission "
                                        "and Deluge, so it stays up to date by itself.")
 
