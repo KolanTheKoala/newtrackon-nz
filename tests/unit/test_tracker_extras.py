@@ -145,3 +145,24 @@ def test_feed_entries_refresh_once_after_the_link_change(flask_client: FlaskClie
     newest, oldest = es
     assert oldest.find("a:published", ns).text == stamp(old) and oldest.find("a:updated", ns).text == stamp(ntextra._FEED_REV)
     assert newest.find("a:published", ns).text == stamp(new) and newest.find("a:updated", ns).text == stamp(new)
+
+
+@pytest.mark.usefixtures("region_db")
+def test_recent_events_on_the_main_page_link_to_tracker_pages(flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(T, "EVENTS", [{"t": int(time()) - 60, "url": "udp://akl.example:1/announce", "host": "akl.example", "type": "down", "text": "went Down"}])
+    html = flask_client.get("/").get_data(as_text=True)
+    assert '<a href="/tracker/akl.example" style="color:inherit">akl.example</a>' in html.split('class="nt-ev"', 1)[1]
+
+
+@pytest.mark.parametrize(("accept", "html"), [
+    ("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", True),  # Chrome, Firefox, Brave
+    ("application/atom+xml,application/rss+xml;q=0.9,text/html;q=0.1", False),  # a feed reader that lists HTML last
+    ("*/*", False), ("", False), ("application/atom+xml", False)])
+def test_feed_is_a_page_for_browsers_and_atom_for_readers(flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch, accept: str, html: bool) -> None:
+    monkeypatch.setattr(T, "EVENTS", [{"t": int(time()) - 60, "url": "udp://akl.example:1/announce", "host": "akl.example", "type": "down", "text": "went Down"}])
+    r = flask_client.get("/feed.xml", headers={"Accept": accept} if accept else {})
+    assert r.headers["Vary"] == "Accept"
+    if html:
+        assert r.mimetype == "text/html" and '<a href="/tracker/akl.example">akl.example</a>' in r.get_data(as_text=True)
+    else:
+        assert r.mimetype == "application/atom+xml"

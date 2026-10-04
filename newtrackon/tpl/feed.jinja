@@ -1,0 +1,28 @@
+{% extends "base.jinja" %}
+{% block head %}
+<link rel="alternate" type="application/atom+xml" title="newTrackon NZ: tracker events" href="{{ feed_url }}">
+    <style>
+    .nt-feed .nt-url { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    .nt-feed .nt-url code { word-break: break-all; }
+    .nt-feed table.nt-fe { margin-left: 0; font-size: .92rem; }
+    .nt-feed table.nt-fe td { padding: .3rem .9rem .3rem 0; vertical-align: top; }
+    .nt-feed table.nt-fe td:last-child { white-space: normal !important; }
+    </style>
+{% endblock head %}
+{% block body %}
+<div class="container nt-feed">
+    <h2>Tracker events feed{% if tracker %}: {{ tracker }}{% endif %}</h2>
+    <p>Trackers going down, coming back, turning Up/Bad or recovering, being added or removed. To follow it, copy this address into
+        a feed reader (Feedly, Inoreader, Thunderbird, NetNewsWire and others):</p>
+    <p class="nt-url"><code id="nt-feed-url">{{ feed_url }}</code>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('nt-feed-url').textContent);this.textContent='Copied'">Copy</button></p>
+    <p class="small">One tracker only: add <code>?tracker=</code> and part of its address, e.g. <code>/feed.xml?tracker=opentrackr</code>.
+        Each tracker's page also has a <b>Follow</b> link.</p>
+    {% if evs %}
+    <table class="nt-fe">
+        {% for e in evs %}<tr><td class="text-nowrap" title="{{ e.date }}">{{ e.ago }} ago</td>
+            <td><a href="/tracker/{{ e.host|urlencode }}">{{ e.host }}</a></td><td>{{ e.text }}</td></tr>{% endfor %}
+    </table>
+    {% else %}<p>No events yet.</p>{% endif %}
+</div>
+{% endblock body %}

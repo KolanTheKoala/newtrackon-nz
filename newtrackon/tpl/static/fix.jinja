@@ -1,50 +1,121 @@
 {% extends "base.jinja" %}
 {% block head %}
     <style>
-    .nt-fix h4 { margin-top: 2.2rem; padding-top: .4rem; scroll-margin-top: 80px; }
-    .nt-fix h4:target { color: #ffb070; }
+    .nt-fix h3 { margin-top: 2rem; font-size: 1.35rem; scroll-margin-top: 80px; }
+    .nt-fix h4 { margin-top: 2.4rem; padding-top: .4rem; scroll-margin-top: 80px; border-top: 1px solid rgba(127, 127, 127, .25); }
+    .nt-fix h4:target, .nt-fix h3:target { color: #ffb070; }
     .nt-fix pre { background: rgba(127, 127, 127, .12); padding: .7rem .9rem; border-radius: 6px; font-size: .85rem; white-space: pre-wrap; word-break: break-all; }
     .nt-fix .nt-toc a { margin-right: 1rem; white-space: nowrap; }
+    .nt-fix .nt-plain { border-left: 3px solid #4fc3f7; padding: .1rem 0 .1rem .9rem; margin: .8rem 0; }
+    .nt-fix ol li, .nt-fix ul li { margin-bottom: .35rem; }
+    .nt-fix details { margin: 1rem 0 .5rem; border: 1px solid rgba(127, 127, 127, .3); border-radius: 6px; padding: .5rem .9rem; }
+    .nt-fix details summary { cursor: pointer; font-weight: 600; color: #8ab4f8; }
+    .nt-fix details[open] summary { margin-bottom: .6rem; }
+    .nt-fix .nt-ask { background: rgba(79, 195, 247, .07); border-radius: 6px; padding: .6rem .9rem; margin: .8rem 0; }
+    .nt-fix .nt-ask p:last-child { margin-bottom: 0; }
     </style>
 {% endblock head %}
 {% block body %}
 <div class="container nt-fix">
     <h2>How to fix a tracker</h2>
-    <p>For tracker operators. Each tracker's own page (the <i class="fa-solid fa-chart-line" style="color:#c15cff"></i> icon in the
-        <a href="/">status table</a>) shows exactly what the checks saw. Once you've fixed it, press <b>Check again now</b> there
-        instead of waiting for the next check. The commands below use <code>tracker.example.org</code> port <code>6969</code>: put in your own.</p>
-    <p class="nt-toc">{% for k, v in titles.items() %}<a href="#{{ k }}">{{ v }}</a> {% endfor %}</p>
+    <p>For people who run a tracker. Each problem below starts in plain words, with things to try that don't need the command line,
+        and what to ask your hosting provider if someone else runs the server for you. If you're comfortable with a terminal,
+        open <b>For advanced users</b> in each section for exact commands.</p>
+    <p class="nt-toc">{% for k, v in titles.items() %}<a href="#{{ k }}">{{ v }}</a> {% endfor %}<a href="#removed">Removed and banned</a></p>
+
+    <h3 id="start">Start here</h3>
+    <ol>
+        <li><b>Find your tracker's page.</b> In the <a href="/">status table</a>, click the <i class="fa-solid fa-chart-line" style="color:#c15cff"></i>
+            icon next to it. The page says what's wrong in plain words, shows exactly what the checks saw, and links to the right section here.</li>
+        <li><b>Fix one thing at a time</b>, using the section for your problem.</li>
+        <li><b>Press "Check again now"</b> on the tracker's page. It's checked within a minute or two instead of waiting for the next
+            regular check (which can be hours away for a tracker that's been down a while). You can do this once an hour.</li>
+        <li><b>Give it time.</b> Most statuses clear on the next good check. Up/Bad clears after a few passing tests, and the score
+            (Up/Unreliable, Up/Junk) recovers gradually over about a week of steady answers.</li>
+    </ol>
+    <p>Not sure what your tracker runs on? Most public trackers are <b>opentracker</b>, <b>Chihaya</b>, <b>Torrust</b>
+        or <b>Aquatic</b> on a rented server (a VPS). If a friend or a company set it up, send them the link to the section below
+        that matches your problem: it's written so they can act on it.</p>
+    <p class="small">The advanced examples use <code>tracker.example.org</code> and port <code>6969</code>: put in your own.</p>
 
     <h4 id="no-peers">Hands out no peers (Up/Bad)</h4>
-    <p><b>What we saw:</b> two test clients, in different countries, announce the same random torrent. The second must be told about
-        the first. Yours answered, but left the first one out in 3 or more of the last 6 tests.</p>
-    <p><b>Usual causes:</b> the tracker only serves torrents on a whitelist, or needs a passkey (private tracker); peers are kept per
-        IPv4/IPv6 and not shared; a firewall or proxy hides the clients' real addresses; peers expire before the next announce.</p>
-    <p><b>Check it:</b> announce the same torrent twice with different ports. The second reply should list the first peer
-        (<code>6881</code>). A <code>failure reason</code> such as "torrent not registered" means it's whitelisted.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker answers, but it doesn't do its actual job: introducing people who share the same torrent
+            to each other. Torrent clients that use it don't find anyone through it.</p>
+        <p><b>How we know:</b> two test clients in different countries join the same made-up torrent. The second should be told
+            about the first. Yours left the first one out in 3 or more of the last 6 tests.</p>
+    </div>
+    <p><b>Most likely causes, and what to do:</b></p>
+    <ul>
+        <li><b>It only accepts approved torrents</b> (a "whitelist"), or it's meant to be private and needs a passkey. A public list
+            like this one can only use trackers that accept any torrent. If that's deliberate, the tracker simply isn't public:
+            nothing to fix, and it'll be removed in time.</li>
+        <li><b>It keeps IPv4 and IPv6 users apart</b>, so someone connecting over IPv6 never meets someone on IPv4. Many tracker
+            programs have a setting for this.</li>
+        <li><b>Something in front of it hides users' real addresses</b>, such as a proxy or load balancer, so every user looks like the
+            same address.</li>
+        <li><b>It forgets users too quickly</b>, before they announce again.</li>
+    </ul>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker answers but doesn't share peers between clients
+        (newtrackon.co.nz reports Up/Bad: no peers). Can you check it accepts any torrent, mixes IPv4 and IPv6 peers in one swarm,
+        and sees clients' real IP addresses?"</p></div>
+    <details><summary>For advanced users: command line</summary>
+    <p>Announce the same torrent twice with different ports. The second reply should list the first peer (<code>6881</code>).
+        A <code>failure reason</code> such as "torrent not registered" means it's whitelisted.</p>
 <pre>H='%12%34%56%78%9a%bc%de%f0%12%34%56%78%9a%bc%de%f0%12%34%56%78'
 U='http://tracker.example.org:6969/announce'
 curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000001&amp;port=6881&amp;uploaded=0&amp;downloaded=0&amp;left=0&amp;compact=0"; echo
 curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000002&amp;port=6882&amp;uploaded=0&amp;downloaded=0&amp;left=0&amp;compact=0"; echo</pre>
     <p><b>Fix:</b> allow unknown torrents (for opentracker: build without the whitelist option), and hand out peers from the same swarm
-        regardless of the address family they announced from. The status clears after a few passing tests.</p>
+        regardless of the address family they announced from. If it's behind a reverse proxy, pass the client address through
+        (for example <code>X-Forwarded-For</code>, and configure the tracker to trust it). The status clears after a few passing tests.</p>
+    </details>
 
     <h4 id="fake-peers">Returns fake peers (Up/Bad)</h4>
-    <p><b>What we saw:</b> the test torrent is random and only this site knows it, so the only real peers are our own test clients.
-        Your tracker returned other peers for it, 3 or more checks in a row.</p>
-    <p><b>Usual causes:</b> the tracker pads short peer lists with made-up or stored addresses; it mixes peers from other torrents;
-        a cache or proxy in front of it replays old replies; peers are never expired.</p>
-    <p><b>Check it:</b> announce a torrent nobody has (the first command above, with a hash you make up). The reply should have no
-        peers except, at most, yourself.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker hands out addresses of "people" who aren't really sharing the torrent. Clients waste
+            time trying to connect to them, and downloads look busier than they are.</p>
+        <p><b>How we know:</b> the test torrent is made up and only this site knows it, so the only real users are our own test
+            clients. Yours returned other addresses for it, 3 or more checks in a row.</p>
+    </div>
+    <p><b>Most likely causes, and what to do:</b></p>
+    <ul>
+        <li><b>A "fill" or "padding" option is turned on</b>, which tops up short lists with made-up or old addresses. Turn it off.</li>
+        <li><b>Users from different torrents get mixed together.</b> This is usually a bug or a setting in the tracker program; updating
+            it often helps.</li>
+        <li><b>A cache in front of the tracker</b> (a CDN or caching proxy) replays old answers to everyone. Announces must never be cached.</li>
+        <li><b>Users who left are never forgotten.</b> The tracker should drop users who stop checking in.</li>
+    </ul>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "newtrackon.co.nz reports our tracker returns peers for a torrent
+        nobody else has. Can you turn off any peer padding or caching of announce replies, and make sure peers expire?"</p></div>
+    <details><summary>For advanced users: command line</summary>
+    <p>Announce a torrent nobody has (the first command under <a href="#no-peers">Hands out no peers</a>, with a hash you make up).
+        The reply should have no peers except, at most, yourself.</p>
     <p><b>Fix:</b> turn off any "fill" or "padding" option, keep peer lists per torrent, expire peers that stop announcing, and don't cache
-        announce replies. The status clears as soon as a check sees only real peers.</p>
+        announce replies (<code>Cache-Control: no-store</code> on the announce path). The status clears as soon as a check sees only real peers.</p>
+    </details>
 
     <h4 id="dead-address">Dead IPv4 or IPv6 address (Up/Broken)</h4>
-    <p><b>What we saw:</b> your hostname publishes an address (an A record for IPv4, AAAA for IPv6) that doesn't answer, while the
-        other one does. Clients that pick the dead one can't reach you.</p>
-    <p><b>Usual causes:</b> an old or wrong AAAA/A record; the tracker listens on only one family; a firewall rule exists for one family
-        only (very common with IPv6); the server's IPv6 changed.</p>
-    <p><b>Check it:</b> list the addresses, then try each family.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker's name points to two kinds of address: an older one (IPv4) and a newer one (IPv6).
+            One of them works and the other doesn't. People whose computer picks the broken one can't reach your tracker at all.</p>
+        <p><b>How we know:</b> we check both addresses separately. One answers; the other has failed several checks in a row.</p>
+    </div>
+    <p><b>Most likely causes, and what to do:</b></p>
+    <ul>
+        <li><b>An old or wrong address is still in your domain's settings</b> (the DNS records). In your domain or hosting control panel,
+            look at the records for the tracker's name: an <b>A</b> record is the IPv4 address, an <b>AAAA</b> record is IPv6.
+            Make sure each one is your server's current address, or delete the one you don't use.</li>
+        <li><b>The tracker only listens on one kind of address.</b> This is a setting in the tracker program.</li>
+        <li><b>The firewall only lets one kind through.</b> Very common with IPv6: the port is opened for IPv4 but not for IPv6. Many hosting
+            control panels have separate firewall rules for each.</li>
+        <li><b>The server's IPv6 address changed</b> and the DNS record wasn't updated.</li>
+    </ul>
+    <p>The tracker's page says which one is dead. If you don't need IPv6, deleting the AAAA record is a quick, complete fix.</p>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker answers on IPv4 but not IPv6 (or the other way round). Can you
+        check the DNS records point at the server's current addresses, and that the tracker listens and the firewall is open on both?"</p></div>
+    <details><summary>For advanced users: command line</summary>
+    <p>List the addresses, then try each family.</p>
 <pre>dig +short A tracker.example.org; dig +short AAAA tracker.example.org
 curl -4 -s -m 5 -o /dev/null -w '%{http_code}\n' http://tracker.example.org:6969/announce    # HTTP tracker, IPv4
 curl -6 -s -m 5 -o /dev/null -w '%{http_code}\n' http://tracker.example.org:6969/announce    # HTTP tracker, IPv6</pre>
@@ -64,59 +135,181 @@ except OSError as e:
     print(addr[0], "no answer:", e)
 EOF</pre>
     <p><b>Fix:</b> make the tracker listen on both families (for example bind <code>::</code> as well as <code>0.0.0.0</code>) and open the
-        port for both in the firewall, or remove the record for the family you don't serve. It clears once that address answers.</p>
+        port for both in the firewall (<code>ip6tables</code>/<code>nft</code> rules are separate from IPv4 ones), or remove the record for
+        the family you don't serve. It clears once that address answers.</p>
+    </details>
 
     <h4 id="unreliable">Drops out (Up/Unreliable, Up/Junk)</h4>
-    <p><b>What we saw:</b> it answers, but misses too many checks: the score, which weights the last week most, is under 90
-        (Up/Unreliable) or under 50 (Up/Junk). Going up and down often costs more than one longer outage.</p>
-    <p><b>Usual causes:</b> the process crashes or restarts; it's on a home connection or a dynamic address; it rate-limits or drops some
-        requests when busy; the hostname sometimes points at a dead address.</p>
-    <p><b>Fix:</b> run it under a supervisor that restarts it (systemd, Docker <code>restart: unless-stopped</code>), check its logs and
-        memory, don't rate-limit announces so hard that real requests fail, and give it a fixed address. The tracker page's uptime
-        bars show when it drops out. The score recovers by itself over about a week of steady answers.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker works some of the time, but too often it doesn't answer. Users can't rely on it, so it's
+            marked down the list. Lots of short dropouts count against it more than one longer outage.</p>
+        <p><b>How we know:</b> its score, which counts the last week most, is under 90 (Up/Unreliable) or under 50 (Up/Junk). The
+            uptime bars on its page show when it drops out.</p>
+    </div>
+    <p><b>Most likely causes, and what to do:</b></p>
+    <ul>
+        <li><b>The tracker program crashes or restarts.</b> Make sure it restarts by itself (most hosting panels and Docker have a
+            "restart automatically" option), and look for a pattern: same time every day often means a scheduled job or backup.</li>
+        <li><b>It runs on a home internet connection or a cheap server</b> that goes offline, changes address, or runs out of memory.
+            A small rented server (VPS) with a fixed address is far more dependable.</li>
+        <li><b>It turns away requests when busy</b> (rate limiting set too strictly), so some checks get no answer.</li>
+        <li><b>The name sometimes points at an old address</b>: see <a href="#dead-address">Dead IPv4 or IPv6 address</a>.</li>
+    </ul>
+    <p>Once it's steady, the score climbs back by itself over about a week. There's nothing to reset.</p>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker keeps dropping out (newtrackon.co.nz shows Up/Unreliable). Can you
+        check the logs for crashes, restarts or running out of memory, make sure it restarts automatically, and that rate limits aren't
+        rejecting normal announces?"</p></div>
+    <details><summary>For advanced users</summary>
+    <p>Run it under a supervisor that restarts it (systemd <code>Restart=always</code>, Docker <code>restart: unless-stopped</code>), check
+        <code>journalctl</code> or the container logs and <code>dmesg</code> for OOM kills around the drop times, don't rate-limit announces so
+        hard that real requests fail, and give it a fixed address. A UDP tracker needs enough socket buffer for bursts
+        (<code>net.core.rmem_max</code>).</p>
+    </details>
 
     <h4 id="slow">Slow (Up/Slow)</h4>
-    <p><b>What we saw:</b> it works and is reliable, but announces take 300&nbsp;ms or more on average from the four places latency is
-        measured (or enough to pull its score under 90).</p>
-    <p>This isn't a fault: it's listed and usable, just far from most users or busy. If it's slower than it should be: check the
-        server's load, put it close to its users, and avoid slow chains of proxies in front of an HTTP tracker.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker works and is reliable, but answers slowly for most of the world. It's still listed and
+            usable; it just isn't among the fastest.</p>
+        <p><b>How we know:</b> answers take 300&nbsp;ms or more on average from the four places speed is measured (Oceania, Asia, Europe,
+            North America), or enough to pull its score under 90.</p>
+    </div>
+    <p>This isn't a fault, and often it's simply distance: a tracker in one country is slow from the other side of the world. The latency
+        chart on its page shows each region. If it's slow from everywhere, including nearby: the server may be overloaded, or there's a
+        slow service in front of it (some protection or proxy services add a lot of delay to HTTP trackers).</p>
+    <details><summary>For advanced users</summary>
+    <p>Check the server's load and network, avoid chains of proxies in front of an HTTP tracker, and prefer UDP (much less overhead per
+        announce). Hosting closer to most users helps most.</p>
+    </details>
 
     <h4 id="down-timeout">Down: timeout</h4>
-    <p><b>What we saw:</b> no reply at all within the time limit, from here and from abroad.</p>
-    <p><b>Usual causes:</b> the process isn't running; a firewall drops the packets (a UDP port that isn't open fails exactly like this);
-        the hosting provider blocks the port; the server is overloaded.</p>
-    <p><b>Check it:</b> from a machine outside your network, run the UDP command above or the <code>curl</code> command for HTTP.
-        On the server: <code>ss -lunp | grep 6969</code> (UDP) or <code>ss -ltnp | grep 6969</code> (TCP) shows whether it's listening.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> we knocked and nobody answered at all. Either the tracker isn't running, or something is silently
+            blocking the way to it.</p>
+        <p><b>How we know:</b> no reply within the time limit, from here and from abroad.</p>
+    </div>
+    <p><b>Things to try:</b></p>
+    <ol>
+        <li><b>Is the server on?</b> Look in your hosting provider's control panel; restart the server if it's stopped or unresponsive.</li>
+        <li><b>Is the tracker program running?</b> If it runs in Docker or as a service, restart it.</li>
+        <li><b>Is the port open?</b> The firewall must allow the tracker's port (for example 6969), and for a UDP tracker it must allow
+            <b>UDP</b>, not just TCP. This is the most common cause after a server move or a firewall change. Check both the server's own
+            firewall and any firewall in the hosting control panel.</li>
+        <li><b>Does your provider block it?</b> Some providers block torrent-related ports or traffic. Their terms of service or support
+            can tell you.</li>
+    </ol>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker at port 6969 (UDP) doesn't answer from outside. Is the server
+        up, is the tracker process running, and is UDP 6969 open in every firewall in front of it?"</p></div>
+    <details><summary>For advanced users: command line</summary>
+    <p>From a machine outside your network, run the UDP command under <a href="#dead-address">Dead IPv4 or IPv6 address</a>, or the
+        <code>curl</code> command for HTTP. On the server, <code>ss -lunp | grep 6969</code> (UDP) or <code>ss -ltnp | grep 6969</code> (TCP)
+        shows whether it's listening, and <code>nft list ruleset</code> or <code>iptables -S</code> shows the firewall.</p>
+    </details>
 
     <h4 id="down-refused">Down: connection refused</h4>
-    <p><b>What we saw:</b> the server answered that nothing is listening on that port.</p>
-    <p><b>Usual causes:</b> the tracker isn't running, or listens on a different port or address (for example only <code>127.0.0.1</code>).</p>
-    <p><b>Fix:</b> start it and make it listen on the public address and the port in your announce URL. If you moved it to a new port,
-        you can publish that with a <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP 34</a> DNS record.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> the server is up, but it said "there's nothing here" on the tracker's port. The tracker program isn't
+            running, or it's listening somewhere else.</p>
+        <p><b>How we know:</b> the server actively refused the connection.</p>
+    </div>
+    <p><b>Things to try:</b></p>
+    <ol>
+        <li><b>Start or restart the tracker program.</b> It may have crashed or not started after a reboot; set it to start automatically.</li>
+        <li><b>Check the port.</b> The port in your tracker's address (the number after the colon, such as <code>:6969</code>) must be
+            the one the program uses. If you changed it, update the address you've shared, or submit the new one.</li>
+        <li><b>Check it listens publicly.</b> A tracker set to listen only on "localhost" or <code>127.0.0.1</code> can't be reached from outside.</li>
+    </ol>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Connections to our tracker's port are refused. Is the tracker running, on that
+        port, and listening on the public address?"</p></div>
+    <details><summary>For advanced users</summary>
+    <p>Start it and make it listen on the public address and the port in your announce URL (<code>ss -lunp</code> / <code>ss -ltnp</code>
+        shows what's listening where). If you moved it to a new port, you can publish that with a
+        <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP 34</a> DNS record.</p>
+    </details>
 
     <h4 id="down-dns">Down: DNS</h4>
-    <p><b>What we saw:</b> the hostname doesn't resolve to any address, from here and from public DNS resolvers.</p>
-    <p><b>Usual causes:</b> the domain expired; the record was deleted; a dynamic DNS name wasn't renewed.</p>
-    <p><b>Check it:</b> <code>dig +short A tracker.example.org @1.1.1.1</code> and <code>whois example.org</code> for the expiry date.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker's name doesn't lead anywhere any more. It's like a phone number that's been disconnected:
+            nobody can find the server, even if it's running fine.</p>
+        <p><b>How we know:</b> the name has no address, both here and on public DNS services.</p>
+    </div>
+    <p><b>Things to try:</b></p>
+    <ol>
+        <li><b>Has the domain expired?</b> Log in where you registered the domain (your registrar) and check the expiry date. Renew it,
+            and turn on auto-renew. This is the most common cause.</li>
+        <li><b>Was the record deleted or changed?</b> In the domain's DNS settings, the tracker's name needs an A record (and/or AAAA)
+            pointing at your server.</li>
+        <li><b>Free dynamic DNS names</b> (like duckdns.org or no-ip) stop working if they aren't renewed or the updater stops. Check your
+            account with that service.</li>
+    </ol>
+    <p>After a fix, DNS changes can take up to a few hours to reach everyone.</p>
+    <details><summary>For advanced users: command line</summary>
+    <p><code>dig +short A tracker.example.org @1.1.1.1</code> and <code>whois example.org</code> for the expiry date and nameservers.
+        <code>dig +trace tracker.example.org</code> shows where resolution breaks.</p>
+    </details>
 
     <h4 id="down-tls">Down: TLS / certificate</h4>
-    <p><b>What we saw:</b> an HTTPS tracker whose secure connection failed.</p>
-    <p><b>Usual causes:</b> an expired certificate (a renewal that stopped); a certificate for a different name; a missing intermediate
-        certificate.</p>
-    <p><b>Check it:</b> <code>openssl s_client -connect tracker.example.org:443 -servername tracker.example.org &lt;/dev/null | openssl x509 -noout -dates -subject</code></p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker's address starts with <code>https://</code>, and its security certificate (the thing behind
+            the padlock in a browser) isn't valid, so clients refuse to connect.</p>
+        <p><b>How we know:</b> the secure connection failed.</p>
+    </div>
+    <p><b>Things to try:</b></p>
+    <ol>
+        <li><b>Open the tracker's address in a browser</b> (it won't show a page, but the browser will complain about the certificate).
+            The warning usually says what's wrong: <b>expired</b>, or <b>for a different name</b>.</li>
+        <li><b>Expired:</b> the automatic renewal stopped (very common with free Let's Encrypt certificates). Renew it in your hosting panel
+            or ask whoever set it up.</li>
+        <li><b>Wrong name:</b> the certificate covers your website's name but not the tracker's (for example <code>example.org</code> but not
+            <code>tracker.example.org</code>). Add the tracker's name to the certificate.</li>
+    </ol>
+    <p>If you'd rather not deal with certificates, a plain <code>http://</code> or <code>udp://</code> address works just as well for a tracker.</p>
+    <details><summary>For advanced users: command line</summary>
+    <p><code>openssl s_client -connect tracker.example.org:443 -servername tracker.example.org &lt;/dev/null | openssl x509 -noout -dates -subject</code>
+        shows the dates and name. A missing intermediate certificate also fails here: serve the full chain (<code>fullchain.pem</code>).</p>
+    </details>
 
     <h4 id="down-http">Down: HTTP error</h4>
-    <p><b>What we saw:</b> the web server replied, but with an error code (4xx or 5xx) instead of a tracker reply.</p>
-    <p><b>Usual causes:</b> a reverse proxy sends <code>/announce</code> to the wrong place (404, 502); the tracker behind it is down (502,
-        503); bot protection such as a browser challenge blocks torrent clients (403, 503); rate limiting (429).</p>
-    <p><b>Fix:</b> run the <code>curl</code> command from the first section and read the status and body. Torrent clients can't pass a
-        browser challenge, so turn it off for the announce path.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> a web server answered, but with an error message instead of a tracker answer. It's like reaching
+            reception, being told "not here", and never getting to the person you called.</p>
+        <p><b>How we know:</b> the reply was an error code: 4xx (refused or not found) or 5xx (the server behind it failed).</p>
+    </div>
+    <p><b>What the error usually means:</b></p>
+    <ul>
+        <li><b>403 or 503 with a "checking your browser" page:</b> bot protection (for example Cloudflare's challenge) is blocking torrent
+            clients, which can't pass a browser check. Turn it off for the tracker's address (<code>/announce</code>).</li>
+        <li><b>404:</b> the address is wrong, or the server isn't sending <code>/announce</code> to the tracker program.</li>
+        <li><b>502, 503 or 504:</b> the web server is fine but the tracker program behind it is stopped or overloaded: restart it.</li>
+        <li><b>429:</b> too many requests: rate limiting is too strict.</li>
+    </ul>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker's /announce returns an HTTP error (the code is on the
+        newtrackon.co.nz page). Can you check the web server passes /announce to the tracker, that the tracker is running, and that bot
+        protection doesn't apply to it?"</p></div>
+    <details><summary>For advanced users: command line</summary>
+    <p>Run the <code>curl</code> command under <a href="#no-peers">Hands out no peers</a> and read the status and body. Torrent clients can't
+        pass a browser challenge, so turn it off for the announce path, and check the reverse proxy's <code>location</code> for
+        <code>/announce</code> and its upstream.</p>
+    </details>
 
     <h4 id="down">Down: no usable answer</h4>
-    <p><b>What we saw:</b> a reply that wasn't a valid tracker answer, or an error not covered above. The exact error is on the
-        tracker's page. The checks above (listening, firewall, the <code>curl</code> or UDP command) usually find it.</p>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> something answered, but not like a tracker, or it failed in a way not covered above.</p>
+        <p><b>How we know:</b> the exact error is on the tracker's page.</p>
+    </div>
+    <p>Try the basics: restart the tracker program, make sure the address you've shared (protocol, name, port and the <code>/announce</code>
+        part) matches what it actually runs, and that it's a public tracker (one that needs an account or passkey can't be listed).
+        If the error on the tracker's page mentions a timeout, refusal, DNS, certificate or HTTP code, see that section above.</p>
+    <details><summary>For advanced users</summary>
+    <p>The checks above (listening, firewall, the <code>curl</code> or UDP command) usually find it. A UDP tracker that replies to
+        <code>connect</code> but not <code>announce</code>, or an HTTP tracker that returns non-bencoded data, shows up here.</p>
+    </details>
 
-    <p class="mt-5">A tracker that hasn't answered for 5 days is removed from the list, and can be resubmitted after 30 days.
+    <h3 id="removed">Removed and banned</h3>
+    <p>A tracker is removed from the list when it hasn't answered for <b>5 days</b>, or when it answers so rarely that it's no use
+        (under 15% once dropouts are counted). It's then <b>banned for 30 days</b>: submitting it again is refused until then. Its
+        page still says when and why it was removed, and when it can come back. A tracker turns dark grey in the
+        <a href="/">status table</a> once it's 2 days from removal, so there's still time to fix it. See the <a href="/submitted#banned">banned trackers</a>.</p>
+    <p>Once the ban ends, fix the problem and <a href="/">submit the tracker again</a>: it's checked like any new tracker.
         Questions: see the <a href="/faq">FAQ</a>.</p>
 </div>
 {% endblock %}

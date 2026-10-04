@@ -131,6 +131,15 @@ _BASE = "https://newtrackon.co.nz"
 _FEED_REV = 1791117960
 
 
+def _wants_html():
+    """True when the client asks for HTML before any XML (a browser following a link). Feed readers ask for XML or */*."""
+    acc = (request.headers.get("Accept") or "").lower()
+    if "text/html" not in acc:
+        return False
+    xml = [acc.find(x) for x in ("application/atom+xml", "application/rss+xml", "application/xml", "text/xml") if x in acc]
+    return not xml or acc.find("text/html") < min(xml)
+
+
 def _feed():
     import hashlib
     from datetime import datetime, timezone
@@ -144,6 +153,12 @@ def _feed():
     if types:
         evs = [e for e in evs if e["type"] in types]
     evs = evs[-100:][::-1]
+    if _wants_html():  # a browser opening the link: a readable page (raw XML can't be clicked); feed readers get Atom
+        from flask import make_response, render_template
+        r = make_response(render_template("feed.jinja", evs=[dict(e, ago=_ago(e["t"]), date=_date(e["t"])) for e in evs],
+                                          feed_url=_BASE + request.full_path.rstrip("?"), tracker=tr, title="Tracker events feed"))
+        r.headers["Vary"] = "Accept"
+        return r
     iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     now = int(datetime.now(timezone.utc).timestamp())
     out = ['<?xml version="1.0" encoding="utf-8"?>', '<feed xmlns="http://www.w3.org/2005/Atom">',
@@ -162,7 +177,7 @@ def _feed():
                    f'<published>{iso(e["t"])}</published><updated>{iso(max(e["t"], _FEED_REV))}</updated>'
                    f'<category term="{escape(e["type"])}"/><content type="html">{escape(html)}</content></entry>')
     out.append('</feed>')
-    return Response("\n".join(out), mimetype="application/atom+xml", headers={"Access-Control-Allow-Origin": "*"})
+    return Response("\n".join(out), mimetype="application/atom+xml", headers={"Access-Control-Allow-Origin": "*", "Vary": "Accept"})
 
 
 _QUALITY_ARGS = ("good", "protocol", "ipv4_works", "ipv6_works", "passes_peer_test")
