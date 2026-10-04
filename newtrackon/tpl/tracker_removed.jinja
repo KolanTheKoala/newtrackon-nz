@@ -1,0 +1,52 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <style>
+    .nt-t h2 { word-break: break-all; }
+    .nt-t .nt-badge { font-size: 1rem; padding: .3em .7em; border-radius: 4px; font-weight: 600; background: #000; color: #8b93a1; border: 1px solid #4f5663; }
+    .nt-t dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: 0; }
+    .nt-t dt { font-weight: 600; } .nt-t dd { margin: 0; word-break: break-word; }
+    .nt-days { display: flex; align-items: flex-end; gap: 2px; height: 70px; filter: grayscale(1); }
+    .nt-days div { flex: 1; max-width: 28px; border-radius: 2px 2px 0 0; min-height: 2px; }
+    .nt-up { background: #00c853; } .nt-part { background: #ffa000; } .nt-down { background: #d32f2f; }
+    .nt-axis { display: flex; justify-content: space-between; font-size: .8rem; opacity: .75; }
+    .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
+    .nt-ev td:last-child { white-space: normal !important; }  /* event text wraps on phones */
+    @media (max-width: 576px) { .nt-t dl { grid-template-columns: 1fr; gap: 0; } .nt-t dd { margin-bottom: .45rem; } }
+    </style>
+{% endblock head %}
+{% block body %}
+<div class="container nt-t">
+    <h2 class="mt-2">{{ r.url or host }}</h2>
+    <p class="mb-2">Is it down? <b>Yes: removed from the list on {{ when }}</b> ({{ ago }} ago).</p>
+    <p class="mb-3"><span class="nt-badge">&#x1FAA6; Removed</span></p>
+
+    <dl class="mb-3">
+        <dt>Why</dt><dd>{{ r.reason or "no reason recorded" }}</dd>
+        <dt>Can it come back?</dt>
+        <dd>{% if ban and ban.active and ban.until %}Not until {{ until }} (in {{ left }}): it's banned for 30 days after removal, so submissions are refused until then.
+            {% elif ban and ban.active %}No: it's banned from the list.
+            {% else %}Yes: if it's working again, <a href="/">submit it on the status page</a> and it's checked like any new tracker.{% endif %}</dd>
+        {% if r.country %}<dt>Was located in</dt><dd>{{ r.country }}{% if r.network %} &middot; {{ r.network }}{% endif %}</dd>{% endif %}
+        {% if r.added %}<dt>Listed</dt><dd>{{ nt_date(r.added) }} to {{ when }}</dd>{% endif %}
+    </dl>
+
+    <h5 class="mt-4">Uptime before removal</h5>
+    {% if days %}
+    <p class="small mb-1">Up {{ overall }}% of the time over the {{ ndays }} day{{ "" if ndays == 1 else "s" }} recorded{% if since %}, from {{ since }}{% endif %}.</p>
+    <div class="nt-days">
+        {% for x in days %}<div class="{{ 'nt-up' if x.pct >= 99 else ('nt-part' if x.pct >= 50 else 'nt-down') }}" style="height: {{ [x.pct, 3]|max }}%" title="{{ x.day }}: {{ x.pct }}% up"></div>{% endfor %}
+    </div>
+    <div class="nt-axis"><span>{{ days[0].day }}</span><span>{{ days[-1].day }}</span></div>
+    {% else %}<p>No daily history recorded for it.</p>{% endif %}
+
+    <h5 class="mt-4">Recent events</h5>
+    {% if events %}
+    <table class="nt-ev mb-4">
+        {% for e in events %}<tr><td class="text-nowrap">{{ e.ago }} ago</td><td>{{ e.text }}</td></tr>{% endfor %}
+    </table>
+    {% else %}<p class="mb-4">No events kept for it.</p>{% endif %}
+
+    <p class="small">Trackers are removed after 5 days with no answer, or when they answer too rarely to be of use, and banned for 30 days.
+       See the <a href="/submitted#banned">banned trackers</a> and the <a href="/">trackers listed now</a>.</p>
+</div>
+{% endblock body %}

@@ -54,7 +54,7 @@ def clean_global_state() -> Generator[None]:
 _NT_STATE_DICTS = (
     "PEER_OK", "PEER_FAILS", "FAKE_FAILS", "FAKE_N", "INFLATED", "STALE", "CID_OK", "FAM_FAILS", "FAMS", "DOWN_WHY",
     "ANN_IV", "REGION_LAT", "REGION_SAMPLES", "REGION_TS", "LAT_HIST", "PEER_HIST", "LAST_STATE", "_NT_SKIPS", "_NT_DEL_REASON",
-    "DAILY", "LAST_REC", "_DAILY_SAVE",
+    "DAILY", "LAST_REC", "_DAILY_SAVE", "REMOVED",
 )
 
 

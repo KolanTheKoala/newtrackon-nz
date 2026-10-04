@@ -54,8 +54,10 @@
             <a href="https://www.bittorrent.org/beps/bep_0023.html">compact peer list</a>.
         </p>
         <p>The queue is processed at about 10 seconds per URL tried. If a working UDP version of a tracker already listed over HTTP/HTTPS is submitted, it replaces that entry and keeps its history.</p>
+        {% set bans = nt_bans() %}
         <p>
             <b>Number of trackers in the queue: {{ size }}</b>
+            {% if bans %}&middot; <a href="#banned">{{ bans|length }} banned tracker{{ "" if bans|length == 1 else "s" }}</a>{% endif %}
         </p>
     </div>
     {% if data or pending %}
@@ -85,7 +87,7 @@
                         </tr>
                     {% endfor %}
                     {% for response in data %}
-                        <tr>
+                        <tr{% if response.get("refused") %} class="nt-pending"{% endif %}>
                             <td class="t">
                                 <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
@@ -94,6 +96,10 @@
                             {% if response["status"] == 1 %}
                                 <td class="up">
                                     <b>Accepted</b>
+                                </td>
+                            {% elif response.get("refused") %}
+                                <td class="pending" title="Not checked: refused before it reached the queue">
+                                    <b>Refused</b>
                                 </td>
                             {% else %}
                                 <td class="rejected">
@@ -112,6 +118,19 @@
             </div>
         </div>
     {% endif %}
+    <div class="container mt-4" id="banned">
+        <h4>Banned trackers</h4>
+        <p>Trackers removed for no answer in 5 days, or for answering too rarely to be of use, can't be submitted again for 30 days.</p>
+        {% if bans %}
+        <div class="table-responsive">
+            <table class="table table-sm nt-sub" style="margin-left:0">
+                <thead><tr><th class="u">Tracker</th><th class="t">Removed</th><th>Banned until</th></tr></thead>
+                <tbody>{% for b in bans %}<tr><td class="u"><a href="/tracker/{{ b.host|urlencode }}">{{ b.host }}</a></td>
+                    <td class="t">{{ nt_date(b.removed) }}</td><td>{{ nt_date(b.until) if b.until else "permanent" }}</td></tr>{% endfor %}</tbody>
+            </table>
+        </div>
+        {% else %}<p>None right now.</p>{% endif %}
+    </div>
     <script>
         $(document).ready(function () {
             $(".initially-hidden").css("visibility", "visible");

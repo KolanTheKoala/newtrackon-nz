@@ -481,7 +481,9 @@ class Tracker:
             dead = [df["fam"]] if st != "down" and df.get("n", 0) >= PEER_FAIL_LIMIT and df.get("fam") else []
             prev = LAST_STATE.get(url)
             if self.to_be_deleted:
-                _event(url, "removed", "removed from the list (" + _NT_DEL_REASON.pop(url, "no answer for 5+ days, or too unreliable: under 15% once dropouts are counted") + ")")
+                why = _NT_DEL_REASON.pop(url, "no answer for 5+ days, or too unreliable: under 15% once dropouts are counted")
+                _event(url, "removed", "removed from the list (" + why + ")")
+                _removed_add(self, why)
                 LAST_STATE.pop(url, None)
                 _jsave(LAST_STATE, _LAST_STATE_FILE)
                 return
@@ -1181,6 +1183,37 @@ _LAST_STATE_FILE = "data/last_state.json"
 _ev = _jload(_EVENTS_FILE)
 EVENTS: list = _ev if isinstance(_ev, list) else []
 LAST_STATE: dict = _jload(_LAST_STATE_FILE)
+
+# ---- removed trackers, kept for good so their page can say what happened: {host: {url, t, reason, added, country, network}} ----
+_REMOVED_FILE = "data/removed.json"
+_rm = _jload(_REMOVED_FILE)
+REMOVED: dict = _rm if isinstance(_rm, dict) else {}
+
+
+def _removed_add(t, reason, now=None):
+    host = (t.host or "").lower()
+    if not host:
+        return
+    REMOVED[host] = {"url": t.url, "t": int(now or time()), "reason": reason, "added": int(t.added or 0),
+                     "country": (t.countries or [""])[0], "network": (t.networks or [""])[0]}
+    _jsave(REMOVED, _REMOVED_FILE)
+
+
+def _removed_seed():
+    """Removals from before this record existed, from the event history (which keeps only the last 500 events)."""
+    n = 0
+    for e in EVENTS:
+        h = str(e.get("host") or "").lower()
+        if e.get("type") == "removed" and h and int(e.get("t") or 0) > int((REMOVED.get(h) or {}).get("t") or 0):
+            txt = str(e.get("text") or "")
+            why = txt[len("removed from the list ("):-1] if txt.startswith("removed from the list (") and txt.endswith(")") else txt
+            REMOVED[h] = {"url": e.get("url"), "t": int(e["t"]), "reason": why, "added": 0, "country": "", "network": ""}
+            n += 1
+    if n:
+        _jsave(REMOVED, _REMOVED_FILE)
+
+
+_removed_seed()
 
 
 def _event(url, kind, text):

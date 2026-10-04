@@ -352,9 +352,22 @@ def log_wrong_interval_denial(reason: str) -> None:
     submitted_data.appendleft(debug)
 
 
-# --- show silent refusals on the Submitted page (same-server aliases, bare IPs, names that don't resolve)
+# --- show silent refusals on the Submitted page as Refused: same-server aliases, bare IPs, names that don't resolve,
+# duplicates, banned hosts this site removed (other denylist entries stay private), a full queue
 import logging as _nt_logging
 from time import time as _nt_time
+
+
+def _ban_reason(url: str) -> str | None:
+    """Why a banned host was refused, for hosts this site removed; None (no row) for any other denylist entry."""
+    from newtrackon import ntextra
+    host = (urlparse(url).hostname or "").lower()
+    b = ntextra._ban(host)
+    if not b or not b["active"]:
+        return None
+    if b["until"] is None:
+        return "Banned from the list"
+    return "Banned until %s: removed from the list on %s" % (ntextra._date(b["until"]), ntextra._date(ntextra.T.REMOVED[host]["t"]))
 
 
 class _NtRejectRows(_nt_logging.Filter):
@@ -370,11 +383,21 @@ class _NtRejectRows(_nt_logging.Filter):
                 why = "Bare IP addresses are not accepted, a hostname is needed"
             elif m.startswith("Tracker %s preprocessing failed"):
                 why = str(a[1])[:120]
+            elif _restoring[0]:
+                pass  # re-queuing the saved queue at startup: not a submission
+            elif m.startswith("Tracker %s denied, already in the queue"):
+                why = "Already waiting in the queue"
+            elif m.startswith("Tracker %s denied, already being tracked as %s"):
+                why = "Already listed as %s" % a[1]
+            elif m.startswith("Tracker %s denied, submission queue is full"):
+                why = "The queue is full, please try again later"
+            elif m.startswith("Tracker %s denied, host denylisted"):
+                why = _ban_reason(str(a[0]))
             if why:
                 url, now = str(a[0]), int(_nt_time())
                 dup = any(r.get("url") == url and why in (r.get("info") or []) and now - int(r.get("time") or 0) < 86400 for r in list(submitted_data))
                 if not dup:
-                    submitted_data.appendleft({"url": url, "time": now, "ip": ip or "", "info": [why], "status": 0})
+                    submitted_data.appendleft({"url": url, "time": now, "ip": ip or "", "info": [why], "status": 0, "refused": True})
         except Exception:
             pass
         return True

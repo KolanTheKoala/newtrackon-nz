@@ -527,7 +527,10 @@ def _tracker_page(host):
     host = host.lower()
     t = next((x for x in _trackers() if (x.host or "").lower() == host), None)
     if t is None:
-        abort(404)
+        r = T.REMOVED.get(host)
+        if r is None:
+            abort(404)
+        return _removed_page(host, r)
     d = _detail(t)
     now = int(time.time())
     h = [int(x) for x in (t.historic or [])]
@@ -557,6 +560,73 @@ def _tracker_page(host):
     )
 
 
+_BAN_DAYS = 30  # auto-bans from eviction expire after this (ingest.py)
+
+
+def _ban(host, now=None):
+    """The ban on a host this site removed: {"since", "until" (None = permanent), "active"}, or None.
+    Hosts without a removal record are never shown: manual denylist entries stay private."""
+    import time
+    host = (host or "").lower()
+    if host not in T.REMOVED:
+        return None
+    try:
+        lines = open("data/denylist.txt", encoding="utf-8").read().splitlines()
+    except OSError:
+        return None
+    now = now or time.time()
+    out = None
+    for ln in lines:
+        p = ln.split()
+        if not p or p[0].startswith("#") or p[0].lower() != host:
+            continue
+        if len(p) > 1 and p[1].isdigit():
+            since = int(p[1])
+            b = {"since": since, "until": since + _BAN_DAYS * 86400, "active": now - since <= _BAN_DAYS * 86400}
+        else:
+            b = {"since": None, "until": None, "active": True}
+        if out is None or b["active"] or (b["until"] or 0) > (out["until"] or 0):
+            out = b
+    return out
+
+
+def _bans(now=None):
+    """Active bans on trackers this site removed, soonest to expire first."""
+    out = []
+    for host, r in T.REMOVED.items():
+        b = _ban(host, now)
+        if b and b["active"]:
+            out.append(dict(host=host, url=r.get("url"), removed=r.get("t"), reason=r.get("reason"), **b))
+    return sorted(out, key=lambda x: (x["until"] is None, x["until"] or 0, x["host"]))
+
+
+def _date(ts):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(int(ts), timezone.utc).strftime("%-d %b %Y")
+
+
+def _removed_page(host, r):
+    from flask import render_template
+    import time
+    now = int(time.time())
+    ban = _ban(host, now)
+    rows = T.DAILY.get(r.get("url")) or []
+    days = [{"day": d, "pct": pct} for d, pct, _, _ in rows[-60:]]
+    up = sum(pct * n / 100.0 for _, pct, n, _ in rows)
+    slots = sum(n for _, _, n, _ in rows)
+    when = _date(r["t"])
+    desc = "%s is down: it was removed from the list on %s (%s). Its history, and whether it can be added again." % (host, when, r.get("reason") or "no reason recorded")
+    return render_template(
+        "tracker_removed.jinja", host=host, r=r, ban=ban, now=now, when=when, ago=_ago(r["t"]),
+        until=_date(ban["until"]) if ban and ban.get("until") else None,
+        left=_ago(now - (ban["until"] - now)) if ban and ban.get("until") and ban["active"] else None,  # time left, via the "ago" formatter
+        days=days, overall=round(100.0 * up / slots, 1) if slots else None, ndays=len(rows),
+        since=rows[0][0] if rows else None,
+        events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if (e.get("host") or "").lower() == host][:30],
+        title="Is %s down? Removed from the list" % host, description=desc,
+    )
+
+
 def register(app):
     app.add_url_rule("/tracker/<host>", "nt_tracker", _tracker_page)
     app.add_url_rule("/tracker/<host>/recheck", "nt_recheck", _recheck, methods=["POST"])
@@ -571,7 +641,18 @@ def register(app):
     def api_tracker(host):
         host = host.lower()
         t = next((x for x in _trackers() if (x.host or "").lower() == host), None)
-        r = jsonify(dict(_detail(t), daily=_daily_rows(t.url))) if t is not None else jsonify({"error": "not listed", "host": host})
+        if t is not None:
+            r = jsonify(dict(_detail(t), daily=_daily_rows(t.url)))
+        else:
+            body = {"error": "not listed", "host": host}
+            rm = T.REMOVED.get(host)
+            if rm:
+                ban = _ban(host)
+                body["removed"] = {"url": rm.get("url"), "time": rm.get("t"), "reason": rm.get("reason"),
+                                   "banned_until": (ban or {}).get("until") if ban and ban["active"] else None,
+                                   "banned_permanently": bool(ban and ban["active"] and ban["until"] is None)}
+                body["daily"] = _daily_rows(rm.get("url"))
+            r = jsonify(body)
         if t is None:
             r.status_code = 404
         r.headers["Access-Control-Allow-Origin"] = "*"
@@ -584,6 +665,8 @@ def register(app):
         [e for e in T.EVENTS if days is None or e.get("t", 0) >= __import__("time").time() - days * 86400][-n:]))
     app.jinja_env.globals["nt_rowcls"] = _rowcls
     app.jinja_env.globals["nt_dying"] = _dying
+    app.jinja_env.globals["nt_bans"] = _bans
+    app.jinja_env.globals["nt_date"] = _date
     app.jinja_env.globals["nt_state"] = _statekey
     app.add_url_rule("/feed.xml", "nt_feed", _feed)
     app.add_url_rule("/feed", "nt_feed2", _feed)
