@@ -163,13 +163,13 @@
             var t = d.t, h = host(t.url), lat = t.latency_ms != null ? t.latency_ms + ' ms' : '-';
             tip.innerHTML = '<b>' + esc(t.url) + '</b><br>' + esc(STATUS_TEXT[t.status] || t.status) + ' &middot; score ' +
                 Math.round(t.score) + ' &middot; ' + esc(lat) + '<br>' + esc((t.countries || [])[0] || '') +
-                '<br><a href="/#q=' + encodeURIComponent(h) + '">Show in table &rarr;</a>';
+                '<br><a href="/tracker/' + encodeURIComponent(h) + '">Tracker page &rarr;</a> &middot; <a href="/#q=' + encodeURIComponent(h) + '">in the table</a>';
             var r = box.getBoundingClientRect();
             tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 280) + 'px';
             tip.style.top = (e.clientY - r.top + 14) + 'px';
             tip.style.display = 'block';
         }).on('mouseleave', later)
-          .on('click', function (e, d) { location.href = '/#q=' + encodeURIComponent(host(d.t.url)); });
+          .on('click', function (e, d) { location.href = '/tracker/' + encodeURIComponent(host(d.t.url)); });
         tip.addEventListener('mouseenter', function () { clearTimeout(hideTimer); });
         tip.addEventListener('mouseleave', later);
 

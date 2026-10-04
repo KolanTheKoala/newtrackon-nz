@@ -1,0 +1,89 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <link rel="stylesheet" crossorigin="anonymous"
+          href="https://cdnjs.cloudflare.com/ajax/libs/flag-icons/7.5.0/css/flag-icons.min.css"
+          integrity="sha512-+WVTaUIzUw5LFzqIqXOT3JVAc5SrMuvHm230I9QAZa6s+QRk8NDPswbHo2miIZj3yiFyV9lAgzO1wVrjdoO4tw==">
+    <style>
+    .nt-t h2 { word-break: break-all; }
+    .nt-t .nt-badge { font-size: 1rem; padding: .3em .7em; border-radius: 4px; font-weight: 600; }
+    .nt-t .nt-badge.green { background: #051b11; color: #00e676; border: 1px solid #75b798; }
+    .nt-t .nt-badge.orange { background: #331a00; color: #ffb070; border: 1px solid #ffb070; }
+    .nt-t .nt-badge.offline { background: #000; color: #bbb; border: 1px solid #666; }
+    .nt-t dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: 0; }
+    .nt-t dt { font-weight: 600; } .nt-t dd { margin: 0; word-break: break-word; }
+    .nt-days { display: flex; align-items: flex-end; gap: 3px; height: 70px; }
+    .nt-days div { flex: 1; max-width: 28px; border-radius: 2px 2px 0 0; min-height: 2px; }
+    .nt-strip { display: flex; gap: 1px; height: 18px; }
+    .nt-strip div { flex: 1; border-radius: 1px; }
+    .nt-up { background: #00c853; } .nt-part { background: #ffa000; } .nt-down { background: #d32f2f; }
+    .nt-axis { display: flex; justify-content: space-between; font-size: .8rem; opacity: .75; }
+    .nt-chart text { fill: currentColor; font-size: 11px; opacity: .75; }
+    .nt-chart .grid { stroke: currentColor; stroke-opacity: .15; }
+    .nt-legend span { margin-right: 1.2rem; white-space: nowrap; }
+    .nt-legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: .35rem; }
+    .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
+    </style>
+{% endblock head %}
+{% block body %}
+<div class="container nt-t">
+    <h2 class="mt-2">{{ t.url }}</h2>
+    <p class="mb-3">
+        <span class="nt-badge {{ row }}">{{ status_text }}</span>
+        &nbsp; Score <b>{{ d.score|round|int }}</b>
+        {% if d.latency_ms is not none %} &middot; <b>{{ d.latency_ms }} ms</b>{% endif %}
+        {% if d.country_codes %} &middot; <span class="fi fi-{{ d.country_codes[0] }}"></span> {{ d.countries[0] if d.countries else '' }}{% endif %}
+        &middot; <a href="/#q={{ t.host|urlencode }}">Show in the table</a> &middot; <a href="/map">Map</a>
+    </p>
+    {% if d.down_reason %}<p>Down: {{ d.down_reason }}</p>{% endif %}
+    {% if d.problems %}<p>Problems: {{ d.problems|join(', ') }}</p>{% endif %}
+
+    <h5 class="mt-4">Uptime, last {{ days|length }} days</h5>
+    {% if days %}
+    <div class="nt-days">
+        {% for x in days %}<div class="{{ 'nt-up' if x.pct >= 99 else ('nt-part' if x.pct >= 50 else 'nt-down') }}" style="height: {{ [x.pct, 3]|max }}%"
+             title="{{ 'Last 24 hours' if x.ago == 0 else (x.ago|string + '–' + (x.ago + 1)|string + ' days ago') }}: {{ x.pct }}% up"></div>{% endfor %}
+    </div>
+    <div class="nt-axis"><span>{{ days|length }} days ago</span><span>now</span></div>
+    {% else %}<p>Not enough history yet (listed {{ history_days }} days).</p>{% endif %}
+
+    <h5 class="mt-4">Last 48 hours</h5>
+    <div class="nt-strip">
+        {% for x in recent %}<div class="{{ 'nt-up' if x > 0 else 'nt-down' }}" title="{{ ((recent|length - loop.index) / 2)|round(1) }} h ago: {{ 'up' if x > 0 else 'down' }}"></div>{% endfor %}
+    </div>
+    <div class="nt-axis"><span>{{ (recent|length / 2)|round|int }} h ago</span><span>now</span></div>
+
+    <h5 class="mt-4">Latency by region</h5>
+    {% if chart %}
+    <svg class="nt-chart" viewBox="0 0 {{ chart.w }} {{ chart.h }}" width="100%" role="img" aria-label="Latency by region over time">
+        {% for g in chart.grid %}<line class="grid" x1="{{ chart.pad }}" x2="{{ chart.w - 8 }}" y1="{{ g.y }}" y2="{{ g.y }}"/><text x="{{ chart.pad - 4 }}" y="{{ g.y + 4 }}" text-anchor="end">{{ g.ms }}</text>{% endfor %}
+        {% for tk in chart.ticks %}<text x="{{ tk.x }}" y="{{ chart.h - 4 }}" text-anchor="middle">{{ tk.label }}</text>{% endfor %}
+        {% for l in chart.lines %}
+            {% for pts in l.parts %}<polyline fill="none" stroke="{{ l.color }}" stroke-width="2" stroke-linejoin="round" points="{{ pts }}"/>{% endfor %}
+            {% for c in l.dots %}{% set xy = c[0].split(',') %}<circle cx="{{ xy[0] }}" cy="{{ xy[1] }}" r="2.5" fill="{{ l.color }}"/>{% endfor %}
+        {% endfor %}
+    </svg>
+    <div class="nt-legend">{% for l in chart.lines %}<span><i style="background: {{ l.color }}"></i>From {{ l.region }}: {{ l.last }} ms now</span>{% endfor %}</div>
+    <p class="small mt-1">Announce round trip, in ms, from each place latency is measured. Recorded every 2 hours, kept 30 days.</p>
+    {% else %}<p>No latency measured yet.</p>{% endif %}
+
+    <h5 class="mt-4">Details</h5>
+    <dl>
+        <dt>IP addresses</dt><dd>{{ d.ips|join(', ') or '—' }}</dd>
+        <dt>Network</dt><dd>{{ d.networks|join(', ') or '—' }}</dd>
+        <dt>Located in</dt><dd>{{ d.countries|join(', ') or '—' }}</dd>
+        <dt>IPv4 / IPv6</dt><dd>{{ d.families.v4|replace('_', ' ') }} / {{ d.families.v6|replace('_', ' ') }}</dd>
+        <dt>Peer test</dt><dd>{{ d.peer_test.latest }} (passed {{ d.peer_test.passed }} of the last {{ d.peer_test.of }})</dd>
+        <dt>Checked every</dt><dd>{{ (d.check_interval_s / 60)|round|int }} min, last {{ checked_ago }} ago</dd>
+        {% if d.announce_interval_s %}<dt>Announce interval</dt><dd>{{ (d.announce_interval_s / 60)|round|int }} min</dd>{% endif %}
+        <dt>Listed</dt><dd>{{ added_ago }} ago</dd>
+        {% if d.same_operator_as %}<dt>Same operator as</dt><dd>{% for u in d.same_operator_as %}{{ u }}{% if not loop.last %}<br>{% endif %}{% endfor %}</dd>{% endif %}
+    </dl>
+
+    <h5 class="mt-4">Recent events</h5>
+    {% if events %}
+    <table class="nt-ev mb-4">
+        {% for e in events %}<tr><td class="text-nowrap">{{ e.ago }} ago</td><td>{{ e.text }}</td></tr>{% endfor %}
+    </table>
+    {% else %}<p class="mb-4">No status changes recorded recently.</p>{% endif %}
+</div>
+{% endblock %}

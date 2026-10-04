@@ -901,6 +901,42 @@ def _region_set(url, d):
     REGION_LAT[url] = {k: med[k] for k in sorted(med, key=lambda x: (x != "Oceania", x))}
     _jsave(REGION_LAT, _REGION_FILE)
     _jsave(REGION_SAMPLES, _REGION_TS_FILE)
+    _lat_hist_add(url, now)
+
+
+# Latency history for the tracker page: {url: {region: [[ts, ms], ...]}}, the region's current median
+# at most once per LAT_HIST_STEP, kept LAT_HIST_DAYS. Seeded from the 48 h of samples above.
+_LAT_HIST_FILE = "data/lat_hist.json"
+LAT_HIST_STEP = 7200
+LAT_HIST_DAYS = 30
+_lh = _jload(_LAT_HIST_FILE)
+LAT_HIST: dict = _lh if isinstance(_lh, dict) else {}
+
+
+def _lat_hist_add(url, now):
+    per = LAT_HIST.get(url)
+    if per is None:  # first time: start from the recent samples
+        per = LAT_HIST[url] = {reg: [[ts - ts % LAT_HIST_STEP, ms] for ts, ms in ss] for reg, ss in (REGION_SAMPLES.get(url) or {}).items()}
+        for reg, ss in per.items():
+            per[reg] = list({x[0]: x for x in ss}.values())
+    changed = False
+    slot = now - now % LAT_HIST_STEP
+    for reg, ms in (REGION_LAT.get(url) or {}).items():
+        h = per.setdefault(reg, [])
+        if h and h[-1][0] >= slot:
+            continue
+        h.append([slot, int(ms)])
+        changed = True
+    if changed:
+        for u in list(LAT_HIST):  # prune old samples, and trackers removed from the list (nothing new for 30 days)
+            p = LAT_HIST[u]
+            for reg in list(p):
+                p[reg] = [x for x in p[reg] if now - x[0] <= LAT_HIST_DAYS * 86400]
+                if not p[reg]:
+                    p.pop(reg)
+            if not p:
+                LAT_HIST.pop(u)
+        _jsave(LAT_HIST, _LAT_HIST_FILE)
 
 
 _PSL2 = {"co.nz", "org.nz", "net.nz", "co.uk", "org.uk", "com.au", "net.au", "org.au", "co.jp", "com.br", "com.cn",

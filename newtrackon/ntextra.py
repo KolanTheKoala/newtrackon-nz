@@ -190,7 +190,78 @@ def _filter_tags(t):
             "region": " ".join(sorted(regions_of(t.country_codes))), "fast": " ".join(fast)}
 
 
+_STATUS_TEXT = {"up_good": "Up/Good", "up_new": "Up/New", "up_slow": "Up/Slow", "up_unreliable": "Up/Unreliable",
+                "up_junk": "Up/Junk", "up_bad": "Up/Bad", "up_broken": "Up/Broken", "down": "Down"}
+_REGION_COLOR = {"Oceania": "#00e5ff", "Asia": "#ffb300", "Europe": "#ce93d8", "North America": "#66bb6a"}
+_SLOTS_PER_DAY = 48  # historic holds one up/down value per 30 minutes
+
+
+def _uptime_days(historic, days=20):
+    """Share of up slots per 24 h, oldest first, counted back from now; only whole days that have data."""
+    h = [int(x) for x in (historic or [])]
+    out = []
+    for k in range(min(days, len(h) // _SLOTS_PER_DAY)):
+        chunk = h[len(h) - _SLOTS_PER_DAY * (k + 1):len(h) - _SLOTS_PER_DAY * k]
+        out.append({"ago": k, "pct": round(100 * sum(1 for x in chunk if x > 0) / len(chunk))})
+    return out[::-1]
+
+
+def _latency_chart(hist, now, w=900, h=220, pad=36):
+    """Per-region latency lines as SVG coordinates. A gap of 3+ missing samples breaks the line."""
+    series = {reg: ss for reg, ss in (hist or {}).items() if ss}
+    if not series:
+        return None
+    t0 = min(ss[0][0] for ss in series.values())
+    t0 = min(t0, now - 2 * 86400)
+    top = max(max(ms for _, ms in ss) for ss in series.values())
+    top = max(50, int(top * 1.15 / 50 + 1) * 50)
+    x = lambda ts: pad + (w - pad - 8) * (ts - t0) / max(1, now - t0)
+    y = lambda ms: 8 + (h - 8 - 22) * (1 - ms / top)
+    lines = []
+    for reg in sorted(series, key=lambda r: (r != "Oceania", r)):
+        parts, cur, prev = [], [], None
+        for ts, ms in series[reg]:
+            if prev is not None and ts - prev > 3 * T.LAT_HIST_STEP and cur:
+                parts.append(cur)
+                cur = []
+            cur.append("%.1f,%.1f" % (x(ts), y(ms)))
+            prev = ts
+        parts.append(cur)
+        lines.append({"region": reg, "color": _REGION_COLOR.get(reg, "#bbb"), "parts": [" ".join(c) for c in parts if len(c) > 1],
+                      "dots": [c for c in parts if len(c) == 1], "last": series[reg][-1][1]})
+    grid = [{"ms": v, "y": round(y(v), 1)} for v in range(0, top + 1, max(50, top // 4 // 50 * 50))]
+    span_days = (now - t0) / 86400
+    ticks = [{"x": round(x(now - d * 86400), 1), "label": "now" if d == 0 else "%dd ago" % d}
+             for d in range(0, int(span_days) + 1, max(1, int(span_days) // 6 or 1))]
+    return {"w": w, "h": h, "pad": pad, "lines": lines, "grid": grid, "ticks": ticks}
+
+
+def _ago(epoch):
+    return T._dur(epoch).replace("\u2007", "").strip()
+
+
+def _tracker_page(host):
+    from flask import abort, render_template
+    import time
+    host = host.lower()
+    t = next((x for x in _trackers() if (x.host or "").lower() == host), None)
+    if t is None:
+        abort(404)
+    d = _detail(t)
+    now = int(time.time())
+    h = [int(x) for x in (t.historic or [])]
+    return render_template(
+        "tracker.jinja", t=t, d=d, status_text=_STATUS_TEXT.get(d["status"], d["status"]), row=_rowcls(t),
+        days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
+        chart=_latency_chart(T.LAT_HIST.get(t.url), now),
+        events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],
+        added_ago=_ago(t.added or now), checked_ago=_ago(t.last_checked or now),
+        now=now, title=t.host + " - newTrackon",
+    )
+
+
 def register(app):
+    app.add_url_rule("/tracker/<host>", "nt_tracker", _tracker_page)
     app.jinja_env.globals["nt_tags"] = _filter_tags
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
     app.jinja_env.globals["nt_events"] = lambda n=10: list(reversed(T.EVENTS[-n:]))
