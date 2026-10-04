@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: newTrackon API
-  version: "2.0_NZ"
+  version: "2.1_NZ"
   description: |
     API for retrieving and submitting trackers to newTrackon (Wellington NZ mirror).
 
@@ -110,7 +110,7 @@ paths:
       tags: [Recommended]
       description: >-
         Everything the site knows about each tracker - status (up_good / up_new / up_slow / up_unreliable / up_junk / up_broken / up_bad / down) and problems, score, latency
-        and latency by city, IP families, peer-test record, fake-peer streak, flags, the tracker's own announce interval,
+        and latency by region, IP families, peer-test record, fake-peer streak, flags, the tracker's own announce interval,
         availability stats, same-operator group, IPs, countries, networks and regions. Accepts the region filters too.
       parameters:
         - $ref: "#/components/parameters/Region"
@@ -155,6 +155,33 @@ paths:
                       networks: {}
                       added: {}
                       last_checked: {}
+  /tracker/{host}:
+    get:
+      summary: Full state of one tracker as JSON (NZ mirror)
+      tags: [Recommended]
+      description: >-
+        The same object /details gives for each tracker, for one host - handy for watching your own tracker
+        from your monitoring. The host is case-insensitive.
+      parameters:
+        - name: host
+          in: path
+          required: true
+          description: The tracker's hostname, e.g. tracker.opentrackr.org
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The tracker's state (same fields as one /details entry).
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: 'Not on the list. Body: {"error": "not listed", "host": "..."}'
+          content:
+            application/json:
+              schema:
+                type: object
   /feed.xml:
     servers:  # feed-root-server: the feed lives at the site root, not under /api
       - url: https://newtrackon.co.nz

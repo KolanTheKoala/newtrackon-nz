@@ -4,7 +4,7 @@
         <meta charset="utf-8">
         <title>{% if title %}{{ title }} – Wellington NZ Mirror{% else %}newTrackon – Wellington NZ Mirror{% endif %}</title>
         <link rel="canonical" href="https://newtrackon.co.nz{{ request.path }}">
-        <meta name="description" content="New Zealand (Wellington) mirror of newTrackon — public BitTorrent tracker status from an NZ vantage point.">
+        <meta name="description" content="{{ description or 'New Zealand (Wellington) mirror of newTrackon — public BitTorrent tracker status from an NZ vantage point.' }}">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#131A60">
         <meta name="author" content="Miguel Angel Corral Peltzer">

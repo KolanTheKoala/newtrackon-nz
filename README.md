@@ -26,6 +26,9 @@ Up/Good, Up/Slow, Up/Unreliable, Up/New, Up/Junk, Up/Broken, Up/Bad, Down.
 flapping ones every 15 minutes, dead ones backing off to 4 h. History is kept per 30-minute slot, so how
 often a tracker is checked doesn't skew its score.
 
+**Monitor health** on the status and About pages: checks in the last hour, the latest check, which regions are
+measuring, or a clear notice when the monitor itself is offline.
+
 **Latency from four places**: Americas, Europe, Asia and Oceania (needs VPN exits; without them only
 this server's own latency is measured).
 
@@ -34,14 +37,14 @@ this server's own latency is measured).
 | Page | |
 |---|---|
 | `/` | Current status of every tracker. Full table on desktop, one card per tracker on phones. |
-| `/tracker/<host>` | Uptime by day and for 48 h, latency history by region, score breakdown, details, recent events, "check again now". |
+| `/tracker/<host>` | "Is it down?" answer, uptime by day and for 48 h, latency history by region, score breakdown, details, recent events, "check again now", and a Follow link (Atom feed of that tracker's changes). |
 | `/fix` | What each problem means and how a tracker operator fixes it. |
 | `/list`, `/api` | Ready-made lists, with the same filters as the main table. |
 | `/map` | Where the trackers are. |
 | `/feed.xml` | Atom feed of status changes (`?tracker=<host>` for one tracker). Optional Telegram alerts. |
 
 **API** (`/api.yml`, OpenAPI, version `2.0_NZ`): upstream's lists plus `/api/clean` (clean list for
-torrent clients) and `/api/details` (every tracker's full state as JSON). Lists take filters:
+torrent clients), `/api/details` (every tracker's full state as JSON) and `/api/tracker/<host>` (one tracker's). Lists take filters:
 `region=` (americas, europe, asia-pacific), `fast_from=` / `fast_from_ms=`, `good`, `protocol`,
 `ipv4_works`, `ipv6_works`, `passes_peer_test`.
 

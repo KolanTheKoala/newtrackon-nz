@@ -329,6 +329,40 @@ def _ago(epoch):
     return T._dur(epoch).replace("\u2007", "").strip()
 
 
+_MEASURED_FROM = ("Oceania", "Asia", "Europe", "North America")
+
+
+def _monitor_health():
+    """For the status and About pages: is this monitor working right now? Region names only, never exits or cities."""
+    import time
+    from newtrackon import persistence
+    now = time.time()
+    times = [int(r.get("time", 0) or 0) for r in list(persistence.raw_data) if isinstance(r, dict)]
+    last = max(times) if times else 0
+    latest: dict = {}
+    for per in list(T.LAT_HIST.values()):
+        for reg, ss in (per or {}).items():
+            if ss:
+                latest[reg] = max(latest.get(reg, 0), ss[-1][0])
+    online = bool(T._ONLINE[1]) or now - T._ONLINE[0] > 3600  # the offline flag is only trusted while fresh
+    return {
+        "online": online,
+        "checks_hour": sum(1 for x in times if x >= now - 3600),
+        "last_ago": _ago(last) if last else None,
+        "regions": [r for r in _MEASURED_FROM if latest.get(r, 0) >= now - 6 * 3600],
+    }
+
+
+def _is_it_down(t):
+    """The honest one-line answer for the tracker page and its search snippet."""
+    import time
+    now = int(time.time())
+    if t.status == 1:
+        since = int(t.last_downtime or t.added or now)
+        return False, _ago(since)
+    return True, _ago(int(t.last_uptime or t.added or now))
+
+
 def _tracker_page(host):
     from flask import abort, render_template
     import time
@@ -339,13 +373,26 @@ def _tracker_page(host):
     d = _detail(t)
     now = int(time.time())
     h = [int(x) for x in (t.historic or [])]
+    from datetime import datetime, timezone
+    from urllib.parse import quote
+    down, down_for = _is_it_down(t)
+    st_txt = _STATUS_TEXT.get(d["status"], d["status"])
+    if down:
+        desc = "%s is down: no answer for %s. Live uptime and latency history, checked from New Zealand around the clock." % (t.host, down_for)
+    else:
+        desc = "%s is up (%s, score %d%s) and has been for %s. Live uptime and latency history, checked from New Zealand around the clock." % (
+            t.host, st_txt, round(float(t.uptime or 0)), (", %d ms" % d["latency_ms"]) if d.get("latency_ms") is not None else "", down_for)
+    ld = {"@context": "https://schema.org", "@type": "WebPage", "name": "Is %s down? Live tracker status" % t.host,
+          "description": desc, "url": "https://newtrackon.co.nz/tracker/" + quote(t.host, safe=".-"),
+          "dateModified": datetime.fromtimestamp(int(t.last_checked or now), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     return render_template(
         "tracker.jinja", t=t, d=d, status_text=_STATUS_TEXT.get(d["status"], d["status"]), row=_rowcls(t),
         days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
         chart=_latency_chart(T.LAT_HIST.get(t.url), now),
         events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],
         added_ago=_ago(t.added or now), checked_ago=_ago(t.last_checked or now),
-        now=now, title=t.host + " - newTrackon",
+        now=now, title="Is %s down? Live tracker status" % t.host,
+        description=desc, ld=ld, down=down, down_for=down_for,
         fix=_fix_anchor(t), fix_title=FIX_TITLES.get(_fix_anchor(t) or ""), evidence=_evidence(t, d),
         recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
         recheck_last=_recheck_host.get(host),
@@ -356,6 +403,17 @@ def register(app):
     app.add_url_rule("/tracker/<host>", "nt_tracker", _tracker_page)
     app.add_url_rule("/tracker/<host>/recheck", "nt_recheck", _recheck, methods=["POST"])
     app.add_url_rule("/fix", "nt_fix", _fix_page)
+    app.jinja_env.globals["nt_health"] = _monitor_health
+
+    @app.route("/api/tracker/<host>")
+    def api_tracker(host):
+        host = host.lower()
+        t = next((x for x in _trackers() if (x.host or "").lower() == host), None)
+        r = jsonify(_detail(t)) if t is not None else jsonify({"error": "not listed", "host": host})
+        if t is None:
+            r.status_code = 404
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        return r
     app.jinja_env.globals["nt_fix"] = _fix_anchor
     app.jinja_env.globals["nt_fix_titles"] = FIX_TITLES
     app.jinja_env.globals["nt_tags"] = _filter_tags
