@@ -17,6 +17,8 @@ from newtrackon.utils import format_time
 
 logger = getLogger("newtrackon")
 
+HISTORIC_SLOTS = 1440  # historic keeps one up/down value per 30-minute slot: 30 days
+
 max_downtime: int = 47304000  # 1.5 years
 IP_HISTORY_WINDOW: int = 48 * 3600  # 48 hours in seconds
 
@@ -102,7 +104,7 @@ class Tracker:
             countries=[],
             country_codes=[],
             networks=[],
-            historic=deque(maxlen=1000),
+            historic=deque(maxlen=HISTORIC_SLOTS),
             added=int(time()),
             last_downtime=0,
             last_uptime=0,
@@ -523,6 +525,7 @@ class Tracker:
 
     def _record(self, status: int) -> None:
         now = int(time())
+        LAST_REC[self.url] = now  # the newest slot's time, for the daily summary
         # history can't be older than the tracker: trim legacy per-check entries beyond its age in slots
         cap = max(1, (now - int(self.added or 0)) // self.SLOT + 2) if self.added else None
         while cap and len(self.historic) > cap:
@@ -973,6 +976,85 @@ def _lat_hist_add(url, now):
             if not p:
                 LAT_HIST.pop(u)
         _jsave(LAT_HIST, _LAT_HIST_FILE)
+
+
+# Daily summary, kept forever (the rest of the history is rolling): {url: [[day, up %, slots, {region: ms}], ...]}.
+# Worked out from historic (one value per 30-minute slot, the newest at the tracker's last record), so nothing is
+# written per check, and days missed while the app was down are filled in later (up to the 30 days historic holds).
+# A day is added once the tracker's history has moved past it. Latency is the median of that day's LAT_HIST values,
+# each already a 48 h median: a typical figure, not that day's own median. Trackers removed from the list keep theirs.
+_DAILY_FILE = "data/daily.json"
+LAST_REC: dict = {}  # url -> time of its newest slot (in memory; after a restart, last_checked stands in)
+_DAILY_SAVE: dict = {}  # "t": time of the last save, "dirty": unsaved days (recomputed from historic if lost)
+
+
+def _daily_load(path):
+    """Load the permanent summary. A file that exists but can't be read is moved aside, never overwritten."""
+    if not _os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            d = _json.load(f)
+        if isinstance(d, dict):
+            return d
+    except Exception:
+        pass
+    bad = "%s.bad-%d" % (path, int(time()))
+    try:
+        _os.replace(path, bad)
+    except OSError:
+        pass
+    logger.error("daily summary: %s unreadable, kept as %s; starting a new one", path, bad)
+    return {}
+
+
+DAILY: dict = _daily_load(_DAILY_FILE)
+
+
+def _day(ts):
+    from time import gmtime, strftime
+    return strftime("%Y-%m-%d", gmtime(ts))
+
+
+def daily_update(trackers, now=None):
+    """Add each tracker's completed UTC days that DAILY doesn't have yet. Saves at most every 15 minutes."""
+    now = int(now or time())
+    for t in trackers:
+        h = list(t.historic or [])
+        newest = int(LAST_REC.get(t.url) or t.last_checked or 0) // Tracker.SLOT  # slot number of the newest value
+        if not h or newest <= 0:
+            continue
+        cur = _day(newest * Tracker.SLOT)
+        rows = DAILY.get(t.url) or []
+        last = rows[-1][0] if rows else ""
+        if last and last >= _day(newest * Tracker.SLOT - 86400):
+            continue  # up to date: every day before the newest slot's is in
+        days: dict = {}
+        for p, v in enumerate(reversed(h)):
+            d = _day((newest - p) * Tracker.SLOT)
+            if d >= cur:
+                continue  # the newest slot's day isn't over yet
+            if d <= last:
+                break
+            c = days.setdefault(d, [0, 0])
+            c[0] += 1 if float(v) > 0 else 0
+            c[1] += 1
+        if not days:
+            continue
+        lat = LAT_HIST.get(t.url) or {}
+        for d in sorted(days):
+            up, n = days[d]
+            lm = {}
+            for reg, ss in lat.items():
+                v = sorted(ms for ts, ms in ss if _day(ts) == d)
+                if v:
+                    lm[reg] = v[len(v) // 2]
+            rows.append([d, round(100.0 * up / n, 1), n, lm])
+        DAILY[t.url] = rows
+        _DAILY_SAVE["dirty"] = True
+    if _DAILY_SAVE.get("dirty") and now - _DAILY_SAVE.get("t", 0) >= 900:
+        _jsave(DAILY, _DAILY_FILE)
+        _DAILY_SAVE.update(t=now, dirty=False)
 
 
 _PSL2 = {"co.nz", "org.nz", "net.nz", "co.uk", "org.uk", "com.au", "net.au", "org.au", "co.jp", "com.br", "com.cn",

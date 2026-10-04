@@ -196,7 +196,7 @@ _REGION_COLOR = {"Oceania": "#00e5ff", "Asia": "#ffb300", "Europe": "#ce93d8", "
 _SLOTS_PER_DAY = 48  # historic holds one up/down value per 30 minutes
 
 
-def _uptime_days(historic, days=20):
+def _uptime_days(historic, days=30):
     """Share of up slots per 24 h, oldest first, counted back from now; only whole days that have data."""
     h = [int(x) for x in (historic or [])]
     out = []
@@ -204,6 +204,42 @@ def _uptime_days(historic, days=20):
         chunk = h[len(h) - _SLOTS_PER_DAY * (k + 1):len(h) - _SLOTS_PER_DAY * k]
         out.append({"ago": k, "pct": round(100 * sum(1 for x in chunk if x > 0) / len(chunk))})
     return out[::-1]
+
+
+_REGION_ORDER = ("Oceania", "Asia", "Europe", "North America")
+
+
+def _daily_rows(url):
+    """The permanent daily summary as dicts, oldest first."""
+    return [{"day": d, "uptime": pct, "slots": n, "latency_ms": lat} for d, pct, n, lat in (T.DAILY.get(url) or [])]
+
+
+def _long_term(url, min_days=30):
+    """Long-term uptime for the tracker page: a strip of the last 365 days and a table by month, newest first.
+    Only once the summary covers more than min_days (the 30-day charts already show less)."""
+    from datetime import date
+    rows = T.DAILY.get(url) or []
+    if len(rows) <= min_days:
+        return None
+    months: dict = {}
+    for d, pct, n, lat in rows:
+        m = months.setdefault(d[:7], {"up": 0.0, "n": 0, "days": 0, "lat": {}})
+        m["up"] += pct * n / 100.0
+        m["n"] += n
+        m["days"] += 1
+        for reg, ms in lat.items():
+            m["lat"].setdefault(reg, []).append(ms)
+    out = []
+    for k in sorted(months, reverse=True):
+        m = months[k]
+        regs = sorted(m["lat"], key=lambda r: (_REGION_ORDER.index(r) if r in _REGION_ORDER else 9, r))
+        out.append({"month": date(int(k[:4]), int(k[5:]), 1).strftime("%b %Y"), "days": m["days"],
+                    "pct": round(100.0 * m["up"] / m["n"], 1) if m["n"] else 0,
+                    "lat": [(r, sorted(m["lat"][r])[len(m["lat"][r]) // 2]) for r in regs]})
+    up = sum(pct * n / 100.0 for _, pct, n, _ in rows)
+    slots = sum(n for _, _, n, _ in rows)
+    return {"since": rows[0][0], "days": len(rows), "pct": round(100.0 * up / slots, 1) if slots else 0,
+            "strip": [{"day": d, "pct": pct} for d, pct, _, _ in rows[-365:]], "months": out}
 
 
 def _latency_chart(hist, now, w=900, h=220, pad=60):  # pad fits 3-digit labels at the phone font size
@@ -359,7 +395,7 @@ def _monitor_health():
     }
 
 
-_RANK_DAYS = 14  # historic keeps 1000 slots (~20.8 days), so 14 days is the longest window every ranked tracker has
+_RANK_DAYS = 14  # historic keeps 30 days, but trackers need 7 to rank; 14 days is the longest window every ranked tracker has
 _RANK_MIN_DAYS = 7  # newer trackers aren't ranked: a short perfect record would beat a long good one
 
 
@@ -498,7 +534,7 @@ def _tracker_page(host):
     return render_template(
         "tracker.jinja", t=t, d=d, status_text=_STATUS_TEXT.get(d["status"], d["status"]), row=_rowcls(t),
         days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
-        chart=_latency_chart(T.LAT_HIST.get(t.url), now),
+        chart=_latency_chart(T.LAT_HIST.get(t.url), now), long=_long_term(t.url),
         events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],
         added_ago=_ago(t.added or now), checked_ago=_ago(t.last_checked or now), checked_txt=_ago_txt(t.last_checked or now),
         now=now, title="Is %s down? Live tracker status" % t.host,
@@ -523,7 +559,7 @@ def register(app):
     def api_tracker(host):
         host = host.lower()
         t = next((x for x in _trackers() if (x.host or "").lower() == host), None)
-        r = jsonify(_detail(t)) if t is not None else jsonify({"error": "not listed", "host": host})
+        r = jsonify(dict(_detail(t), daily=_daily_rows(t.url))) if t is not None else jsonify({"error": "not listed", "host": host})
         if t is None:
             r.status_code = 404
         r.headers["Access-Control-Allow-Origin"] = "*"

@@ -52,7 +52,7 @@ class TestUptimeDays:
         assert ntextra._uptime_days(h) == [{"ago": 2, "pct": 0}, {"ago": 1, "pct": 50}, {"ago": 0, "pct": 100}]
 
     def test_limit_and_short_history(self) -> None:
-        assert len(ntextra._uptime_days([1] * 48 * 30)) == 20
+        assert len(ntextra._uptime_days([1] * 48 * 40)) == 30
         assert ntextra._uptime_days([1] * 47) == []
 
 

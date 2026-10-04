@@ -305,7 +305,7 @@ class TestFromUrl:
         assert tracker.host == "tracker.example.com"
         assert tracker.ips == ["93.184.216.34"]
         assert isinstance(tracker.historic, deque)
-        assert tracker.historic.maxlen == 1000
+        assert tracker.historic.maxlen == 1440  # 30 days of 30-minute slots
         assert tracker.added is not None
 
     def test_from_url_resolves_ipv4(self, mock_network: dict[str, MagicMock]) -> None:

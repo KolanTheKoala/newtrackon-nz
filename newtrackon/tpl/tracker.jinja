@@ -16,6 +16,8 @@
     .nt-strip { display: flex; gap: 1px; height: 18px; }
     .nt-strip div { flex: 1; border-radius: 1px; }
     .nt-up { background: #00c853; } .nt-part { background: #ffa000; } .nt-down { background: #d32f2f; }
+    .nt-long { display: block; height: 60px; } .nt-long .nt-up { fill: #00c853; } .nt-long .nt-part { fill: #ffa000; } .nt-long .nt-down { fill: #d32f2f; }
+    .nt-months td.l { white-space: normal !important; font-size: .85rem; }
     .nt-axis { display: flex; justify-content: space-between; font-size: .8rem; opacity: .75; }
     .nt-chart text { fill: currentColor; font-size: 11px; opacity: .75; }
     .nt-chart .grid { stroke: currentColor; stroke-opacity: .15; }
@@ -74,6 +76,20 @@
     </div>
     <div class="nt-axis"><span>{{ days|length }} days ago</span><span>now</span></div>
     {% else %}<p>Not enough history yet (listed {{ history_days }} days).</p>{% endif %}
+
+    {% if long %}
+    <h5 class="mt-4">Long-term uptime</h5>
+    <p class="small mb-1">Up {{ long.pct }}% of the time over {{ long.days }} days, since {{ long.since }}.</p>
+    <svg class="nt-long" viewBox="0 0 {{ long.strip|length }} 100" preserveAspectRatio="none" width="100%" role="img" aria-label="Daily uptime, last {{ long.strip|length }} days">
+        {% for x in long.strip %}{% set ht = [x.pct, 3]|max %}<rect x="{{ loop.index0 }}" y="{{ 100 - ht }}" width="1" height="{{ ht }}" class="{{ 'nt-up' if x.pct >= 99 else ('nt-part' if x.pct >= 50 else 'nt-down') }}"><title>{{ x.day }}: {{ x.pct }}% up</title></rect>{% endfor %}
+    </svg>
+    <div class="nt-axis"><span>{{ long.strip[0].day }}</span><span>{{ long.strip[-1].day }}</span></div>
+    <table class="table table-sm nt-months mt-2" style="margin-left:0">
+        <thead><tr><th>Month</th><th>Uptime</th><th>Typical latency</th></tr></thead>
+        <tbody>{% for m in long.months %}<tr><td>{{ m.month }}{% if m.days < 28 %} <span class="small">({{ m.days }} d)</span>{% endif %}</td><td>{{ m.pct }}%</td>
+            <td class="l">{% for r, ms in m.lat %}{{ r }} {{ ms }}&nbsp;ms{% if not loop.last %} &middot; {% endif %}{% else %}&ndash;{% endfor %}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% endif %}
 
     <h5 class="mt-4">Last 48 hours</h5>
     <div class="nt-strip">

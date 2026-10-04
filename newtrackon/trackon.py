@@ -36,6 +36,10 @@ def update_outdated_trackers() -> NoReturn:
     while True:
         now = int(time())
         trackers_all = db.get_all_data()
+        try:
+            _T.daily_update(trackers_all, now)
+        except Exception:
+            logger.exception("daily summary failed")
         trackers_outdated: list[Tracker] = []
         forced = set(_T.FORCE_CHECK)
         for tracker in trackers_all:

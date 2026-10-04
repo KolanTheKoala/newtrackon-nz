@@ -27,7 +27,7 @@ class TestTrackerJson:
     def test_same_fields_as_details(self, flask_client: FlaskClient) -> None:
         one = flask_client.get("/api/tracker/akl.example").get_json()
         all_ = {d["host"]: d for d in flask_client.get("/api/details").get_json()}
-        assert set(one) == set(all_["akl.example"])
+        assert set(one) == set(all_["akl.example"]) | {"daily"}  # plus the permanent daily summary
 
     def test_unknown_host(self, flask_client: FlaskClient) -> None:
         r = flask_client.get("/api/tracker/nope.example")

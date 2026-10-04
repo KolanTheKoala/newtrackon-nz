@@ -161,7 +161,9 @@ paths:
       tags: [Recommended]
       description: >-
         The same object /details gives for each tracker, for one host - handy for watching your own tracker
-        from your monitoring. The host is case-insensitive.
+        from your monitoring. The host is case-insensitive. It also has "daily": one entry per UTC day, oldest first,
+        kept for good - day, uptime (% of 30-minute slots up), slots (how many were recorded that day) and
+        latency_ms (typical announce round trip from each region).
       parameters:
         - name: host
           in: path
@@ -171,7 +173,7 @@ paths:
             type: string
       responses:
         "200":
-          description: The tracker's state (same fields as one /details entry).
+          description: The tracker's state (same fields as one /details entry, plus daily).
           content:
             application/json:
               schema:

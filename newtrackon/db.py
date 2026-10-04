@@ -124,7 +124,7 @@ def get_all_data() -> list[Tracker]:
             uptime=row["uptime"],
             countries=cast(list[str] | None, json.loads(row["country"])),
             country_codes=cast(list[str] | None, json.loads(row["country_code"])),
-            historic=deque(cast(list[int], json.loads(row["historic"])), maxlen=1000),
+            historic=deque(cast(list[int], json.loads(row["historic"])), maxlen=_tracker.HISTORIC_SLOTS),
             added=row["added"],
             networks=cast(list[str] | None, json.loads(row["network"])),
             last_downtime=row["last_downtime"],

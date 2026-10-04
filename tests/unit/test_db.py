@@ -314,7 +314,7 @@ class TestGetAllData:
 
         assert isinstance(trackers[0].historic, deque)
         assert list(trackers[0].historic) == sample_tracker_dict["historic"]
-        assert trackers[0].historic.maxlen == 1000
+        assert trackers[0].historic.maxlen == 1440  # 30 days of 30-minute slots
 
     @pytest.mark.usefixtures("patched_db", "inserted_sample_tracker")
     def test_get_all_data_returns_correct_scalar_fields(self, sample_tracker_dict: TrackerDataDict) -> None:
