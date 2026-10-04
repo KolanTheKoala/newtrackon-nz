@@ -156,6 +156,11 @@ EOF</pre>
         <li><b>It runs on a home internet connection or a cheap server</b> that goes offline, changes address, or runs out of memory.
             A small rented server (VPS) with a fixed address is far more dependable.</li>
         <li><b>It turns away requests when busy</b> (rate limiting set too strictly), so some checks get no answer.</li>
+        <li><b>It's overloaded.</b> A popular tracker gets a lot of traffic, and some of it is junk: badly behaved clients that
+            announce many times a second, or deliberate floods. A few addresses can use up most of the server's capacity, and then
+            ordinary requests (and our checks) go unanswered. Limiting how fast any one address may send requests protects
+            everyone else. Set the limit generously: many real users can share one address (mobile networks and some ISPs), and
+            a normal client announces only every half hour or so. See <b>For advanced users</b> below for examples.</li>
         <li><b>The name sometimes points at an old address</b>: see <a href="#dead-address">Dead IPv4 or IPv6 address</a>.</li>
     </ul>
     <p>Once it's steady, the score climbs back by itself over about a week. There's nothing to reset.</p>
@@ -167,6 +172,47 @@ EOF</pre>
         <code>journalctl</code> or the container logs and <code>dmesg</code> for OOM kills around the drop times, don't rate-limit announces so
         hard that real requests fail, and give it a fixed address. A UDP tracker needs enough socket buffer for bursts
         (<code>net.core.rmem_max</code>).</p>
+    <p><b>Limiting abusive clients.</b> First find out whether a few addresses really cause the load
+        (<code>tcpdump -nn -c 20000 udp port 6969 | awk '{print $3}' | sed 's/\.[0-9]*$//' | sort | uniq -c | sort -rn | head</code>,
+        or count lines per address in an HTTP tracker's access log). Then:</p>
+    <p><b>UDP tracker: a per-address rate limit in the firewall</b> (nftables). It drops only the excess above the limit, and
+        forgets an address 2 minutes after it calms down. Don't use long bans for UDP: a UDP sender's address can be forged, so an
+        attacker could get innocent addresses banned. Load it with <code>nft -f /etc/nftables.d/tracker.nft</code> (and include it
+        from <code>/etc/nftables.conf</code> to keep it after a reboot); <code>nft list set inet tracker_limit rate4</code> shows
+        who's being limited.</p>
+<pre># /etc/nftables.d/tracker.nft: per-address rate limit for a UDP tracker on port 6969
+table inet tracker_limit {
+    set rate4 { type ipv4_addr; flags dynamic, timeout; timeout 2m; }
+    set rate6 { type ipv6_addr; flags dynamic, timeout; timeout 2m; }
+    chain input {
+        type filter hook input priority filter - 5; policy accept;
+        # over 20 packets/s (bursts of 60 allowed) from one address: drop the excess
+        udp dport 6969 update @rate4 { ip saddr limit rate over 20/second burst 60 packets } counter drop
+        udp dport 6969 update @rate6 { ip6 saddr limit rate over 20/second burst 60 packets } counter drop
+    }
+}</pre>
+    <p><b>HTTP tracker: fail2ban on the web server's access log.</b> TCP addresses can't be forged, so a timed ban is safe here.
+        This bans an address for an hour after 300 announces or scrapes in a minute. Test the filter first with
+        <code>fail2ban-regex /var/log/nginx/access.log /etc/fail2ban/filter.d/tracker-flood.conf</code>, then
+        <code>fail2ban-client reload</code>; <code>fail2ban-client status tracker-flood</code> lists the bans.</p>
+<pre># /etc/fail2ban/filter.d/tracker-flood.conf: every announce or scrape in an nginx/Apache access log
+[Definition]
+failregex = ^&lt;HOST&gt; \S+ \S+ \[\] &quot;GET /(?:announce|scrape)\b
+ignoreregex =</pre>
+<pre># /etc/fail2ban/jail.d/tracker-flood.local: ban addresses announcing absurdly often (HTTP trackers only)
+[tracker-flood]
+enabled  = true
+port     = http,https
+filter   = tracker-flood
+logpath  = /var/log/nginx/access.log
+# 300 announces in 60 s from one address = 5 a second, sustained. A normal client announces every
+# 30 minutes or so, so even hundreds of users behind one shared (CGNAT) address stay far below this.
+findtime = 60
+maxretry = 300
+bantime  = 1h</pre>
+    <p>Both thresholds are deliberately high; lower them only if you can see abuse slipping under them. If many different
+        addresses each send a little (a real distributed flood), per-address limits won't help: that needs your hosting
+        provider's DDoS protection.</p>
     </details>
 
     <h4 id="slow">Slow (Up/Slow)</h4>
