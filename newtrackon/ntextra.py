@@ -89,6 +89,15 @@ def _state(t):
     return "up_good", bad
 
 
+def _fam_answers(url):
+    """{"v4": (answered, of), ...} over the last checks, for each published family that missed some; {} if none did."""
+    out = {}
+    for k, h in (T.FAM_HIST.get(url) or {}).items():
+        if h and sum(h) < len(h):
+            out[k] = (sum(h), len(h))
+    return out
+
+
 def _fams(t):
     f, df, out = T.FAMS.get(t.url) or {}, T.FAM_FAILS.get(t.url) or {}, {}
     for k in ("v4", "v6"):
@@ -394,6 +403,11 @@ def _evidence(t, d):
         ips = [ip for ip in (t.ips or []) if (":" in ip) == (fam == "6")]
         out.append("Its IPv%s address%s %s didn't answer in %d checks in a row, while IPv%s did."
                    % (fam, "es" if len(ips) > 1 else "", ", ".join(ips) or "(published in DNS)", df.get("n", 0), "4" if fam == "6" else "6"))
+        a = _fam_answers(t.url).get("v" + fam)
+        if a:
+            out.append("IPv%s answered in %d of its last %d checks%s." % (fam, a[0], a[1], ": mostly dead, not just a blip" if a[0] * 4 <= a[1] else ""))
+        if df.get("ok"):
+            out.append("It answered again in the last check; one more good check in a row and it counts as working.")
     if fix == "down-rejected":
         out.append("It answers, but with an error message of its own instead of a tracker reply, so clients can't use it.")
     if fix.startswith("down"):
@@ -626,7 +640,7 @@ def _tracker_page(host):
           "description": desc, "url": "https://newtrackon.co.nz/tracker/" + quote(t.host, safe=".-"),
           "dateModified": datetime.fromtimestamp(int(t.last_checked or now), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     return render_template(
-        "tracker.jinja", t=t, d=d, status_text=_STATUS_TEXT.get(d["status"], d["status"]), row=_rowcls(t),
+        "tracker.jinja", t=t, d=d, fam_answers=_fam_answers(t.url), status_text=_STATUS_TEXT.get(d["status"], d["status"]), row=_rowcls(t),
         days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
         chart=_latency_chart(T.LAT_HIST.get(t.url), now), long=_long_term(t.url),
         events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],

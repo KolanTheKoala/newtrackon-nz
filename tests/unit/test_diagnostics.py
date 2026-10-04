@@ -202,3 +202,30 @@ class TestBadStretch:
         T._bad_seed(now)
         assert T.LAST_STATE[url]["bad_since"] == int(now - 50.8 * self.H)  # the 21 h recovery 72 h ago counts; the 1 h blips don't
         assert 2.1 < T._nt_upbad_days(url, now) < 2.2
+
+
+class TestFamilyHysteresis:
+    U = "udp://fam.example:1/announce"
+
+    def test_one_good_check_does_not_revive_a_dead_family(self) -> None:
+        for _ in range(3):
+            T._fam_set(self.U, "v6", {"v4": True, "v6": False})
+        assert T.FAM_FAILS[self.U]["n"] == 3
+        T._fam_set(self.U, None, {"v4": True, "v6": True})
+        assert T.FAM_FAILS[self.U]["n"] == 3 and T.FAM_FAILS[self.U]["ok"] == 1  # still counted dead
+        T._fam_set(self.U, "v6", {"v4": True, "v6": False})
+        assert T.FAM_FAILS[self.U] == {"n": 4, "fam": "v6"}  # the lucky answer is forgotten
+        T._fam_set(self.U, None, {"v4": True, "v6": True})
+        T._fam_set(self.U, None, {"v4": True, "v6": True})
+        assert self.U not in T.FAM_FAILS  # two good checks in a row: working again
+
+    def test_unconfirmed_failures_clear_at_once(self) -> None:
+        T._fam_set(self.U, "v6", {"v4": True, "v6": False})
+        T._fam_set(self.U, None, {"v4": True, "v6": True})
+        assert self.U not in T.FAM_FAILS
+
+    def test_answer_history_for_the_page(self) -> None:
+        for v6 in (False, True, False, False):
+            T._fam_set(self.U, None, {"v4": True, "v6": v6})
+        assert T.FAM_HIST[self.U] == {"v4": [1, 1, 1, 1], "v6": [0, 1, 0, 0]}
+        assert ntextra._fam_answers(self.U) == {"v6": (1, 4)}

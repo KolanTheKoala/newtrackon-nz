@@ -887,6 +887,12 @@ def _nt_down_why_set(url, raw):
 
 
 
+FAM_RECOVER = 2  # good checks in a row before a confirmed-dead address counts as answering again (3 failures confirm it)
+FAM_HIST_N = 20  # per-family answers kept for the tracker page ("IPv6 answered 2 of the last 20 checks")
+_FAM_HIST_FILE = "data/fam_hist.json"
+FAM_HIST: dict = _jload(_FAM_HIST_FILE)  # url -> {"v4": [1, 0, ...], "v6": [...]}, oldest first
+
+
 def _fam_set(url, fam, res=None):
     if res is not None and FAMS.get(url) != res:
         if res:
@@ -894,8 +900,20 @@ def _fam_set(url, fam, res=None):
         else:
             FAMS.pop(url, None)
         _jsave(FAMS, _FAMS_FILE)
+    if res:
+        h = FAM_HIST.setdefault(url, {})
+        for k, v in res.items():
+            h[k] = (h.get(k, []) + [1 if v else 0])[-FAM_HIST_N:]
+        _jsave(FAM_HIST, _FAM_HIST_FILE)
     cur = FAM_FAILS.get(url)
-    new = {"n": (cur or {}).get("n", 0) + 1 if (cur or {}).get("fam") == fam else 1, "fam": fam} if fam else None
+    if fam:
+        new = {"n": (cur or {}).get("n", 0) + 1 if (cur or {}).get("fam") == fam else 1, "fam": fam}
+    elif cur and cur.get("n", 0) >= PEER_FAIL_LIMIT:
+        # confirmed dead: one lucky answer doesn't bring it back, FAM_RECOVER good checks in a row do
+        ok = cur.get("ok", 0) + 1
+        new = None if ok >= FAM_RECOVER else dict(cur, ok=ok)
+    else:
+        new = None
     if new != cur:
         if new:
             FAM_FAILS[url] = new
