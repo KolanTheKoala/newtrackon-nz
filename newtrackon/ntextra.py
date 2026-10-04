@@ -236,6 +236,93 @@ def _latency_chart(hist, now, w=900, h=220, pad=36):
     return {"w": w, "h": h, "pad": pad, "lines": lines, "grid": grid, "ticks": ticks}
 
 
+FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peers", "dead-address": "Dead IPv4 or IPv6 address",
+              "unreliable": "Drops out (Up/Unreliable, Up/Junk)", "slow": "Slow (Up/Slow)", "down-timeout": "Down: timeout",
+              "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
+              "down-http": "Down: HTTP error", "down": "Down: no usable answer"}
+
+
+def _fix_anchor(t):
+    """The /fix section for this tracker's current problem, or None if it's healthy."""
+    try:
+        st, bad = _state(t)
+    except Exception:
+        return None
+    if st == "down":
+        return T.FIX_DOWN.get(T._nt_down_label(T.DOWN_WHY.get(t.url)), "down")
+    if st == "up_bad":
+        return "fake-peers" if "fake_peers" in bad else "no-peers"
+    if st == "up_broken":
+        return "dead-address"
+    if st in ("up_unreliable", "up_junk"):
+        return "unreliable"
+    if st == "up_slow":
+        return "slow"
+    return None
+
+
+def _evidence(t, d):
+    """What the checks saw, in plain words, for the tracker page's problem box."""
+    out = []
+    fix = _fix_anchor(t)
+    if fix is None:
+        return out
+    if fix == "no-peers":
+        out.append("Peer test passed %d of the last %d times: a second test client wasn't told about the first." % (d["peer_test"]["passed"], d["peer_test"]["of"]))
+    if fix == "fake-peers":
+        out.append("Returned %s peer(s) for a random torrent only this site knows, %d checks in a row."
+                   % (d["fake_peers"]["latest"] if d["fake_peers"]["latest"] is not None else "unknown", d["fake_peers"]["streak"]))
+    if fix == "dead-address":
+        df = T.FAM_FAILS.get(t.url) or {}
+        fam = str(df.get("fam", "?"))[-1]
+        ips = [ip for ip in (t.ips or []) if (":" in ip) == (fam == "6")]
+        out.append("Its IPv%s address%s %s didn't answer in %d checks in a row, while IPv%s did."
+                   % (fam, "es" if len(ips) > 1 else "", ", ".join(ips) or "(published in DNS)", df.get("n", 0), "4" if fam == "6" else "6"))
+    if fix.startswith("down"):
+        out.append("Last error: %s" % (T.DOWN_WHY.get(t.url) or "no answer"))
+        out.append("Last successful check: %s." % (_ago(t.last_uptime) + " ago" if t.last_uptime else "none recorded"))
+    if fix == "unreliable":
+        h = [int(x) for x in (t.historic or [])][-336:]
+        if h:
+            out.append("Up in %d%% of checks over the last %s days; score %d." % (round(100 * sum(1 for x in h if x > 0) / len(h)), round(len(h) / 48, 1), round(float(t.uptime or 0))))
+    if fix == "slow":
+        lat = T.REGION_LAT.get(t.url) or {}
+        if lat:
+            out.append("Latency by region: " + ", ".join("%s %d ms" % (k, v) for k, v in lat.items()) + ".")
+    return out
+
+
+# "Check again now" on the tracker page: once per tracker per hour, and RECHECK_PER_HOUR in all
+RECHECK_PER_HOUR = 20
+_recheck_host: dict = {}
+_recheck_all: list = []
+
+
+def _recheck(host):
+    from flask import abort, redirect
+    import time
+    host = host.lower()
+    t = next((x for x in db.get_all_data() if (x.host or "").lower() == host), None)
+    if t is None:
+        abort(404)
+    now = time.time()
+    _recheck_all[:] = [x for x in _recheck_all if now - x < 3600]
+    last = _recheck_host.get(host, 0)
+    if now - last < 3600:
+        return redirect("/tracker/%s?recheck=wait&m=%d" % (host, (3600 - (now - last)) // 60 + 1), 303)
+    if len(_recheck_all) >= RECHECK_PER_HOUR:
+        return redirect("/tracker/%s?recheck=busy" % host, 303)
+    _recheck_host[host] = now
+    _recheck_all.append(now)
+    T.FORCE_CHECK.add(t.url)
+    return redirect("/tracker/%s?recheck=queued" % host, 303)
+
+
+def _fix_page():
+    from flask import render_template
+    return render_template("static/fix.jinja", active="", titles=FIX_TITLES)
+
+
 def _ago(epoch):
     return T._dur(epoch).replace("\u2007", "").strip()
 
@@ -257,11 +344,18 @@ def _tracker_page(host):
         events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],
         added_ago=_ago(t.added or now), checked_ago=_ago(t.last_checked or now),
         now=now, title=t.host + " - newTrackon",
+        fix=_fix_anchor(t), fix_title=FIX_TITLES.get(_fix_anchor(t) or ""), evidence=_evidence(t, d),
+        recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
+        recheck_last=_recheck_host.get(host),
     )
 
 
 def register(app):
     app.add_url_rule("/tracker/<host>", "nt_tracker", _tracker_page)
+    app.add_url_rule("/tracker/<host>/recheck", "nt_recheck", _recheck, methods=["POST"])
+    app.add_url_rule("/fix", "nt_fix", _fix_page)
+    app.jinja_env.globals["nt_fix"] = _fix_anchor
+    app.jinja_env.globals["nt_fix_titles"] = FIX_TITLES
     app.jinja_env.globals["nt_tags"] = _filter_tags
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
     app.jinja_env.globals["nt_events"] = lambda n=10: list(reversed(T.EVENTS[-n:]))

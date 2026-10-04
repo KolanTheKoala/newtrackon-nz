@@ -18,6 +18,7 @@
     .nt-chart .grid { stroke: currentColor; stroke-opacity: .15; }
     .nt-legend span { margin-right: 1.2rem; white-space: nowrap; }
     .nt-legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: .35rem; }
+    .nt-problem { border: 1px solid #ffb070; background: rgba(255, 145, 0, .08); border-radius: 6px; padding: .8rem 1rem; margin-bottom: 1rem; }
     .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
     </style>
 {% endblock head %}
@@ -31,8 +32,22 @@
         {% if d.country_codes %} &middot; <span class="fi fi-{{ d.country_codes[0] }}"></span> {{ d.countries[0] if d.countries else '' }}{% endif %}
         &middot; <a href="/#q={{ t.host|urlencode }}">Show in the table</a> &middot; <a href="/map">Map</a>
     </p>
-    {% if d.down_reason %}<p>Down: {{ d.down_reason }}</p>{% endif %}
-    {% if d.problems %}<p>Problems: {{ d.problems|join(', ') }}</p>{% endif %}
+    {% if fix %}
+    <div class="nt-problem">
+        <h5>What's wrong: {{ fix_title }}</h5>
+        <ul class="mb-2">{% for e in evidence %}<li>{{ e }}</li>{% endfor %}</ul>
+        <a href="/fix#{{ fix }}" class="btn btn-sm btn-warning"><i class="fa-solid fa-wrench"></i> How to fix it</a>
+    </div>
+    {% endif %}
+    <form method="post" action="/tracker/{{ t.host|urlencode }}/recheck" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-rotate"></i> Check again now</button>
+        <span class="small">
+        {% if recheck == 'queued' %}Queued: it's checked next, usually within a minute or two. Reload this page to see the result.
+        {% elif recheck == 'wait' %}It was checked on request recently; try again in {{ recheck_m }} min.
+        {% elif recheck == 'busy' %}Too many requested checks this hour; try again later.
+        {% else %}Fixed something? Ask for a check now instead of waiting for the next one (once an hour per tracker).{% endif %}
+        </span>
+    </form>
 
     <h5 class="mt-4">Uptime, last {{ days|length }} days</h5>
     {% if days %}

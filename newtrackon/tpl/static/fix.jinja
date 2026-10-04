@@ -1,0 +1,123 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <style>
+    .nt-fix h4 { margin-top: 2.2rem; padding-top: .4rem; scroll-margin-top: 80px; }
+    .nt-fix h4:target { color: #ffb070; }
+    .nt-fix pre { background: rgba(127, 127, 127, .12); padding: .7rem .9rem; border-radius: 6px; font-size: .85rem; white-space: pre-wrap; word-break: break-all; }
+    .nt-fix .nt-toc a { margin-right: 1rem; white-space: nowrap; }
+    </style>
+{% endblock head %}
+{% block body %}
+<div class="container nt-fix">
+    <h2>How to fix a tracker</h2>
+    <p>For tracker operators. Each tracker's own page (the <i class="fa-solid fa-chart-line"></i> icon in the
+        <a href="/">status table</a>) shows exactly what the checks saw. Once you've fixed it, press <b>Check again now</b> there
+        instead of waiting for the next check. The commands below use <code>tracker.example.org</code> port <code>6969</code>: put in your own.</p>
+    <p class="nt-toc">{% for k, v in titles.items() %}<a href="#{{ k }}">{{ v }}</a> {% endfor %}</p>
+
+    <h4 id="no-peers">Hands out no peers (Up/Bad)</h4>
+    <p><b>What we saw:</b> two test clients, in different countries, announce the same random torrent. The second must be told about
+        the first. Yours answered, but left the first one out in 3 or more of the last 6 tests.</p>
+    <p><b>Usual causes:</b> the tracker only serves torrents on a whitelist, or needs a passkey (private tracker); peers are kept per
+        IPv4/IPv6 and not shared; a firewall or proxy hides the clients' real addresses; peers expire before the next announce.</p>
+    <p><b>Check it:</b> announce the same torrent twice with different ports. The second reply should list the first peer
+        (<code>6881</code>). A <code>failure reason</code> such as "torrent not registered" means it's whitelisted.</p>
+<pre>H='%12%34%56%78%9a%bc%de%f0%12%34%56%78%9a%bc%de%f0%12%34%56%78'
+U='http://tracker.example.org:6969/announce'
+curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000001&amp;port=6881&amp;uploaded=0&amp;downloaded=0&amp;left=0&amp;compact=0"; echo
+curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000002&amp;port=6882&amp;uploaded=0&amp;downloaded=0&amp;left=0&amp;compact=0"; echo</pre>
+    <p><b>Fix:</b> allow unknown torrents (for opentracker: build without the whitelist option), and hand out peers from the same swarm
+        regardless of the address family they announced from. The status clears after a few passing tests.</p>
+
+    <h4 id="fake-peers">Returns fake peers (Up/Bad)</h4>
+    <p><b>What we saw:</b> the test torrent is random and only this site knows it, so the only real peers are our own test clients.
+        Your tracker returned other peers for it, 3 or more checks in a row.</p>
+    <p><b>Usual causes:</b> the tracker pads short peer lists with made-up or stored addresses; it mixes peers from other torrents;
+        a cache or proxy in front of it replays old replies; peers are never expired.</p>
+    <p><b>Check it:</b> announce a torrent nobody has (the first command above, with a hash you make up). The reply should have no
+        peers except, at most, yourself.</p>
+    <p><b>Fix:</b> turn off any "fill" or "padding" option, keep peer lists per torrent, expire peers that stop announcing, and don't cache
+        announce replies. The status clears as soon as a check sees only real peers.</p>
+
+    <h4 id="dead-address">Dead IPv4 or IPv6 address (Up/Broken)</h4>
+    <p><b>What we saw:</b> your hostname publishes an address (an A record for IPv4, AAAA for IPv6) that doesn't answer, while the
+        other one does. Clients that pick the dead one can't reach you.</p>
+    <p><b>Usual causes:</b> an old or wrong AAAA/A record; the tracker listens on only one family; a firewall rule exists for one family
+        only (very common with IPv6); the server's IPv6 changed.</p>
+    <p><b>Check it:</b> list the addresses, then try each family.</p>
+<pre>dig +short A tracker.example.org; dig +short AAAA tracker.example.org
+curl -4 -s -m 5 -o /dev/null -w '%{http_code}\n' http://tracker.example.org:6969/announce    # HTTP tracker, IPv4
+curl -6 -s -m 5 -o /dev/null -w '%{http_code}\n' http://tracker.example.org:6969/announce    # HTTP tracker, IPv6</pre>
+    <p>For a UDP tracker, this sends the standard UDP tracker "connect" request (<a href="https://www.bittorrent.org/beps/bep_0015.html">BEP 15</a>)
+        over IPv4 or IPv6 (the last argument):</p>
+<pre>python3 - tracker.example.org 6969 6 &lt;&lt;'EOF'
+import os, socket, struct, sys
+host, port, fam = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+af = socket.AF_INET6 if fam == "6" else socket.AF_INET
+addr = socket.getaddrinfo(host, port, af, socket.SOCK_DGRAM)[0][4]
+s = socket.socket(af, socket.SOCK_DGRAM); s.settimeout(5)
+tid = os.urandom(4)
+s.sendto(struct.pack(">QI4s", 0x41727101980, 0, tid), addr)
+try:
+    print(addr[0], "answered" if s.recv(16)[4:8] == tid else "answered something unexpected")
+except OSError as e:
+    print(addr[0], "no answer:", e)
+EOF</pre>
+    <p><b>Fix:</b> make the tracker listen on both families (for example bind <code>::</code> as well as <code>0.0.0.0</code>) and open the
+        port for both in the firewall, or remove the record for the family you don't serve. It clears once that address answers.</p>
+
+    <h4 id="unreliable">Drops out (Up/Unreliable, Up/Junk)</h4>
+    <p><b>What we saw:</b> it answers, but misses too many checks: the score, which weights the last week most, is under 90
+        (Up/Unreliable) or under 50 (Up/Junk). Going up and down often costs more than one longer outage.</p>
+    <p><b>Usual causes:</b> the process crashes or restarts; it's on a home connection or a dynamic address; it rate-limits or drops some
+        requests when busy; the hostname sometimes points at a dead address.</p>
+    <p><b>Fix:</b> run it under a supervisor that restarts it (systemd, Docker <code>restart: unless-stopped</code>), check its logs and
+        memory, don't rate-limit announces so hard that real requests fail, and give it a fixed address. The tracker page's uptime
+        bars show when it drops out. The score recovers by itself over about a week of steady answers.</p>
+
+    <h4 id="slow">Slow (Up/Slow)</h4>
+    <p><b>What we saw:</b> it works and is reliable, but announces take 300&nbsp;ms or more on average from the four places latency is
+        measured (or enough to pull its score under 90).</p>
+    <p>This isn't a fault: it's listed and usable, just far from most users or busy. If it's slower than it should be: check the
+        server's load, put it close to its users, and avoid slow chains of proxies in front of an HTTP tracker.</p>
+
+    <h4 id="down-timeout">Down: timeout</h4>
+    <p><b>What we saw:</b> no reply at all within the time limit, from here and from abroad.</p>
+    <p><b>Usual causes:</b> the process isn't running; a firewall drops the packets (a UDP port that isn't open fails exactly like this);
+        the hosting provider blocks the port; the server is overloaded.</p>
+    <p><b>Check it:</b> from a machine outside your network, run the UDP command above or the <code>curl</code> command for HTTP.
+        On the server: <code>ss -lunp | grep 6969</code> (UDP) or <code>ss -ltnp | grep 6969</code> (TCP) shows whether it's listening.</p>
+
+    <h4 id="down-refused">Down: connection refused</h4>
+    <p><b>What we saw:</b> the server answered that nothing is listening on that port.</p>
+    <p><b>Usual causes:</b> the tracker isn't running, or listens on a different port or address (for example only <code>127.0.0.1</code>).</p>
+    <p><b>Fix:</b> start it and make it listen on the public address and the port in your announce URL. If you moved it to a new port,
+        you can publish that with a <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP 34</a> DNS record.</p>
+
+    <h4 id="down-dns">Down: DNS</h4>
+    <p><b>What we saw:</b> the hostname doesn't resolve to any address, from here and from public DNS resolvers.</p>
+    <p><b>Usual causes:</b> the domain expired; the record was deleted; a dynamic DNS name wasn't renewed.</p>
+    <p><b>Check it:</b> <code>dig +short A tracker.example.org @1.1.1.1</code> and <code>whois example.org</code> for the expiry date.</p>
+
+    <h4 id="down-tls">Down: TLS / certificate</h4>
+    <p><b>What we saw:</b> an HTTPS tracker whose secure connection failed.</p>
+    <p><b>Usual causes:</b> an expired certificate (a renewal that stopped); a certificate for a different name; a missing intermediate
+        certificate.</p>
+    <p><b>Check it:</b> <code>openssl s_client -connect tracker.example.org:443 -servername tracker.example.org &lt;/dev/null | openssl x509 -noout -dates -subject</code></p>
+
+    <h4 id="down-http">Down: HTTP error</h4>
+    <p><b>What we saw:</b> the web server replied, but with an error code (4xx or 5xx) instead of a tracker reply.</p>
+    <p><b>Usual causes:</b> a reverse proxy sends <code>/announce</code> to the wrong place (404, 502); the tracker behind it is down (502,
+        503); bot protection such as a browser challenge blocks torrent clients (403, 503); rate limiting (429).</p>
+    <p><b>Fix:</b> run the <code>curl</code> command from the first section and read the status and body. Torrent clients can't pass a
+        browser challenge, so turn it off for the announce path.</p>
+
+    <h4 id="down">Down: no usable answer</h4>
+    <p><b>What we saw:</b> a reply that wasn't a valid tracker answer, or an error not covered above. The exact error is on the
+        tracker's page. The checks above (listening, firewall, the <code>curl</code> or UDP command) usually find it.</p>
+
+    <p class="mt-5">A tracker that hasn't answered for 5 days is removed from the list, and can be resubmitted after 30 days.
+        Questions: see the <a href="/faq">FAQ</a>.</p>
+</div>
+{% endblock %}
+{% set title = "How to fix a tracker - newTrackon" %}

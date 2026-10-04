@@ -776,6 +776,36 @@ def _nt_down_label(raw):
     return None
 
 
+# Sections of /fix, by problem. One rule for the table, the tracker page and the Telegram messages.
+FIX_DOWN = {"DNS": "down-dns", "Timeout": "down-timeout", "Refused": "down-refused", "TLS": "down-tls", "HTTP error": "down-http"}
+FORCE_CHECK: set = set()  # URLs a visitor asked to check again now (rate-limited in ntextra); the check loop takes them next
+
+
+def _nt_fix_for_event(ev):
+    """The /fix section for a feed event, or None if it isn't a problem."""
+    kind, text = ev.get("type"), str(ev.get("text") or "")
+    low = text.lower()
+    if kind == "down":
+        return FIX_DOWN.get(_nt_down_label(text), "down")
+    if kind == "family":
+        return "dead-address" if "dead" in low else None
+    if kind == "up" and "but" not in low:
+        return None
+    if kind not in ("bad", "up"):
+        return None
+    if "fake peers" in low:
+        return "fake-peers"
+    if "no peers" in low:
+        return "no-peers"
+    if "address is dead" in low:
+        return "dead-address"
+    if "up/slow" in low:
+        return "slow"
+    if "up/unreliable" in low or "up/junk" in low:
+        return "unreliable"
+    return None
+
+
 def _nt_down_why_set(url, raw):
     try:
         DOWN_WHY[url] = str(raw)[:200]
@@ -1095,6 +1125,9 @@ def _notify(ev):
     if ev["type"] not in cfg.get("types", list(_NT_ICON)):
         return
     text = f'{_NT_ICON.get(ev["type"], "*")} {ev["host"]} {ev["text"]}\n{ev["url"]}'
+    fix = _nt_fix_for_event(ev)
+    if fix:
+        text += f"\nHow to fix: https://newtrackon.co.nz/fix#{fix}"
 
     def send():
         import urllib.parse

@@ -9,6 +9,7 @@ from newtrackon.persistence import (
     raw_history_file,
     save_deque_to_disk,
 )
+from newtrackon import tracker as _T
 from newtrackon.tracker import Tracker
 
 import signal
@@ -36,11 +37,15 @@ def update_outdated_trackers() -> NoReturn:
         now = int(time())
         trackers_all = db.get_all_data()
         trackers_outdated: list[Tracker] = []
+        forced = set(_T.FORCE_CHECK)
         for tracker in trackers_all:
             iv = tracker.interval if 900 <= tracker.interval <= 14400 else 1800
             iv = int(iv * random.Random(f"{tracker.url}|{tracker.last_checked}").uniform(0.9, 1.1))  # scheduling jitter +/-10%, fixed per check cycle, not stored or shown
-            if (now - tracker.last_checked) > iv:
+            if tracker.url in forced:  # a visitor asked for a check now: goes first
+                trackers_outdated.insert(0, tracker)
+            elif (now - tracker.last_checked) > iv:
                 trackers_outdated.append(tracker)
+        _T.FORCE_CHECK.difference_update(forced)
         for tracker in trackers_outdated:
             logger.info("Updating %s", tracker.url)
             tracker.update_status()
