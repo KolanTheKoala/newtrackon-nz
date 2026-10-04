@@ -40,7 +40,7 @@
 <div class="container nt-t">
     {% set u = t.url.split('://', 1) %}{% set hp = u[1].split('/', 1) %}
     <h2 class="mt-2 nt-turl">{{ u[0] }}://<wbr>{{ hp[0].rsplit(':', 1)[0] }}{% if ':' in hp[0] %}<wbr>:{{ hp[0].rsplit(':', 1)[1] }}{% endif %}{% if hp|length > 1 %}<wbr>/{{ hp[1] }}{% endif %}</h2>
-    <p class="nt-isdown mb-2">Is it down? <b>{% if down %}Yes: no answer for {{ down_for }}{% else %}No: up for {{ down_for }}{% endif %}</b> &middot; last checked {{ checked_ago }} ago</p>
+    <p class="nt-isdown mb-2">Is it down? <b>{% if down %}Yes: no answer for {{ down_for }}{% else %}No: up for {{ down_for }}{% endif %}</b> &middot; last checked {{ checked_txt }}</p>
     <p class="mb-3">
         <span class="nt-badge {{ 'new' if d.status == 'up_new' else row }}">{{ status_text }}</span>
         &nbsp; Score <b>{{ d.score|round|int }}</b>

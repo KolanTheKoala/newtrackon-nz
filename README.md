@@ -40,6 +40,7 @@ this server's own latency is measured).
 | `/tracker/<host>` | "Is it down?" answer, uptime by day and for 48 h, latency history by region, score breakdown, details, recent events, "check again now", and a Follow link (Atom feed of that tracker's changes). |
 | `/fix` | What each problem means and how a tracker operator fixes it. |
 | `/list`, `/api` | Ready-made lists, with the same filters as the main table. |
+| `/rankings` | Most reliable over the last 14 days, longest unbroken uptime, fastest from each region. |
 | `/map` | Where the trackers are. |
 | `/feed.xml` | Atom feed of status changes (`?tracker=<host>` for one tracker). Optional Telegram alerts. |
 

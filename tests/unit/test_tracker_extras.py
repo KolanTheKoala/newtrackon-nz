@@ -72,7 +72,7 @@ class TestMonitorHealth:
         monkeypatch.setattr(T, "LAT_HIST", {"u": {"Oceania": [[now - 3600, 40]], "Europe": [[now - 86400, 300]], "Asia": [[now - 600, 200]]}})
         html = flask_client.get("/").get_data(as_text=True)
         line = re.search(r'<div class="nt-health"[^>]*>(.*?)</div>', html, re.S).group(1)
-        assert "2 checks in the last hour" in line and "last 1m ago" in line
+        assert "2 checks in the last hour" in line and "last 1m ago" in line and " ago ago" not in line
         assert "latency from Oceania, Asia" in line and "Europe" not in line  # Europe's last sample is a day old
 
     def test_offline_says_so(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,6 +4,7 @@
   <url><loc>https://newtrackon.co.nz/list</loc><changefreq>hourly</changefreq></url>
   <url><loc>https://newtrackon.co.nz/api</loc><changefreq>daily</changefreq></url>
   <url><loc>https://newtrackon.co.nz/map</loc><changefreq>daily</changefreq></url>
+  <url><loc>https://newtrackon.co.nz/rankings</loc><changefreq>daily</changefreq></url>
   <url><loc>https://newtrackon.co.nz/fix</loc><changefreq>weekly</changefreq></url>
   <url><loc>https://newtrackon.co.nz/about</loc><changefreq>weekly</changefreq></url>
   <url><loc>https://newtrackon.co.nz/faq</loc><changefreq>weekly</changefreq></url>

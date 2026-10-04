@@ -329,6 +329,12 @@ def _ago(epoch):
     return T._dur(epoch).replace("\u2007", "").strip()
 
 
+def _ago_txt(epoch):
+    """'just now' under a minute, else '<n> ago'."""
+    import time
+    return "just now" if time.time() - int(epoch or 0) < 60 else _ago(epoch) + " ago"
+
+
 _MEASURED_FROM = ("Oceania", "Asia", "Europe", "North America")
 
 
@@ -348,9 +354,54 @@ def _monitor_health():
     return {
         "online": online,
         "checks_hour": sum(1 for x in times if x >= now - 3600),
-        "last_ago": _ago(last) if last else None,
+        "last_ago": _ago_txt(last) if last else None,
         "regions": [r for r in _MEASURED_FROM if latest.get(r, 0) >= now - 6 * 3600],
     }
+
+
+_RANK_DAYS = 14  # historic keeps 1000 slots (~20.8 days), so 14 days is the longest window every ranked tracker has
+_RANK_MIN_DAYS = 7  # newer trackers aren't ranked: a short perfect record would beat a long good one
+
+
+def _rank_row(t, **extra):
+    st = _state(t)[0]
+    return dict(host=t.host, url=t.url, status=st, status_text=_STATUS_TEXT.get(st, st), score=round(float(t.uptime or 0)),
+                group=len(getattr(t, "operator_peers", None) or []) + 1, **extra)
+
+
+def _rankings():
+    import time
+    now = int(time.time())
+    ts = _trackers()
+    reliable, streaks, fastest = [], [], {r: [] for r in _MEASURED_FROM}
+    for t in ts:
+        h = [int(x) for x in (t.historic or [])]
+        st = _state(t)[0]
+        if len(h) >= _RANK_MIN_DAYS * _SLOTS_PER_DAY:
+            w = h[-_RANK_DAYS * _SLOTS_PER_DAY:]
+            reliable.append(_rank_row(t, avail=round(100.0 * sum(w) / len(w), 2), outages=len(T._runs(w, 0)),
+                                      days=round(len(w) / _SLOTS_PER_DAY, 1), lat=t.latency))
+        if t.status == 1 and st in ("up_good", "up_new", "up_slow"):  # answering isn't enough: Up/Bad etc. aren't ranked
+            since = int(t.last_downtime or t.added or now)
+            streaks.append(_rank_row(t, since=since, for_=_ago(since)))
+        if t.status == 1 and st in ("up_good", "up_new", "up_slow"):
+            for reg, ms in (T.REGION_LAT.get(t.url) or {}).items():
+                if reg in fastest and isinstance(ms, (int, float)):
+                    fastest[reg].append(_rank_row(t, ms=int(ms)))
+    reliable.sort(key=lambda r: (-r["avail"], r["outages"], -r["score"], r["lat"] or 9999))
+    streaks.sort(key=lambda r: r["since"])
+    for reg in fastest:
+        fastest[reg].sort(key=lambda r: (r["ms"], -r["score"]))
+        fastest[reg] = fastest[reg][:10]
+    return {"reliable": reliable[:20], "streaks": streaks[:20], "fastest": fastest,
+            "days": _RANK_DAYS, "min_days": _RANK_MIN_DAYS}
+
+
+def _rankings_page():
+    from flask import render_template
+    return render_template("rankings.jinja", r=_rankings(), active="Rankings", title="Tracker rankings",
+                           description="The most reliable public BitTorrent trackers over the last two weeks, the longest unbroken uptime, "
+                                       "and the fastest from Oceania, Asia, Europe and North America. Checked from New Zealand.")
 
 
 def _is_it_down(t):
@@ -390,7 +441,7 @@ def _tracker_page(host):
         days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
         chart=_latency_chart(T.LAT_HIST.get(t.url), now),
         events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],
-        added_ago=_ago(t.added or now), checked_ago=_ago(t.last_checked or now),
+        added_ago=_ago(t.added or now), checked_ago=_ago(t.last_checked or now), checked_txt=_ago_txt(t.last_checked or now),
         now=now, title="Is %s down? Live tracker status" % t.host,
         description=desc, ld=ld, down=down, down_for=down_for,
         fix=_fix_anchor(t), fix_title=FIX_TITLES.get(_fix_anchor(t) or ""), evidence=_evidence(t, d),
@@ -403,6 +454,7 @@ def register(app):
     app.add_url_rule("/tracker/<host>", "nt_tracker", _tracker_page)
     app.add_url_rule("/tracker/<host>/recheck", "nt_recheck", _recheck, methods=["POST"])
     app.add_url_rule("/fix", "nt_fix", _fix_page)
+    app.add_url_rule("/rankings", "nt_rankings", _rankings_page)
     app.jinja_env.globals["nt_health"] = _monitor_health
 
     @app.route("/api/tracker/<host>")

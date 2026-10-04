@@ -1,0 +1,79 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <style>
+    .nt-rank h4 { margin-top: 2rem; }
+    .nt-rank .nt-note { font-size: .88rem; opacity: .75; margin-bottom: .6rem; }
+    .nt-rank table { width: 100%; max-width: 760px; font-size: .92rem; margin-left: 0; }
+    @media (max-width: 576px) { .nt-rank .c-x { display: none; } }  /* phones: tracker + the main figure only */
+    .nt-rank td, .nt-rank th { padding: .3rem .45rem; vertical-align: middle; }
+    .nt-rank th { font-weight: 600; opacity: .7; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    .nt-rank td.n { width: 2.2em; opacity: .6; text-align: right; }
+    .nt-rank td.h { word-break: break-all; }
+    .nt-rank td.v { white-space: nowrap; text-align: right; font-weight: 600; }
+    .nt-rank td.s { white-space: nowrap; font-size: .85rem; }
+    .nt-rank a.nt-tl { color: #c15cff; margin-left: .35em; font-size: .85em; }
+    .nt-rank .nt-grp { color: #8ab4f8; font-size: .8em; margin-left: .3em; }
+    .nt-rank .nt-fastgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0 2rem; }
+    .nt-rank .nt-fastgrid h5 { margin-top: 1rem; font-size: 1rem; }
+    </style>
+{% endblock head %}
+{% set COL = {"up_good": "#00e676", "up_slow": "#00e676", "up_new": "#4fc3f7", "down": "#e0e0e0"} %}
+{% macro who(row) -%}
+    <a href="/tracker/{{ row.host|urlencode }}">{{ row.host }}</a><a class="nt-tl" href="/tracker/{{ row.host|urlencode }}" title="Tracker page"><i class="fa-solid fa-chart-line"></i></a>{% if row.group > 1 %}<span class="nt-grp" title="Same operator as {{ row.group - 1 }} other listed tracker{{ '' if row.group == 2 else 's' }}">&#10697;{{ row.group }}</span>{% endif %}
+{%- endmacro %}
+{% macro st(row) -%}
+    <span style="color:{{ COL.get(row.status, '#ffa500') }}">{{ row.status_text }}</span> &middot; {{ row.score }}
+{%- endmacro %}
+{% block body %}
+<div class="container nt-rank">
+    <h2>Rankings</h2>
+    <p>Who's been best lately, from this site's own checks. Each tracker's page has the full story.
+       Trackers listed for under {{ r.min_days }} days aren't ranked for reliability yet.</p>
+
+    <h4>Most reliable, last {{ r.days }} days</h4>
+    <p class="nt-note">Share of half-hour checks answered, then fewest outages.</p>
+    {% if r.reliable %}
+    <table class="table table-sm">
+        <thead><tr><th></th><th>Tracker</th><th class="text-end">Answered</th><th class="c-x">Outages</th><th class="c-x">Status</th></tr></thead>
+        <tbody>
+        {% for row in r.reliable %}
+        <tr><td class="n">{{ loop.index }}</td><td class="h">{{ who(row) }}</td><td class="v">{{ '%.1f'|format(row.avail) }}%</td>
+            <td class="s c-x">{{ row.outages }}</td><td class="s c-x">{{ st(row) }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}<p>Not enough history yet.</p>{% endif %}
+
+    <h4>Longest unbroken uptime</h4>
+    <p class="nt-note">Healthy now (Up/Good, Up/New, Up/Slow), and not down once since.</p>
+    {% if r.streaks %}
+    <table class="table table-sm">
+        <thead><tr><th></th><th>Tracker</th><th class="text-end">Up for</th><th class="c-x">Status</th></tr></thead>
+        <tbody>
+        {% for row in r.streaks %}
+        <tr><td class="n">{{ loop.index }}</td><td class="h">{{ who(row) }}</td><td class="v">{{ row.for_ }}</td><td class="s c-x">{{ st(row) }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}<p>No tracker is up right now.</p>{% endif %}
+
+    <h4>Fastest from each region</h4>
+    <p class="nt-note">Median announce round trip from each place latency is measured. Healthy trackers only (Up/Good, Up/New, Up/Slow).</p>
+    <div class="nt-fastgrid">
+    {% for reg, rows in r.fastest.items() %}
+        <div>
+        <h5>From {{ reg }}</h5>
+        {% if rows %}
+        <table class="table table-sm">
+            <tbody>
+            {% for row in rows %}
+            <tr><td class="n">{{ loop.index }}</td><td class="h">{{ who(row) }}</td><td class="v">{{ row.ms }}&nbsp;ms</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}<p class="nt-note">Not measured right now.</p>{% endif %}
+        </div>
+    {% endfor %}
+    </div>
+</div>
+{% endblock %}
