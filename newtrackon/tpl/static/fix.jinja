@@ -380,6 +380,29 @@ bantime  = 1h</pre>
         <code>connect</code> but not <code>announce</code>, or an HTTP tracker that returns non-bencoded data, shows up here.</p>
     </details>
 
+    <h3 id="interval">Announce interval too short or too long</h3>
+    <p>Every answer tells clients how long to wait before announcing again (the <b>interval</b>). Around <b>30 minutes</b>
+        (1800 seconds), with a <b>min interval</b> of about 15 minutes, is what almost every public tracker uses.</p>
+    <ul>
+        <li><b>Under 15 minutes</b> (some trackers say 2 minutes): every client announces far more than it needs to. It multiplies
+            the tracker's load for no benefit and makes overload and dropouts more likely. <b>&minus;5 points</b> under 15 minutes,
+            <b>&minus;10</b> under 5.</li>
+        <li><b>Over 2 hours</b> (some say 24 hours): clients rarely come back, so they seldom get new peers from it, and a dead peer
+            stays on its lists for hours. <b>&minus;5 points</b> over 2 hours, <b>&minus;10</b> over 6.</li>
+    </ul>
+    <p>The points only affect the score and ranking. They don't change the status, and the tracker stays listed. The score
+        updates at the next check after you change it.</p>
+    <details><summary>For advanced users: where to set it</summary>
+    <ul>
+        <li><b>Torrust:</b> in the config, <code>[core.announce_policy]</code> with <code>interval = 1800</code> and
+            <code>interval_min = 900</code>. Its default is 120 for both, which is why many Torrust trackers ask for 2 minutes.</li>
+        <li><b>Chihaya:</b> <code>announce_interval: "30m"</code> and <code>min_announce_interval: "15m"</code> (the defaults).</li>
+        <li><b>opentracker:</b> <code>OT_CLIENT_REQUEST_INTERVAL</code> in <code>trackerlogic.h</code>, set when it's built
+            (default <code>60 * 30</code>, 30 minutes).</li>
+        <li><b>Aquatic:</b> <code>peer_announce_interval</code> in the <code>[protocol]</code> section, in seconds (default 900).</li>
+    </ul>
+    </details>
+
     <h3 id="removed">Removed and banned</h3>
     <p>A tracker is removed from the list when it hasn't answered for <b>5 days</b>, or when it answers so rarely that it's no use
         (under 15% once dropouts are counted), or when its own replies say 3 checks in a row that it's private (asks for a

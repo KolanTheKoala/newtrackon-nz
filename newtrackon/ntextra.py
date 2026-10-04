@@ -53,7 +53,7 @@ def _rowcls(t):
     if s in ("up_good", "up_new"):
         return "green"
     if s == "up_slow":
-        return "green" if round(float(t.uptime or 0)) >= 90 else "orange"
+        return "green" if round(float(t.uptime or 0) + T._nt_iv_penalty(t.url)) >= 90 else "orange"
     return "orange"
 
 
@@ -71,7 +71,7 @@ def _state(t):
     if bad:
         # only fault is a dead IPv4/IPv6 address: still works on the other family, so "broken", not "bad"
         return ("up_broken" if all(x.startswith("dead_ipv") for x in bad) else "up_bad"), bad
-    sc = round(float(t.uptime or 0))
+    sc = round(float(t.uptime or 0) + T._nt_iv_penalty(t.url))  # the interval penalty is only for ranking, not the status
     if sc < 50:
         return "up_junk", bad
     if T._nt_region_avg(t.url) is None and T._nt_is_new(t, sc, 0):  # just added: no real latency yet
@@ -83,7 +83,7 @@ def _state(t):
         if T._nt_is_new(t, sc, ms):
             return "up_new", bad
         # under 90 only because of the latency penalty (reliability score is 90+): latency is the reason, not missed checks
-        if (T._nt_region_avg(t.url) or 0) >= 200 and round(float(t.uptime or 0) + T._nt_lat_penalty(T._nt_region_avg(t.url))) >= 90:  # 200 ms = where latency turns orange
+        if (T._nt_region_avg(t.url) or 0) >= 200 and round(float(t.uptime or 0) + T._nt_iv_penalty(t.url) + T._nt_lat_penalty(T._nt_region_avg(t.url))) >= 90:  # 200 ms = where latency turns orange
             return "up_slow", bad
         return "up_unreliable", bad
     return "up_good", bad
@@ -367,10 +367,12 @@ def _interval_note(iv):
     """A plain note when the announce interval is unusual (informational: no effect on status or score)."""
     if not iv:
         return None
-    if iv < 300:
-        return "very short: every client checks in every %s, which puts a lot of load on the tracker" % ("%d s" % iv if iv < 60 else "%d min" % round(iv / 60))
+    if iv < 900:
+        return ("too short: every client checks in every %s, which loads the tracker for no benefit. Around 30 minutes "
+                "(1800 s, with a min interval of about 15 minutes) is usual" % ("%d s" % iv if iv < 60 else "%d min" % round(iv / 60)))
     if iv > 7200:
-        return "very long: clients check in only every %s, so they rarely get new peers from it" % ("%d h" % round(iv / 3600))
+        return ("too long: clients check in only every %s, so they rarely get new peers from it. Around 30 minutes to "
+                "an hour is usual" % ("%d h" % round(iv / 3600)))
     return None
 
 

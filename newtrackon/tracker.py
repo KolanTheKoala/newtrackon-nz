@@ -492,7 +492,7 @@ class Tracker:
                 if bad:
                     st = "up_bad"
                 else:  # same ladder as the page/API, with a little hysteresis so borderline trackers don't flap
-                    sc = round(float(self.uptime or 0))
+                    sc = round(float(self.uptime or 0) + _nt_iv_penalty(url))  # the interval penalty is only for ranking
                     ms = _nt_region_avg(url) or self.latency or 0
                     pst = (LAST_STATE.get(url) or {}).get("st")
                     if sc < (52 if pst == "up_junk" else 50):
@@ -502,7 +502,7 @@ class Tracker:
                     elif ms >= (290 if pst == "up_slow" else 300) and _nt_reliable(self, pst):
                         st = "up_slow"
                     elif sc < (91 if pst == "up_unreliable" else 90):
-                        st = "up_good" if _nt_is_new(self, sc, ms) else ("up_slow" if (_nt_region_avg(self.url) or 0) >= 200 and round(float(self.uptime or 0) + _nt_lat_penalty(_nt_region_avg(self.url))) >= (91 if pst == "up_unreliable" else 90) else "up_unreliable")  # slow = under 90 from latency alone;  # new = held back only by the age ceiling
+                        st = "up_good" if _nt_is_new(self, sc, ms) else ("up_slow" if (_nt_region_avg(self.url) or 0) >= 200 and round(float(self.uptime or 0) + _nt_iv_penalty(self.url) + _nt_lat_penalty(_nt_region_avg(self.url))) >= (91 if pst == "up_unreliable" else 90) else "up_unreliable")  # slow = under 90 from latency alone;  # new = held back only by the age ceiling
                     else:
                         st = "up_good"
             else:
@@ -1429,9 +1429,12 @@ def _stats(t):
             st["ceiling"] = round(80.0 + 20.0 * len(h) / 336.0, 1)  # new-tracker ceiling, rises to 100 over 7 days
         _ms = _nt_region_avg(t.url)
         _pen = _nt_lat_penalty(_ms)
+        _ivp = _nt_iv_penalty(t.url)
         st["lat_ms"] = _ms
         st["lat_penalty"] = round(_pen, 1)
-        if min(_base, st.get("ceiling", 100.0)) - _pen - float(t.uptime or 0) > 1.0:
+        st["iv_penalty"] = int(_ivp)
+        st["iv"] = ANN_IV.get(t.url)
+        if min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0) > 1.0:
             st["capped"] = True  # a quality-test cap (fake peers, dead IP family, failed peer test) is holding the score down
         r = _runs(h, 0)
         st["longest_h"] = max(r) * 0.5 if r else 0
@@ -1587,6 +1590,24 @@ def _nt_region_avg(url):
     return round(sum(v) / len(v)) if len(v) >= 2 else None
 
 
+def _nt_iv_penalty(url):
+    """Points off the score for an announce interval far from the usual 30-60 minutes (it asks clients to announce):
+    under 5 min -10, under 15 min -5, over 2 h -5, over 6 h -10. Like the latency penalty it lowers the score, but the
+    status ladders add it back, so it never makes a tracker look Unreliable."""
+    iv = ANN_IV.get(url)
+    if not isinstance(iv, int) or iv <= 0:
+        return 0.0
+    if iv < 300:
+        return 10.0
+    if iv < 900:
+        return 5.0
+    if iv > 21600:
+        return 10.0
+    if iv > 7200:
+        return 5.0
+    return 0.0
+
+
 def _nt_lat_penalty(ms):
     # gentle up to 1 s (0.02/ms over 150 ms, max 17), steeper beyond (0.05/ms), capped at 40
     if not ms or ms <= 150:
@@ -1603,7 +1624,7 @@ def _nt_uu(self, *a, **k):
     r = _nt_orig_uu(self, *a, **k)
     self._nt_base = self.uptime  # reliability score before the latency penalty (used for premium checks)
     try:
-        p = _nt_lat_penalty(_nt_region_avg(self.url))
+        p = _nt_lat_penalty(_nt_region_avg(self.url)) + _nt_iv_penalty(self.url)
         if p and self.uptime:
             self.uptime = max(0.0, float(self.uptime) - p)
     except Exception:

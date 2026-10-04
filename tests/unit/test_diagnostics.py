@@ -255,3 +255,33 @@ class TestProbation:
         t = self._new(sample_tracker, [1] * 48)
         t.added = int(time()) - 8 * 86400
         assert T._nt_is_new(t) is False
+
+
+class TestIntervalPenalty:
+    @pytest.mark.parametrize(("iv", "pen"), [(120, 10), (299, 10), (300, 5), (899, 5), (900, 0), (1800, 0), (7200, 0), (7201, 5), (21600, 5), (21601, 10), (86400, 10), (None, 0)])
+    def test_bands(self, iv: int | None, pen: float) -> None:
+        if iv is None:
+            T.ANN_IV.pop(AKL, None)
+        else:
+            T.ANN_IV[AKL] = iv
+        assert T._nt_iv_penalty(AKL) == pen
+
+    def test_lowers_score_not_status(self, sample_tracker) -> None:
+        from collections import deque
+        from time import time
+        t = sample_tracker
+        t.added, t.last_uptime, t.status = int(time()) - 30 * 86400, int(time()), 1
+        t.historic = deque([1] * 1440, maxlen=1440)
+        T.ANN_IV[t.url] = 1800
+        t.update_uptime()
+        good = t.uptime
+        T.ANN_IV[t.url] = 120
+        t.update_uptime()
+        assert round(good - t.uptime) == 10 and t.uptime < 91
+        assert ntextra._state(t)[0] == "up_good" and ntextra._rowcls(t) == "green"  # still Up/Good: points are for ranking
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_shows_the_penalty_and_advice(self, flask_client: FlaskClient) -> None:
+        T.ANN_IV[AKL] = 120
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "Around 30 minutes" in html and "&minus;10 (every 2 min" in html
