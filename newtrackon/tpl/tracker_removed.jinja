@@ -10,7 +10,8 @@
     .nt-up { background: #00c853; } .nt-part { background: #ffa000; } .nt-down { background: #d32f2f; }
     .nt-axis { display: flex; justify-content: space-between; font-size: .8rem; opacity: .75; }
     .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
-    .nt-ev td:last-child { white-space: normal !important; }  /* event text wraps on phones */
+    .nt-ev td:last-child { white-space: normal !important; }
+    table.nt-ev { margin-left: 0; }  /* left-aligned like the rest of the page (tables are centred site-wide) */  /* event text wraps on phones */
     @media (max-width: 576px) { .nt-t dl { grid-template-columns: 1fr; gap: 0; } .nt-t dd { margin-bottom: .45rem; } }
     </style>
 {% endblock head %}

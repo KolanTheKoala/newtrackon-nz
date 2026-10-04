@@ -1,5 +1,6 @@
 """Comprehensive tests for the Tracker class in newtrackon.tracker module."""
 
+import re
 import socket
 from collections import deque
 from time import time
@@ -8,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from freezegun import freeze_time
 
+from newtrackon import tracker as T
 from newtrackon.persistence import HistoryData
 from newtrackon.scraper import ScraperResult
 from newtrackon.tracker import IP_HISTORY_WINDOW, Tracker, max_downtime
@@ -1207,3 +1209,16 @@ class TestRemovalDenylist:
             f.write("tracker.example.com\n")
         self._evict(sample_tracker)
         assert self._lines() == ["tracker.example.com"]
+
+    def test_reason_says_which_rule(self, sample_tracker: Tracker) -> None:
+        self._evict(sample_tracker)  # silent for 6 days
+        assert T._NT_DEL_REASON[sample_tracker.url] == "no answer for 6 days"
+
+    def test_reason_for_too_unreliable(self, sample_tracker: Tracker) -> None:
+        t = sample_tracker
+        t.added = int(time()) - 30 * 86400
+        t.last_uptime = int(time()) - 3600  # answered an hour ago
+        t.historic = deque(([1] + [0] * 9) * 20, maxlen=1440)  # up 1 slot in 10, flipping constantly
+        t.update_uptime()
+        assert t.to_be_deleted is True
+        assert re.fullmatch(r"too unreliable: \d+% once dropouts are counted \(under 15%\)", T._NT_DEL_REASON[t.url])
