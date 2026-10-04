@@ -418,8 +418,13 @@ def _recheck(host):
     import time
     host = host.lower()
     t = next((x for x in db.get_all_data() if (x.host or "").lower() == host), None)
-    if t is None:
+    removed = T.REMOVED.get(host) if t is None else None
+    if t is None and removed is None:
         abort(404)
+    if removed is not None:
+        ban = _ban(host)
+        if ban and ban["active"] and ban["until"] is None:
+            abort(404)  # permanently banned: no way back
     now = time.time()
     _recheck_all[:] = [x for x in _recheck_all if now - x < 3600]
     last = _recheck_host.get(host, 0)
@@ -429,6 +434,12 @@ def _recheck(host):
         return redirect("/tracker/%s?recheck=busy" % host, 303)
     _recheck_host[host] = now
     _recheck_all.append(now)
+    if removed is not None:  # checked like a new submission, past its ban: listed again if it works
+        from threading import Thread
+
+        from newtrackon import ingest
+        Thread(target=ingest.reinstate, args=(host, removed["url"]), daemon=True).start()
+        return redirect("/tracker/%s?recheck=queued" % host, 303)
     T.FORCE_CHECK.add(t.url)
     return redirect("/tracker/%s?recheck=queued" % host, 303)
 
@@ -684,6 +695,7 @@ def _removed_page(host, r):
     desc = "%s is down: it was removed from the list on %s (%s). Its history, and whether it can be added again." % (host, when, r.get("reason") or "no reason recorded")
     return render_template(
         "tracker_removed.jinja", host=host, r=r, ban=ban, now=now, when=when, ago=_ago(r["t"]),
+        recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
         until=_date(ban["until"]) if ban and ban.get("until") else None,
         left=_ago(now - (ban["until"] - now)) if ban and ban.get("until") and ban["active"] else None,  # time left, via the "ago" formatter
         days=days, overall=round(100.0 * up / slots, 1) if slots else None, ndays=len(rows),

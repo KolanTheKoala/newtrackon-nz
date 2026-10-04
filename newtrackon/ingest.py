@@ -171,6 +171,37 @@ def enqueue_new_trackers(input_string: str) -> None:
         add_one_tracker_to_submitted_queue(url)
 
 
+REINSTATE: dict[str, float] = {}  # host -> when its operator asked: one pass past its ban, valid for an hour
+REINSTATE_TTL = 3600
+
+
+def _reinstating(host: str) -> bool:
+    t = REINSTATE.get((host or "").lower())
+    return t is not None and time() - t < REINSTATE_TTL
+
+
+def reinstate(host: str, url: str) -> None:
+    """A removed tracker's operator pressed 'Check again now': check it like a new submission, past its ban.
+    If it's accepted it's listed again and the ban is lifted; if not, nothing changes."""
+    REINSTATE[host.lower()] = time()
+    add_one_tracker_to_submitted_queue(url)
+
+
+def _lift_ban(host: str) -> None:
+    """Remove the host's dated (30-day) denylist lines. Permanent entries (no date) are never touched."""
+    path = "data/denylist.txt"
+    try:
+        with open(path, "r+", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+            keep = [ln for ln in lines if not (ln.split()[:1] == [host] and len(ln.split()) > 1 and ln.split()[1].isdigit())]
+            if keep != lines:
+                f.seek(0)
+                f.write("\n".join(keep) + "\n")
+                f.truncate()
+    except OSError:
+        logger.exception("could not lift the ban on %s", host)
+
+
 def _denylist_hosts() -> set[str]:
     # "host" on its own = permanent manual ban. "host <epoch>" = auto-ban, expires after 30 days.
     try:
@@ -191,7 +222,7 @@ def _denylist_hosts() -> set[str]:
 
 def add_one_tracker_to_submitted_queue(url: str) -> None:
     host = urlparse(url).hostname
-    if host and host.lower() in _denylist_hosts():
+    if host and host.lower() in _denylist_hosts() and not _reinstating(host):
         logger.info("Tracker %s denied, host denylisted", url)
         return
 
@@ -347,6 +378,26 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         logger.info("Tracker %s replaced by %s (preferred protocol)", old.url, tracker_candidate.url)
     db.insert_new_tracker(tracker_candidate)
     logger.info("New tracker %s added to newTrackon", tracker_candidate.url)
+    host = (cand_host or "").lower()
+    if _reinstating(host):
+        REINSTATE.pop(host, None)
+        _lift_ban(host)
+        _keep_upbad_clock(host, tracker_candidate.url)
+        logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
+
+
+def _keep_upbad_clock(host: str, url: str) -> None:
+    """Removed for Up/Bad: carry its 5 days over, so a tracker that's still Up/Bad goes again at its next checks
+    instead of getting a fresh 5 days. A recovery of 12 hours or more resets it as usual."""
+    from newtrackon import tracker as _t
+    r = _t.REMOVED.get(host) or {}
+    why = str(r.get("reason") or "")
+    if "(Up/Bad)" not in why:
+        return
+    now = int(time())
+    bad = "returns fake peers (3+ checks in a row)" if "fake peers" in why else "hands out no peers (3+ of its last 6 peer tests failed)"
+    _t.LAST_STATE[url] = {"st": "up_bad", "bad": [bad], "dead": [], "since": now, "bad_since": now - _t.REMOVE_DAYS * 86400}
+    _t._jsave(_t.LAST_STATE, _t._LAST_STATE_FILE)
 
 
 def log_wrong_interval_denial(reason: str) -> None:

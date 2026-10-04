@@ -64,7 +64,7 @@ class TestPages:
         r = flask_client.get("/tracker/gone.example")
         html = r.get_data(as_text=True)
         assert r.status_code == 200 and "Removed from the list" in html and "no answer for 5+ days" in html
-        assert "Not until" in html and "Germany" in html and html.count('title="2026-09-2') == 2
+        assert "Otherwise not until" in html and "Check again now" in html and "Germany" in html and html.count('title="2026-09-2') == 2
 
     def test_never_listed_is_still_404(self, flask_client: FlaskClient, removed: None) -> None:
         assert flask_client.get("/tracker/private.example").status_code == 404
@@ -148,3 +148,63 @@ def test_accepted_submissions_link_to_the_tracker_page(flask_client: FlaskClient
 def test_api_removed_lists_active_bans_only(flask_client: FlaskClient, removed: None) -> None:
     d = flask_client.get("/api/removed").get_json()
     assert [x["host"] for x in d] == [GONE] and d[0]["banned_until"] == NOW + 28 * 86400 and d[0]["url"] == URL
+
+
+
+class TestReinstate:
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ingest, "REINSTATE", {})
+        monkeypatch.setattr(ntextra, "_recheck_host", {})
+        monkeypatch.setattr(ntextra, "_recheck_all", [])
+
+    def test_button_queues_a_check_past_the_ban(self, flask_client: FlaskClient, removed: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        import threading
+        calls = []
+        monkeypatch.setattr(ingest, "add_one_tracker_to_submitted_queue", lambda url: calls.append((url, ingest._reinstating(GONE))))
+
+        class Now:  # run the thread's work straight away
+            def __init__(self, target, args, daemon=None):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+        monkeypatch.setattr(threading, "Thread", Now)
+        r = flask_client.post("/tracker/gone.example/recheck")
+        assert r.status_code == 303 and r.headers["Location"].endswith("/tracker/gone.example?recheck=queued")
+        assert calls == [(URL, True)]
+        r = flask_client.post("/tracker/gone.example/recheck")  # once an hour
+        assert "recheck=wait" in r.headers["Location"] and len(calls) == 1
+
+    def test_pass_lets_it_past_the_denylist_for_an_hour(self, removed: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger="newtrackon")
+        monkeypatch.setattr(T.Tracker, "from_url", staticmethod(lambda url: (_ for _ in ()).throw(ValueError("stop here"))))
+        monkeypatch.setattr(ingest.db, "get_all_data", lambda: [])
+        ingest.add_one_tracker_to_submitted_queue(URL)
+        assert "host denylisted" in caplog.text
+        caplog.clear()
+        ingest.REINSTATE[GONE] = time()
+        ingest.add_one_tracker_to_submitted_queue(URL)
+        assert "host denylisted" not in caplog.text and "preprocessing failed" in caplog.text
+        ingest.REINSTATE[GONE] = time() - 3700  # expired
+        assert ingest._reinstating(GONE) is False
+
+    def test_lifting_the_ban_keeps_permanent_entries(self, removed: None) -> None:
+        _deny("%s %d" % (GONE, NOW), "%s" % "perm.example", "other.example %d" % NOW)
+        ingest._lift_ban(GONE)
+        lines = [ln for ln in open("data/denylist.txt").read().splitlines() if ln and not ln.startswith("#")]
+        assert lines == ["perm.example", "other.example %d" % NOW]
+
+    def test_up_bad_removal_keeps_its_clock(self) -> None:
+        T.REMOVED["ub.example"] = {"url": "udp://ub.example:1/announce", "t": NOW, "reason": "handed out no peers for 5 days (Up/Bad)"}
+        ingest._keep_upbad_clock("ub.example", "udp://ub.example:1/announce")
+        assert T._nt_upbad_days("udp://ub.example:1/announce") >= T.REMOVE_DAYS
+        T.REMOVED["dn.example"] = {"url": "udp://dn.example:1/announce", "t": NOW, "reason": "no answer for 5 days"}
+        ingest._keep_upbad_clock("dn.example", "udp://dn.example:1/announce")
+        assert "udp://dn.example:1/announce" not in T.LAST_STATE
+
+    @pytest.mark.usefixtures("region_db")
+    def test_no_button_or_check_for_a_permanent_ban(self, flask_client: FlaskClient, removed: None) -> None:
+        _deny(GONE)
+        assert "Check again now" not in flask_client.get("/tracker/gone.example").get_data(as_text=True)
+        assert flask_client.post("/tracker/gone.example/recheck").status_code == 404

@@ -24,12 +24,26 @@
     <dl class="mb-3">
         <dt>Why</dt><dd>{{ r.reason or "no reason recorded" }}</dd>
         <dt>Can it come back?</dt>
-        <dd>{% if ban and ban.active and ban.until %}Not until {{ until }} (in {{ left }}): it's banned for 30 days after removal, so submissions are refused until then.
+        <dd>{% if ban and ban.active and ban.until %}Yes, once it's fixed: press <b>Check again now</b> below. Otherwise not until {{ until }} (in {{ left }}): it's banned for 30 days after removal, so other submissions are refused until then.
             {% elif ban and ban.active %}No: it's banned from the list.
             {% else %}Yes: if it's working again, <a href="/">submit it on the status page</a> and it's checked like any new tracker.{% endif %}</dd>
         {% if r.country %}<dt>Was located in</dt><dd>{{ r.country }}{% if r.network %} &middot; {{ r.network }}{% endif %}</dd>{% endif %}
         {% if r.added %}<dt>Listed</dt><dd>{{ nt_date(r.added) }} to {{ when }}</dd>{% endif %}
     </dl>
+
+    {% if not (ban and ban.active and not ban.until) %}
+    <form method="post" action="/tracker/{{ host|urlencode }}/recheck" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-rotate"></i> Check again now</button>
+        <span class="small">
+        {% if recheck == 'queued' %}Queued: it's checked like a new submission within a few minutes (see <a href="/submitted">Submitted</a>).
+            If it works, it's listed again{% if ban and ban.active %} and the ban is lifted{% endif %}. Reload this page to see.
+        {% elif recheck == 'wait' %}It was checked on request recently; try again in {{ recheck_m }} min.
+        {% elif recheck == 'busy' %}Too many requested checks this hour; try again later.
+        {% else %}Fixed it? Ask for a check now: if it works, it's listed again{% if ban and ban.active %} straight away, ban or not{% endif %}
+            (once an hour).{% if "(Up/Bad)" in (r.reason or "") %} It must hand out peers properly too, or it's removed again within a few checks.{% endif %}{% endif %}
+        </span>
+    </form>
+    {% endif %}
 
     <h5 class="mt-4">Uptime before removal</h5>
     {% if days %}
