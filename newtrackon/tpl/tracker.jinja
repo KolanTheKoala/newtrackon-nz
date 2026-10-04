@@ -35,6 +35,7 @@
         .nt-t dd, .nt-t .nt-stt > .v { margin-bottom: .45rem; }
         .nt-legend > span { display: block; }  /* each region on its own line; not the ms inside */
     }
+    .nt-ivnote { color: #ffb070; font-size: .9em; }
     .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
     .nt-ev td:last-child { white-space: normal !important; }
     table.nt-ev { margin-left: 0; }  /* left-aligned like the rest of the page (tables are centred site-wide) */  /* event text wraps on phones */
@@ -124,7 +125,8 @@
         <dt>IPv4 / IPv6</dt><dd>{{ d.families.v4|replace('_', ' ') }} / {{ d.families.v6|replace('_', ' ') }}</dd>
         <dt>Peer test</dt><dd>{{ d.peer_test.latest }} (passed {{ d.peer_test.passed }} of the last {{ d.peer_test.of }})</dd>
         <dt>Checked every</dt><dd>{{ (d.check_interval_s / 60)|round|int }} min, last {{ checked_ago }} ago</dd>
-        {% if d.announce_interval_s %}<dt>Announce interval</dt><dd>{{ (d.announce_interval_s / 60)|round|int }} min</dd>{% endif %}
+        {% if d.announce_interval_s %}<dt>Announce interval</dt><dd>{% if d.announce_interval_s < 60 %}{{ d.announce_interval_s }} s{% else %}{{ (d.announce_interval_s / 60)|round|int }} min{% endif %}{% if iv_note %} <span class="nt-ivnote">({{ iv_note }})</span>{% endif %}</dd>{% endif %}
+        {% if warn %}<dt>Message from the tracker</dt><dd>&ldquo;{{ warn[0] }}&rdquo;{% if warn[1] %}<br><span class="small">{{ warn[1] }}</span>{% endif %}</dd>{% endif %}
         <dt>Added</dt><dd>{{ t.added|format_date }} ({{ added_ago }} ago)</dd>
         {% if d.same_operator_as %}<dt>Same operator as</dt><dd>{% for u in d.same_operator_as %}{{ u }}{% if not loop.last %}<br>{% endif %}{% endfor %}</dd>{% endif %}
     </dl>

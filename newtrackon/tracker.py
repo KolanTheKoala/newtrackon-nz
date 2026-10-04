@@ -160,6 +160,7 @@ class Tracker:
 
             interval = response.get("interval")
             _ann_iv_set(self.url, interval if isinstance(interval, int) else None)
+            _warn_set(self.url, response.get("warning message"))
             if isinstance(interval, int):
                 pass  # interval is set adaptively in is_up()/is_down()
             pretty_data = scraper.redact_origin(pp.pformat(response))
@@ -777,6 +778,8 @@ def _nt_down_label(raw):
     r = str(raw or "").lower()
     if not r:
         return None
+    if "tracker error message" in r or "error while announcing" in r or "error while trying to get a connection response" in r:
+        return "Rejected"  # the tracker answered with its own error message (first: the message may mention timeouts etc.)
     if "try again" in r or "name or service" in r or "resolve" in r or "nodename" in r or "getaddrinfo" in r or "no address" in r:
         return "DNS"
     if "timeout" in r or "timed out" in r:
@@ -791,7 +794,8 @@ def _nt_down_label(raw):
 
 
 # Sections of /fix, by problem. One rule for the table, the tracker page and the Telegram messages.
-FIX_DOWN = {"DNS": "down-dns", "Timeout": "down-timeout", "Refused": "down-refused", "TLS": "down-tls", "HTTP error": "down-http"}
+FIX_DOWN = {"DNS": "down-dns", "Timeout": "down-timeout", "Refused": "down-refused", "TLS": "down-tls", "HTTP error": "down-http",
+            "Rejected": "down-rejected"}
 FORCE_CHECK: set = set()  # URLs a visitor asked to check again now (rate-limited in ntextra); the check loop takes them next
 
 
@@ -918,6 +922,23 @@ _ANN_IV_FILE = "data/ann_iv.json"
 _REGION_FILE = "data/region_lat.json"
 ANN_IV: dict = _jload(_ANN_IV_FILE)
 REGION_LAT: dict = _jload(_REGION_FILE)
+
+
+_WARN_FILE = "data/warnings.json"
+WARNINGS: dict = _jload(_WARN_FILE)  # url -> {"msg", "t"}: the 'warning message' in its last successful reply
+
+
+def _warn_set(url, msg):
+    """Keep the tracker's own warning (e.g. 'Require passkey'), or clear it once a reply has none. Saved only on change."""
+    msg = str(msg).strip()[:200] if msg else ""
+    cur = (WARNINGS.get(url) or {}).get("msg", "")
+    if msg == cur:
+        return
+    if msg:
+        WARNINGS[url] = {"msg": msg, "t": int(time())}
+    else:
+        WARNINGS.pop(url, None)
+    _jsave(WARNINGS, _WARN_FILE)
 
 
 def _ann_iv_set(url, iv):

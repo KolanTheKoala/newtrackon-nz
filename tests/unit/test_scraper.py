@@ -637,7 +637,7 @@ class TestUDPResponseParsing:
         buf += struct.pack("!i", 0)
         buf += b"E"  # error message
 
-        with pytest.raises(RuntimeError, match="Error while annoucing"):
+        with pytest.raises(RuntimeError, match="Error while announcing"):
             _ = udp_parse_announce_response(buf, transaction_id, socket.AF_INET)
 
 

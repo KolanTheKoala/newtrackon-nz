@@ -56,6 +56,9 @@
             same address.</li>
         <li><b>It forgets users too quickly</b>, before they announce again.</li>
     </ul>
+    <p>If the tracker sends a message with its answers, such as "Require passkey" or "info hash is not authorized", it's shown on its
+        page under <b>Message from the tracker</b>, with what it means. Those two mean it's private or only serves its own torrents:
+        that's a choice, not a fault, but it can't work as a public tracker.</p>
     <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker answers but doesn't share peers between clients
         (newtrackon.co.nz reports Up/Bad: no peers). Can you check it accepts any torrent, mixes IPv4 and IPv6 peers in one swarm,
         and sees clients' real IP addresses?"</p></div>
@@ -289,6 +292,33 @@ EOF</pre>
     <p>Run the <code>curl</code> command under <a href="#no-peers">Hands out no peers</a> and read the status and body. Torrent clients can't
         pass a browser challenge, so turn it off for the announce path, and check the reverse proxy's <code>location</code> for
         <code>/announce</code> and its upstream.</p>
+    </details>
+
+    <h4 id="down-rejected">Down: the tracker rejects requests</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker is running and answers, but every answer is an error message of its own ("invalid
+            info_hash", "incorrect request", "torrent not allowed" and so on) instead of a list of peers. To a torrent client it's as
+            good as down.</p>
+        <p><b>How we know:</b> the tracker's own error text is on its page, under <b>What's wrong</b>. We send standard, valid requests.</p>
+    </div>
+    <p><b>What the message usually means:</b></p>
+    <ul>
+        <li><b>"Invalid info_hash", "incorrect request", "bad request":</b> the tracker misreads normal requests. The torrent ID in a
+            request is 20 raw bytes, sent URL-encoded, and some tracker programs or the web server in front of them decode it wrongly.
+            Usually a bug: update the tracker program, and make sure nothing in front of it (a proxy, a firewall, a "security" filter)
+            rewrites or decodes the request.</li>
+        <li><b>"Torrent not registered", "not authorized", "unknown torrent":</b> it only serves torrents on its own list. See
+            <a href="#no-peers">Hands out no peers</a>.</li>
+        <li><b>"Passkey", "login", "not registered user":</b> it's a private tracker. That's fine, but it can't be a public one.</li>
+        <li><b>Anything about limits or "too many":</b> rate limiting is set too strictly.</li>
+    </ul>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker answers announces with an error (the message is on the
+        newtrackon.co.nz page). Can you check the tracker software is up to date and that nothing in front of it alters the request?"</p></div>
+    <details><summary>For advanced users</summary>
+    <p>Run the <code>curl</code> command under <a href="#no-peers">Hands out no peers</a>: the bencoded <code>failure reason</code> is the
+        message. For a UDP tracker, the reply is action 3 with the message after the 8-byte header (<a href="https://www.bittorrent.org/beps/bep_0015.html">BEP 15</a>).
+        If <code>info_hash</code> errors only happen for some hashes, look for something decoding <code>%00</code>, <code>%2B</code> or
+        non-UTF-8 bytes in the query string (a reverse proxy normalising URLs, or a framework parsing the query as text).</p>
     </details>
 
     <h4 id="down">Down: no usable answer</h4>

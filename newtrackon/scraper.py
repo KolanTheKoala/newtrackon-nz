@@ -514,8 +514,13 @@ def udp_parse_connection_response(buf: bytes, sent_transaction_id: int) -> int |
         connection_id = struct.unpack_from("!q", buf, 8)[0]  # unpack 8 bytes from byte 8, should be the connection_id
         return connection_id
     elif action == 0x3:
-        error = struct.unpack_from("!s", buf, 8)
-        raise RuntimeError(f"Error while trying to get a connection response: {error}")
+        raise RuntimeError(f"Error while trying to get a connection response: {udp_error_text(buf)}")
+
+
+def udp_error_text(buf: bytes) -> str:
+    """The message in a UDP tracker error reply (action 3): everything after the 8-byte header (BEP 15).
+    It used to be read as a single byte, so only its first letter was ever shown."""
+    return buf[8:208].decode("utf-8", "replace").strip("\x00 \r\n") or "(no message)"
 
 
 def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id: bytes, left: int = 0, port: int = 0x76FD, event: int = 2) -> tuple[bytes, int]:
@@ -561,8 +566,7 @@ def udp_parse_announce_response(buf: bytes, sent_transaction_id: int, ip_family:
         peers = decode_binary_peers_list(buf, offset, ip_family)
         return {"interval": interval, "leechers": leechers, "seeds": seeds, "peers": peers}
     # an error occured, try and extract the error string
-    error = struct.unpack_from("!s", buf, 8)
-    raise RuntimeError(f"Error while annoucing: {error}")
+    raise RuntimeError(f"Error while announcing: {udp_error_text(buf)}")
 
 
 def udp_get_transaction_id() -> int:

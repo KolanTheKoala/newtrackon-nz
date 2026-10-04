@@ -115,6 +115,7 @@ def _detail(t):
         "stale_peers": bool(T.STALE.get(t.url)),
         "spoof_proof": True if t.url.startswith("http") else T.CID_OK.get(t.url),
         "announce_interval_s": T.ANN_IV.get(t.url),
+        "warning_message": (T.WARNINGS.get(t.url) or {}).get("msg"),
         "check_interval_s": t.interval,
         "stats": getattr(t, "stats", {}),
         "down_reason": (T._nt_down_label(T.DOWN_WHY.get(t.url)) if t.status != 1 else None),
@@ -312,7 +313,7 @@ def _latency_chart(hist, now, w=900, h=220, pad=60):  # pad fits 3-digit labels 
 FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peers", "dead-address": "Dead IPv4 or IPv6 address",
               "unreliable": "Drops out (Up/Unreliable, Up/Junk)", "slow": "Slow (Up/Slow)", "down-timeout": "Down: timeout",
               "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
-              "down-http": "Down: HTTP error", "down": "Down: no usable answer"}
+              "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer"}
 
 
 def _fix_anchor(t):
@@ -334,12 +335,41 @@ def _fix_anchor(t):
     return None
 
 
+def _warning(url):
+    """The tracker's own warning, with what it means in plain words: (message, meaning, fixable) or None."""
+    w = (T.WARNINGS.get(url) or {}).get("msg")
+    if not w:
+        return None
+    low = w.lower()
+    if any(k in low for k in ("passkey", "authkey", "auth key", "login", "registered user", "private")):
+        return (w, "It's a private tracker: it only works for its own members, so it can't work as a public tracker. Nothing to fix here.", False)
+    if any(k in low for k in ("not authorized", "not authorised", "not registered", "unregistered", "whitelist", "not allowed", "unknown torrent", "not found")):
+        return (w, "It only serves torrents on its own list (a whitelist), so it can't work as a public tracker unless it accepts any torrent.", False)
+    if any(k in low for k in ("rate", "too many", "slow down", "limit")):
+        return (w, "It's limiting how often clients may announce: some clients get turned away.", True)
+    return (w, None, True)
+
+
+def _interval_note(iv):
+    """A plain note when the announce interval is unusual (informational: no effect on status or score)."""
+    if not iv:
+        return None
+    if iv < 300:
+        return "very short: every client checks in every %s, which puts a lot of load on the tracker" % ("%d s" % iv if iv < 60 else "%d min" % round(iv / 60))
+    if iv > 7200:
+        return "very long: clients check in only every %s, so they rarely get new peers from it" % ("%d h" % round(iv / 3600))
+    return None
+
+
 def _evidence(t, d):
     """What the checks saw, in plain words, for the tracker page's problem box."""
     out = []
     fix = _fix_anchor(t)
     if fix is None:
         return out
+    w = _warning(t.url)
+    if w and fix in ("no-peers", "fake-peers", "unreliable"):
+        out.append("The tracker itself says: \u201c%s\u201d. %s" % (w[0], w[1] or "That's its own message to clients, sent with each answer."))
     if fix == "no-peers":
         out.append("Peer test passed %d of the last %d times: a second test client wasn't told about the first." % (d["peer_test"]["passed"], d["peer_test"]["of"]))
     if fix == "fake-peers":
@@ -351,6 +381,8 @@ def _evidence(t, d):
         ips = [ip for ip in (t.ips or []) if (":" in ip) == (fam == "6")]
         out.append("Its IPv%s address%s %s didn't answer in %d checks in a row, while IPv%s did."
                    % (fam, "es" if len(ips) > 1 else "", ", ".join(ips) or "(published in DNS)", df.get("n", 0), "4" if fam == "6" else "6"))
+    if fix == "down-rejected":
+        out.append("It answers, but with an error message of its own instead of a tracker reply, so clients can't use it.")
     if fix.startswith("down"):
         out.append("Last error: %s" % (T.DOWN_WHY.get(t.url) or "no answer"))
         out.append("Last successful check: %s." % (_ago(t.last_uptime) + " ago" if t.last_uptime else "none recorded"))
@@ -578,6 +610,7 @@ def _tracker_page(host):
         now=now, title="Is %s down? Live tracker status" % t.host,
         description=desc, ld=ld, down=down, down_for=down_for,
         fix=_fix_anchor(t), fix_title=FIX_TITLES.get(_fix_anchor(t) or ""), evidence=_evidence(t, d),
+        warn=_warning(t.url), iv_note=_interval_note(d.get("announce_interval_s")),
         recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
         recheck_last=_recheck_host.get(host),
     )
