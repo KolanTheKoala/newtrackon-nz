@@ -24,8 +24,9 @@ class TestMainPage:
         response = flask_client.get("/")
 
         assert b"/static/js/theme-v2.js" in response.get_data()
-        assert b'id="theme-toggle"' in response.get_data()
-        assert b'id="theme-toggle-icon"' in response.get_data()
+        # dark-only design: no theme toggle; theme-v2.js always sets Bootstrap's dark mode
+        assert b'id="theme-toggle"' not in response.get_data()
+        assert b'/static/js/theme-v2.js' in response.get_data()
         assert b"data-bs-theme-value" not in response.get_data()
 
     @pytest.mark.usefixtures("insert_sample_tracker")
