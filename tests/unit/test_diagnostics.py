@@ -139,15 +139,15 @@ class TestUpBadClock:
         self._state(AKL, 3, ["its published IPv4 address is dead"])
         assert T._nt_upbad_days(AKL) is None  # Up/Broken: not on the clock
 
-    def test_grey_from_day_5(self) -> None:
+    def test_grey_from_day_3(self) -> None:
         from types import SimpleNamespace
         from unittest.mock import patch
         t = SimpleNamespace(url=AKL, last_uptime=0)
         with patch.object(ntextra, "_rowcls", return_value="orange"):
-            self._state(AKL, 4.5, self.NOPEERS)
+            self._state(AKL, 2.5, self.NOPEERS)
             assert ntextra._dying(t) is None
-            self._state(AKL, 5.2, self.NOPEERS)
-            assert ntextra._dying(t) == "Up/Bad for 5+ days: removed and banned for 30 days after 7 unless fixed"
+            self._state(AKL, 3.2, self.NOPEERS)
+            assert ntextra._dying(t) == "Up/Bad for 3+ days: removed and banned for 30 days after 5 unless fixed"
 
     def _check(self, t, days: float, peer_fails: int, monkeypatch: pytest.MonkeyPatch) -> None:
         from collections import deque
@@ -158,14 +158,18 @@ class TestUpBadClock:
         t.historic = deque([1] * 48, maxlen=1440)
         t.update_uptime()
 
-    def test_removed_after_7_days(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._check(sample_tracker, 7.1, T.PEER_FAIL_LIMIT, monkeypatch)
+    def test_removed_after_5_days_like_down(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, 5.1, T.PEER_FAIL_LIMIT, monkeypatch)
         assert sample_tracker.to_be_deleted is True
-        assert T._NT_DEL_REASON[sample_tracker.url] == "handed out no peers for 7 days (Up/Bad)"
+        assert T._NT_DEL_REASON[sample_tracker.url] == "handed out no peers for 5 days (Up/Bad)"
         assert open("data/denylist.txt").read().split()[0] == sample_tracker.host
 
-    def test_kept_before_7_days_or_once_fixed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._check(sample_tracker, 6.5, T.PEER_FAIL_LIMIT, monkeypatch)
+    def test_kept_before_5_days_or_once_fixed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, 4.5, T.PEER_FAIL_LIMIT, monkeypatch)
         assert sample_tracker.to_be_deleted is False
         self._check(sample_tracker, 8, 0, monkeypatch)  # passing the peer test again now
         assert sample_tracker.to_be_deleted is False
+
+
+def test_one_clock_for_down_and_up_bad() -> None:
+    assert T.UPBAD_DAYS == T.REMOVE_DAYS == 5 and ntextra._DYING_DAYS == 3

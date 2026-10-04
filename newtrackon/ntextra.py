@@ -26,18 +26,18 @@ def _statekey(t):
         return ""
 
 
-_DYING_DAYS = 3  # trackers are removed, and banned for 30 days, after 5 days with no successful check (tracker.py)
+_DYING_DAYS = T.REMOVE_DAYS - 2  # dark grey 2 days before removal (Down or Up/Bad for REMOVE_DAYS, tracker.py)
 
 
 def _dying(t, now=None):
-    """The tooltip for a tracker within 2 days of removal (Down for 3+ days, or Up/Bad for 5+), else None."""
+    """The tooltip for a tracker within 2 days of removal (Down or Up/Bad for REMOVE_DAYS - 2 days), else None."""
     import time
     now = now or time.time()
     if _rowcls(t) == "offline":
         days = (now - int(t.last_uptime or 0)) / 86400.0
-        return "No answer for %d+ days: removed and banned for 30 days after 5" % int(days) if days >= _DYING_DAYS else None
+        return "No answer for %d+ days: removed and banned for 30 days after %d" % (int(days), T.REMOVE_DAYS) if days >= _DYING_DAYS else None
     ub = T._nt_upbad_days(t.url, now)
-    if ub is not None and ub >= T.UPBAD_DAYS - 2:
+    if ub is not None and ub >= _DYING_DAYS:
         return "Up/Bad for %d+ days: removed and banned for 30 days after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
     return None
 

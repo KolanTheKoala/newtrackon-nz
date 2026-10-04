@@ -366,9 +366,9 @@ class Tracker:
             return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
-        if age_days >= 3 and (dead_days >= 5 or (n >= 144 and availability * stability < 0.15)):
+        if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and availability * stability < 0.15)):
             # the event, the removed page and the ban list say which of the two it was
-            _NT_DEL_REASON[self.url] = ("no answer for %d days" % int(dead_days) if dead_days >= 5 else
+            _NT_DEL_REASON[self.url] = ("no answer for %d days" % int(dead_days) if dead_days >= REMOVE_DAYS else
                                         "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * availability * stability))
             logger.info(
                 "Evicting %s (score=%.2f%%, availability=%.1f%%, no success for %.1f days, samples=%s, age_days=%.1f)",
@@ -964,7 +964,8 @@ def _warn_set(url, msg):
     _jsave(WARNINGS, _WARN_FILE)
 
 
-UPBAD_DAYS = 7  # Up/Bad this long (no peers or fake peers) and it's removed and banned for 30 days
+REMOVE_DAYS = 5  # Down (no answer) or Up/Bad (no or fake peers) this long and it's removed and banned for 30 days
+UPBAD_DAYS = REMOVE_DAYS  # one clock for both
 
 
 def _nt_upbad_days(url, now=None):
