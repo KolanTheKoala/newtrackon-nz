@@ -5,6 +5,7 @@
     .nt-t .nt-badge { font-size: 1rem; padding: .3em .7em; border-radius: 4px; font-weight: 600; }
     .nt-t .nt-badge.green { background: #051b11; color: #00e676; border: 1px solid #75b798; }
     .nt-t .nt-badge.orange { background: #331a00; color: #ffb070; border: 1px solid #ffb070; }
+    .nt-t .nt-badge.new { background: #04202b; color: #4fc3f7; border: 1px solid #4fc3f7; }
     .nt-t .nt-badge.offline { background: #000; color: #bbb; border: 1px solid #666; }
     .nt-t dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: 0; }
     .nt-t dt { font-weight: 600; } .nt-t dd { margin: 0; word-break: break-word; }
@@ -38,7 +39,7 @@
     {% set u = t.url.split('://', 1) %}{% set hp = u[1].split('/', 1) %}
     <h2 class="mt-2 nt-turl">{{ u[0] }}://<wbr>{{ hp[0].rsplit(':', 1)[0] }}{% if ':' in hp[0] %}<wbr>:{{ hp[0].rsplit(':', 1)[1] }}{% endif %}{% if hp|length > 1 %}<wbr>/{{ hp[1] }}{% endif %}</h2>
     <p class="mb-3">
-        <span class="nt-badge {{ row }}">{{ status_text }}</span>
+        <span class="nt-badge {{ 'new' if d.status == 'up_new' else row }}">{{ status_text }}</span>
         &nbsp; Score <b>{{ d.score|round|int }}</b>
         {% if d.latency_ms is not none %} &middot; <b>{{ d.latency_ms }} ms</b>{% endif %}
         {% if d.country_codes %} &middot; <span class="fi fi-{{ d.country_codes[0] }}"></span> {{ d.countries[0] if d.countries else '' }}{% endif %}

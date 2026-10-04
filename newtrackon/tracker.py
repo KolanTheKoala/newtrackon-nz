@@ -361,7 +361,13 @@ class Tracker:
                     existing = open(path, encoding="utf-8").read().lower()
                 except OSError:
                     pass
-                if host and host not in existing.split():
+                # a fresh 30-day entry unless the host already has an active ban (an expired old entry doesn't count)
+                active = False
+                for ln in existing.splitlines():
+                    parts = ln.split()
+                    if parts and parts[0] == host and (len(parts) == 1 or not parts[1].isdigit() or int(time()) - int(parts[1]) <= 30 * 86400):
+                        active = True
+                if host and not active:
                     with open(path, "a", encoding="utf-8") as fh:
                         fh.write(f"{host} {int(time())}\n")
             except OSError:

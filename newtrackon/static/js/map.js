@@ -38,7 +38,7 @@
         tv: [179.2, -8.52], gu: [144.79, 13.44], as: [-170.7, -14.27], mp: [145.75, 15.18], km: [43.33, -11.65], st: [6.61, 0.19],
         cv: [-23.6, 15.12], ax: [19.94, 60.19], fo: [-6.91, 62.01]};
     var FLAG_URL = 'https://cdnjs.cloudflare.com/ajax/libs/flag-icons/7.5.0/flags/4x3/';
-    var STATUS_COLOR = {up_good: '#00e676', up_new: '#00e676', down: '#9e9e9e'};
+    var STATUS_COLOR = {up_good: '#00e676', up_new: '#4fc3f7', down: '#9e9e9e'};
     var STATUS_TEXT = {up_good: 'Up/Good', up_new: 'Up/New', up_slow: 'Up/Slow', up_unreliable: 'Up/Unreliable',
         up_junk: 'Up/Junk', up_bad: 'Up/Bad', up_broken: 'Up/Broken', down: 'Down'};
 

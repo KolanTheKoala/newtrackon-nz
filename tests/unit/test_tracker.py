@@ -1173,3 +1173,37 @@ class TestNZGuards:
 
         assert sample_tracker.ips is None
         assert sample_tracker.to_be_deleted is False
+
+
+class TestRemovalDenylist:
+    """Removed trackers can't be resubmitted for 30 days, every time they are removed."""
+
+    def _evict(self, t: Tracker) -> None:
+        t.added = int(time()) - 30 * 86400
+        t.last_uptime = int(time()) - 6 * 86400  # no answer for 6 days
+        t.historic = deque([0] * 200, maxlen=1000)
+        t.update_uptime()
+        assert t.to_be_deleted is True
+
+    def _lines(self) -> list[str]:
+        with open("data/denylist.txt", encoding="utf-8") as f:
+            return [ln for ln in f.read().splitlines() if ln.strip()]
+
+    def test_expired_entry_gets_a_fresh_one(self, sample_tracker: Tracker) -> None:
+        with open("data/denylist.txt", "w", encoding="utf-8") as f:
+            f.write(f"tracker.example.com {int(time()) - 40 * 86400}\n")  # removed before, ban expired
+        self._evict(sample_tracker)
+        lines = self._lines()
+        assert len(lines) == 2 and abs(int(lines[1].split()[1]) - int(time())) <= 2
+
+    def test_active_ban_is_not_duplicated(self, sample_tracker: Tracker) -> None:
+        with open("data/denylist.txt", "w", encoding="utf-8") as f:
+            f.write(f"tracker.example.com {int(time()) - 5 * 86400}\n")
+        self._evict(sample_tracker)
+        assert len(self._lines()) == 1
+
+    def test_permanent_ban_is_left_alone(self, sample_tracker: Tracker) -> None:
+        with open("data/denylist.txt", "w", encoding="utf-8") as f:
+            f.write("tracker.example.com\n")
+        self._evict(sample_tracker)
+        assert self._lines() == ["tracker.example.com"]
