@@ -81,3 +81,31 @@ class TestMonitorHealth:
 
     def test_on_the_about_page(self, flask_client: FlaskClient) -> None:
         assert 'class="nt-health"' in flask_client.get("/about").get_data(as_text=True)
+
+
+@pytest.mark.usefixtures("region_db")
+class TestBadge:
+    def test_listed_tracker(self, flask_client: FlaskClient) -> None:
+        r = flask_client.get("/badge/AKL.example.svg")
+        svg = r.get_data(as_text=True)
+        assert r.status_code == 200 and r.mimetype == "image/svg+xml" and "max-age=300" in r.headers["Cache-Control"]
+        assert svg.startswith("<svg ") and "newTrackon NZ" in svg and "·" in svg
+        import xml.dom.minidom
+        xml.dom.minidom.parseString(svg)  # well-formed
+
+    def test_down_tracker_says_down(self, flask_client: FlaskClient) -> None:
+        assert "Down · " in flask_client.get("/badge/down.example.svg").get_data(as_text=True)
+
+    def test_unknown_host_still_an_image(self, flask_client: FlaskClient) -> None:
+        r = flask_client.get("/badge/nope.example.svg")
+        assert r.status_code == 404 and r.mimetype == "image/svg+xml" and "not listed" in r.get_data(as_text=True)
+
+    def test_escapes_and_no_script(self, flask_client: FlaskClient) -> None:
+        r = flask_client.get("/badge/%3Cscript%3E.svg")
+        svg = r.get_data(as_text=True)
+        assert "<script" not in svg.lower() and r.headers["X-Content-Type-Options"] == "nosniff"
+
+    def test_snippet_on_tracker_page(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert '<img src="/badge/akl.example.svg"' in html
+        assert "[![newTrackon NZ status](https://newtrackon.co.nz/badge/akl.example.svg)](https://newtrackon.co.nz/tracker/akl.example)" in html

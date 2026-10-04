@@ -41,6 +41,7 @@ this server's own latency is measured).
 | `/fix` | What each problem means and how a tracker operator fixes it. |
 | `/list`, `/api` | Ready-made lists, with the same filters as the main table. |
 | `/tools` | Magnet booster and torrent fixer: add the best trackers to a magnet link or a .torrent, drop Down ones. Runs in the browser; the info hash never changes and private torrents are left alone. |
+| `/badge/<host>.svg` | Live status badge for a tracker's own site or README (snippet on each tracker page). |
 | `/rankings` | Most reliable over the last 14 days, longest unbroken uptime, fastest from each region. |
 | `/map` | Where the trackers are. |
 | `/feed.xml` | Atom feed of status changes (`?tracker=<host>` for one tracker). Optional Telegram alerts. |

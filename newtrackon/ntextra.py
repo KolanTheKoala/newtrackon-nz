@@ -404,6 +404,51 @@ def _rankings_page():
                                        "and the fastest from Oceania, Asia, Europe and North America. Checked from New Zealand.")
 
 
+_BADGE_COLOR = {"up_good": "#2e9e4f", "up_slow": "#2e9e4f", "up_new": "#1f88c9", "down": "#6c757d"}
+
+
+def _badge_text_width(text):
+    """Rough rendered width in px of 11px Verdana: enough to size the badge without a font library."""
+    narrow, wide = set("ilj.,:;|!'()[] ·"), set("mwMW@%")
+    return int(sum(4 if c in narrow else 10 if c in wide else 7 for c in text)) + 10
+
+
+def _badge_svg(left, right, color):
+    from xml.sax.saxutils import escape
+    lw, rw = _badge_text_width(left), _badge_text_width(right)
+    w = lw + rw
+    L, R = escape(left), escape(right)
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="20" role="img" aria-label="{L}: {R}">'
+        f"<title>{L}: {R}</title>"
+        '<linearGradient id="g" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>'
+        f'<clipPath id="c"><rect width="{w}" height="20" rx="3" fill="#fff"/></clipPath>'
+        f'<g clip-path="url(#c)"><rect width="{lw}" height="20" fill="#131a60"/><rect x="{lw}" width="{rw}" height="20" fill="{color}"/>'
+        f'<rect width="{w}" height="20" fill="url(#g)"/></g>'
+        '<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">'
+        f'<text x="{lw / 2:.1f}" y="15" fill="#010101" fill-opacity=".3">{L}</text><text x="{lw / 2:.1f}" y="14">{L}</text>'
+        f'<text x="{lw + rw / 2:.1f}" y="15" fill="#010101" fill-opacity=".3">{R}</text><text x="{lw + rw / 2:.1f}" y="14">{R}</text>'
+        "</g></svg>"
+    )
+
+
+def _badge(host):
+    host = host.lower()
+    if host.endswith(".svg"):
+        host = host[:-4]
+    t = next((x for x in _trackers() if (x.host or "").lower() == host), None)
+    if t is None:
+        svg, code = _badge_svg("newTrackon NZ", "not listed", "#6c757d"), 404
+    else:
+        st = _state(t)[0]
+        down, down_for = _is_it_down(t)
+        right = ("Down \u00b7 " + down_for) if down else "%s \u00b7 %d" % (_STATUS_TEXT.get(st, st), round(float(t.uptime or 0)))
+        svg, code = _badge_svg("newTrackon NZ", right, _BADGE_COLOR.get(st, "#e07b00")), 200
+    # short cache: badges are embedded elsewhere and should follow the status within minutes
+    return Response(svg, code, mimetype="image/svg+xml",
+                    headers={"Cache-Control": "max-age=300", "Access-Control-Allow-Origin": "*", "X-Content-Type-Options": "nosniff"})
+
+
 def _tools_page():
     from flask import render_template
     return render_template("tools.jinja", active="Tools", title="Magnet booster and torrent fixer",
@@ -463,6 +508,7 @@ def register(app):
     app.add_url_rule("/fix", "nt_fix", _fix_page)
     app.add_url_rule("/rankings", "nt_rankings", _rankings_page)
     app.add_url_rule("/tools", "nt_tools", _tools_page)
+    app.add_url_rule("/badge/<host>", "nt_badge", _badge)
     app.jinja_env.globals["nt_health"] = _monitor_health
 
     @app.route("/api/tracker/<host>")
