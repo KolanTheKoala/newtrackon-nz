@@ -5,7 +5,12 @@
 
         <h5 class="mt-4">How do I use these trackers?</h5>
         <p>Copy your list from the <a href="/list">List</a> page and paste it into your torrent client, or give your client the API link
-            shown there so it stays up to date.</p>
+            shown there so it stays up to date. To add them to a single download, paste its magnet link or .torrent into
+            <a href="/tools">Tools</a>.</p>
+
+        <h5 class="mt-4">Which trackers are best?</h5>
+        <p>See <a href="/rankings">Rankings</a>: the most reliable over the last two weeks, the longest unbroken uptime, and the
+            fastest from each region.</p>
 
         <h5 class="mt-4">I submitted a tracker but it wasn't added. Why?</h5>
         <p>The <a href="/submitted">Submitted</a> page shows the reason for every attempt. The usual ones:</p>
@@ -26,9 +31,13 @@
         <p>Availability &times; stability over recent days, with penalties for failed tests and very slow replies. Details on the
             <a href="/about">About</a> page.</p>
 
-        <h5 class="mt-4">I run a tracker and want it changed or removed.</h5>
-        <p>Publish a <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP34</a> DNS record to set its protocol and port, or to opt out.
-            For anything else, use the email link at the bottom of the page.</p>
+        <h5 class="mt-4">I run a tracker.</h5>
+        <p>Its own page (the <i class="fa-solid fa-chart-line" style="color:#c15cff"></i> icon) shows what the checks saw; if
+            something's wrong, <a href="/fix">How to fix</a> explains it, and <b>Check again now</b> re-tests once you've fixed it.
+            On that page you can also <b>Follow</b> its status changes (Atom feed) and copy a status badge for your site; the same
+            data is at <code>/api/tracker/&lt;host&gt;</code>.</p>
+        <p>To set its protocol and port, or to opt out, publish a <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP34</a>
+            DNS record. For anything else, use the email link at the bottom of the page.</p>
 
         <h5 class="mt-4">Where's the code? How do I report a bug?</h5>
         <p>On <a href="https://github.com/KolanTheKoala/newtrackon-nz">GitHub</a>; report problems as
