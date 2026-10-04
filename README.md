@@ -1,13 +1,54 @@
 # newTrackon NZ (newtrackon.co.nz)
 
 The code behind [newtrackon.co.nz](https://newtrackon.co.nz/), a New Zealand instance of
-[newTrackon](https://github.com/CorralPeltzer/newTrackon). It is upstream newTrackon at commit `e1a0104`
-plus the NZ changes, packaged as one self-contained Docker project (app + Caddy).
+[newTrackon](https://github.com/CorralPeltzer/newTrackon): live health checks of public BitTorrent trackers.
+It is upstream newTrackon at commit `e1a0104` plus the NZ changes, packaged as one self-contained
+Docker project (app + Caddy). `git log upstream/master..main` shows every change.
 
-What's different from upstream: a stricter status ladder (Up/Good, Up/Slow, Up/Unreliable, Up/Junk,
-Up/Bad, Up/Broken), peer, fake-peer and dual-stack checks, latency measured from several regions,
-an event feed with optional Telegram alerts, clean shutdown on SIGTERM, atomic history writes,
-and NZ templates and styling. See `git log upstream/master..main` for the full diff.
+## What it adds to upstream
+
+**Checks.** Besides "does it answer", every check can test:
+
+- **Peers**: a second client must be handed the peer we announced (from a VPN exit, if configured).
+- **Fake peers, inflated counts, stale peers** (keeps peers that said they stopped).
+- **IPv4 and IPv6 separately**: a dead published address family is flagged.
+- **Spoofing**: whether a UDP tracker enforces the connection-ID handshake.
+
+A failure is only blamed on the tracker when this monitor itself is fine: no internet or DNS here,
+public resolvers disagreeing with ours, or the tracker answering through another region all mean
+"our fault", and nothing is recorded.
+
+**Score and status.** Score 0&ndash;100 = recency-weighted availability &times; stability, minus penalties
+(latency, failed tests). New trackers are capped at 80, rising to 100 over their first 7 days. Statuses:
+Up/Good, Up/Slow, Up/Unreliable, Up/New, Up/Junk, Up/Broken, Up/Bad, Down.
+
+**Adaptive checking.** Healthy trackers every 30&ndash;60 minutes (up to 4 h for a long clean record at 95+),
+flapping ones every 15 minutes, dead ones backing off to 4 h. History is kept per 30-minute slot, so how
+often a tracker is checked doesn't skew its score.
+
+**Latency from four places**: Americas, Europe, Asia and Oceania (needs VPN exits; without them only
+this server's own latency is measured).
+
+**Pages**
+
+| Page | |
+|---|---|
+| `/` | Current status of every tracker. Full table on desktop, one card per tracker on phones. |
+| `/tracker/<host>` | Uptime by day and for 48 h, latency history by region, score breakdown, details, recent events, "check again now". |
+| `/fix` | What each problem means and how a tracker operator fixes it. |
+| `/list`, `/api` | Ready-made lists, with the same filters as the main table. |
+| `/map` | Where the trackers are. |
+| `/feed.xml` | Atom feed of status changes (`?tracker=<host>` for one tracker). Optional Telegram alerts. |
+
+**API** (`/api.yml`, OpenAPI, version `2.0_NZ`): upstream's lists plus `/api/clean` (clean list for
+torrent clients) and `/api/details` (every tracker's full state as JSON). Lists take filters:
+`region=` (americas, europe, asia-pacific), `fast_from=` / `fast_from_ms=`, `good`, `protocol`,
+`ipv4_works`, `ipv6_works`, `passes_peer_test`.
+
+**Hardening.** Probes only connect to public addresses and never follow redirects. Submissions are
+limited per address (500 trackers per request; 20 requests and 500 trackers per hour), and the
+submission queue survives restarts. All template output is escaped. Clean shutdown on SIGTERM;
+history files are written atomically.
 
 ## Running
 
@@ -19,24 +60,24 @@ Both containers use host networking: the app listens on 127.0.0.1:8080 and Caddy
 `newtrackon.co.nz` (plus `ipv4.`/`ipv6.` test hosts) with automatic TLS. Change the hostnames in
 `deploy/caddy/Caddyfile` to run it elsewhere.
 
-- `deploy/caddy/Caddyfile`: proxy config. It imports untracked site-local snippets from
-  `deploy/caddy/local/` (see the README there); files they serve go in `deploy/www-local/`.
+- `deploy/caddy/Caddyfile`: proxy config. It imports optional untracked snippets from
+  `deploy/caddy/local/`; files they serve go in `deploy/www-local/`.
 - `deploy/www/`: static files (sitemap, IndexNow key, 404 page).
-- App state lives in the `newtrackon_newtrackon-data` volume. Telegram alerts are configured in
-  `data/notify.json` inside it and are off if that file is missing.
+- App state lives in the `newtrackon_newtrackon-data` volume.
+- Optional, in that volume's `data/`: `notify.json` for Telegram alerts, `probe_src.json` for the
+  VPN exits used by the second test client and regional latency. Without them those features are off.
 
 ## Tests
 
-Upstream's test suite, updated for the NZ behaviour, passes in full (686 tests), and needs no network:
+All 851 tests pass, with no network needed; GitHub Actions runs them on every push.
 
 ```
-pip install pytest freezegun
+pip install . pytest freezegun
 python -m pytest tests -q
 ```
 
-`tests/conftest.py` gives every test a temporary `data/` directory and sets the NZ "is it our fault?"
-checks (monitor online, public-resolver cross-check, local-fault check) to the answers upstream assumes;
-`TestNZGuards` tests those checks themselves.
+`tests/conftest.py` gives every test a temporary `data/` directory and sets the "is it our fault?"
+checks to the answers upstream assumes; `TestNZGuards` tests those checks themselves.
 
 ## Credit
 
