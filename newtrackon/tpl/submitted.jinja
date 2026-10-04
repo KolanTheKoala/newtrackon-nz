@@ -27,6 +27,11 @@
 {%- endmacro %}
 {% block body %}
     <style>
+        /* the tracker-page icon, as in the status table */
+    .nt-tlink { margin-left: .45em; font-size: .85em; color: #c15cff !important; } .nt-tlink:hover { color: #e0a8ff !important; }
+    /* beats base.jinja's white/grey table-link rules (one more :not(#id) = higher specificity) */
+    table tbody tr:not(#_nt) > *:not(#_nt) a.nt-tlink:not(#_nt):not(#_nt2), table tbody tr:not(#_nt) > *:not(#_nt) a.nt-tlink:not(#_nt):not(#_nt2):visited { color: #c15cff !important; }
+    table tbody tr:not(#_nt) > *:not(#_nt) a.nt-tlink:not(#_nt):not(#_nt2):hover { color: #e0a8ff !important; }
         /* queued submissions: greyed out until they've been tried */
         /* same strength as base.jinja's nt-navy-rows (white text in every cell), so this wins */
         table tbody tr.nt-pending:not(#_nt) > *:not(#_nt), table tbody tr.nt-pending:not(#_nt) > *:not(#_nt) * { color: #8b93a1 !important; }
@@ -94,7 +99,7 @@
                             <td class="t">
                                 <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
-                            <td class="u">{{ response['url'] }}</td>
+                            <td class="u">{{ response['url'] }}{% if response["status"] == 1 %}{% set h = nt_host(response['url']) %}{% if h %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Tracker page: uptime and latency history"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% endif %}</td>
                             <td class="c-ip">{{ response.get('ip', '') }}</td>
                             {% if response["status"] == 1 %}
                                 <td class="up">

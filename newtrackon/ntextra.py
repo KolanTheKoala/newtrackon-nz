@@ -732,6 +732,7 @@ def register(app):
     app.jinja_env.globals["nt_rowcls"] = _rowcls
     app.jinja_env.globals["nt_dying"] = _dying
     app.jinja_env.globals["nt_bans"] = _bans
+    app.jinja_env.globals["nt_host"] = lambda url: (__import__("urllib.parse").parse.urlparse(str(url or "")).hostname or "").lower()
     app.jinja_env.globals["nt_date"] = _date
     app.jinja_env.globals["nt_state"] = _statekey
     app.add_url_rule("/feed.xml", "nt_feed", _feed)

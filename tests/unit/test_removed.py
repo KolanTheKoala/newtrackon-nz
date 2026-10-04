@@ -131,3 +131,15 @@ def test_result_colours_outrank_the_row_rule(flask_client: FlaskClient) -> None:
     html = flask_client.get("/submitted").get_data(as_text=True)
     assert "table tbody tr:not(#_nt) > td.rejected:not(#_nt), table tbody tr:not(#_nt) > td.rejected:not(#_nt) * { color: #ff3b30 !important; }" in html
     assert "table tbody tr:not(#_nt) > td.up:not(#_nt), table tbody tr:not(#_nt) > td.up:not(#_nt) * { color: #00e676 !important; }" in html
+
+
+@pytest.mark.usefixtures("region_db")
+def test_accepted_submissions_link_to_the_tracker_page(flask_client: FlaskClient) -> None:
+    persistence.submitted_data.clear()
+    try:
+        persistence.submitted_data.appendleft({"url": "udp://ok.example:6969/announce", "time": NOW, "ip": "", "info": ["{}"], "status": 1})
+        persistence.submitted_data.appendleft({"url": "udp://no.example:6969/announce", "time": NOW, "ip": "", "info": ["UDP timeout"], "status": 0})
+        html = flask_client.get("/submitted").get_data(as_text=True)
+        assert '<a href="/tracker/ok.example" class="nt-tlink"' in html and '/tracker/no.example"' not in html
+    finally:
+        persistence.submitted_data.clear()
