@@ -26,6 +26,18 @@ def _statekey(t):
         return ""
 
 
+_DYING_DAYS = 3  # trackers are removed, and banned for 30 days, after 5 days with no successful check (tracker.py)
+
+
+def _dying(t, now=None):
+    """Days since its last successful check if it's Down and within 2 days of removal, else None."""
+    import time
+    if _rowcls(t) != "offline":
+        return None
+    days = ((now or time.time()) - int(t.last_uptime or 0)) / 86400.0
+    return int(days) if days >= _DYING_DAYS else None
+
+
 def _rowcls(t):
     # row colour follows the status: one rule for the page, the API and the feed
     try:
@@ -571,6 +583,7 @@ def register(app):
     app.jinja_env.globals["nt_events"] = lambda n=10, days=None: list(reversed(
         [e for e in T.EVENTS if days is None or e.get("t", 0) >= __import__("time").time() - days * 86400][-n:]))
     app.jinja_env.globals["nt_rowcls"] = _rowcls
+    app.jinja_env.globals["nt_dying"] = _dying
     app.jinja_env.globals["nt_state"] = _statekey
     app.add_url_rule("/feed.xml", "nt_feed", _feed)
     app.add_url_rule("/feed", "nt_feed2", _feed)

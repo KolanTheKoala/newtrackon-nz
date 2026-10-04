@@ -136,3 +136,18 @@ def test_submission_eta_uses_timed_queue_items() -> None:
             patch.object(ingest, "_in_flight", []):
         assert ingest.seconds_per_url() == 15.0  # too few timed yet
         assert [p["eta"] for p in ingest.pending()] == [15, 30, 45]  # nothing in progress: the first one starts now
+
+
+def test_dying_trackers_are_dark_grey() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from newtrackon import ntextra
+
+    now = 1_800_000_000
+    t = SimpleNamespace(last_uptime=now - 3 * 86400 - 60)
+    with patch.object(ntextra, "_rowcls", return_value="offline"):
+        assert ntextra._dying(t, now) == 3
+        assert ntextra._dying(SimpleNamespace(last_uptime=now - 2 * 86400), now) is None  # down, but not close yet
+    with patch.object(ntextra, "_rowcls", return_value="orange"):
+        assert ntextra._dying(t, now) is None  # answering again

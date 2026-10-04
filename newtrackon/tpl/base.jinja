@@ -99,6 +99,9 @@
 <style id="nt-down-grey">
   table tbody tr:not(#_nt):has(.nt-peerdown) > *:not(#_nt),
   table tbody tr:not(#_nt):has(.nt-peerdown) > *:not(#_nt) a:not(#_nt) { color:#8b93a1 !important; }
+  /* dying: Down with no answer for 3+ days, removed and banned at 5: dark grey, flags faded */
+  table tbody tr.nt-dying:not(#_nt):not(#_nt) > *:not(#_nt), table tbody tr.nt-dying:not(#_nt):not(#_nt) > *:not(#_nt) *:not(#_nt) { color:#4f5663 !important; }
+  table tbody tr.nt-dying:not(#_nt) .fi, table tbody tr.nt-dying:not(#_nt) img { filter: grayscale(1) brightness(.6); }
 </style>
 <style id="nt-latcls">table tbody tr:not(#_nt) td.nt-lat-g:not(#_nt),table tbody tr:not(#_nt) td.nt-lat-g:not(#_nt) *{color:#00e676 !important;font-weight:600}table tbody tr:not(#_nt) td.nt-lat-o:not(#_nt),table tbody tr:not(#_nt) td.nt-lat-o:not(#_nt) *{color:#ff9100 !important;font-weight:600}table tbody tr:not(#_nt) td.nt-lat-r:not(#_nt),table tbody tr:not(#_nt) td.nt-lat-r:not(#_nt) *{color:#ff3b30 !important;font-weight:600}</style>
 <style id="nt-shield-na">table tbody tr:not(#_nt) .nt-shield-na:not(#_nt),table tbody tr:not(#_nt) .nt-shield-na:not(#_nt) svg{color:#6c757d !important;fill:#6c757d !important}</style>
