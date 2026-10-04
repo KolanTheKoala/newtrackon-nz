@@ -23,6 +23,11 @@
     </script>
 {% endblock head %}
 {% block body %}
+    <style>
+        /* queued submissions: greyed out until they've been tried */
+        tr.nt-pending td { color: #8b93a1 !important; }
+        td.pending { background-color: rgba(139, 147, 161, .18) !important; }
+    </style>
     <div class="container">
         <h2>Submitted Trackers</h2>
         <p>
@@ -40,7 +45,7 @@
             <b>Number of trackers in the queue: {{ size }}</b>
         </p>
     </div>
-    {% if data %}
+    {% if data or pending %}
         <div class="container-fluid">
             <div class="table-responsive">
                 <table class="sortable table table-responsive table-striped table-bordered initially-hidden">
@@ -53,6 +58,18 @@
                             <th>Response/Error</th>
                         </tr>
                     </thead>
+                    {% for p in pending %}
+                        <tr class="nt-pending">
+                            <td>{% if p.time %}<span data-nt-ago="{{ p.time }}"></span>{% endif %}</td>
+                            <td>{{ p.url }}</td>
+                            <td></td>
+                            <td class="pending"><b>Pending</b></td>
+                            <td>{{ "Being checked now" if p.checking else "Waiting in the queue" }}</td>
+                        </tr>
+                    {% endfor %}
+                    {% if size > pending|length %}
+                        <tr class="nt-pending"><td></td><td colspan="4">&hellip; and {{ size - pending|length }} more waiting</td></tr>
+                    {% endif %}
                     {% for response in data %}
                         <tr>
                             <td>

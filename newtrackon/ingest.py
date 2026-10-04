@@ -102,6 +102,24 @@ def save_queue() -> None:
             logger.exception("Could not save the submission queue")
 
 
+PENDING_SHOWN = 600  # like the history: the submitted page lists at most this many waiting URLs
+
+
+def pending(limit: int = PENDING_SHOWN) -> list[dict[str, object]]:
+    """The submission queue for the submitted page, in processing order: the URL being checked now first."""
+    with submitted_queue.mutex:
+        waiting = list(cast("deque[Tracker]", submitted_queue.queue))
+    out: list[dict[str, object]] = [{"url": u, "time": 0, "checking": True} for u in list(_in_flight)]
+    seen = {str(p["url"]) for p in out}
+    for t in waiting:
+        if len(out) >= limit:
+            break
+        if t.url not in seen:
+            seen.add(t.url)
+            out.append({"url": t.url, "time": int(t.added or 0), "checking": False})
+    return out
+
+
 def restore_saved_queue() -> None:
     """Re-queue the URLs saved before the last restart. They go through the normal checks again (denylist, duplicates, same server)."""
     try:

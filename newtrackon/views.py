@@ -156,6 +156,7 @@ def submitted():
         # Iterating a deque while rendering can cause RuntimeError: deque mutated during iteration, so we cast it to a list
         data=list(persistence.submitted_data),
         size=ingest.submitted_queue.qsize(),
+        pending=ingest.pending(),
         active="Submitted",
     )
 

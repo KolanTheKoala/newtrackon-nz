@@ -99,3 +99,20 @@ def test_clients_page_screenshots(flask_client: FlaskClient) -> None:
         assert f.exists() and f.stat().st_size < 60_000, src
         assert len(alt) > 10, src
     assert "Tools &rarr; Preferences" in html and "Default Public Trackers" in html and "tracker list URL" in html
+
+
+def test_submitted_page_shows_the_queue_as_pending(flask_client: FlaskClient) -> None:
+    from collections import deque as _dq
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from newtrackon import ingest
+
+    q = _dq([SimpleNamespace(url="udp://wait.example:1/announce", added=1_800_000_000),
+             SimpleNamespace(url="udp://now.example:1/announce", added=1_800_000_000)])
+    with patch.object(ingest.submitted_queue, "queue", q), patch.object(ingest, "_in_flight", ["udp://now.example:1/announce"]):
+        assert [(p["url"], p["checking"]) for p in ingest.pending()] == [
+            ("udp://now.example:1/announce", True), ("udp://wait.example:1/announce", False)]
+        html = flask_client.get("/submitted").get_data(as_text=True)
+    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html
+    assert html.index("now.example") < html.index("wait.example")
