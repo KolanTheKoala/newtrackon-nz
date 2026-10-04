@@ -26,7 +26,9 @@ list_lock: Lock = Lock()
 QUEUE_FILE = "data/submit_queue.json"
 _queue_file_lock: Lock = Lock()
 _in_flight: list[str] = []  # the URL being processed now: saved too, so a restart mid-check doesn't lose it
-_restoring: list[bool] = [False]  # while the saved queue is being re-queued, don't overwrite the file
+_restoring: list[bool] = [False]
+_durations: deque[float] = deque(maxlen=30)  # seconds each recent queue item took, start to saved (for the ETAs)
+_started: list[float] = [0.0]  # when the item being checked now started  # while the saved queue is being re-queued, don't overwrite the file
 
 logger: logging.Logger = logging.getLogger("newtrackon")
 
@@ -118,19 +120,20 @@ def pending(limit: int = PENDING_SHOWN) -> list[dict[str, object]]:
             seen.add(t.url)
             out.append({"url": t.url, "time": int(t.added or 0), "checking": False})
     rate = seconds_per_url()
+    # time until its result: what's left of the one being checked now, then each one up to and including it
+    left = max(rate * 0.2, rate - (time() - _started[0])) if _in_flight else 0.0
+    ahead = 1 if _in_flight else 0
     for n, p in enumerate(out, 1):
         p["pos"] = n
-        p["eta"] = 0 if p["checking"] else int((n - 1) * rate + rate / 2)  # the one being checked is about half done
+        p["eta"] = 0 if p["checking"] else round(left + (n - ahead) * rate)
     return out
 
 
-def seconds_per_url(sample: int = 30) -> float:
-    """Recent processing time per submitted URL, from the last results' times (newest first); 10 s if unknown."""
-    ts = [int(d.get("time") or 0) for d in list(submitted_data)[:sample]]
-    ts = [t for t in ts if t]
-    if len(ts) < 5 or ts[0] - ts[-1] <= 0 or time() - ts[0] > 3600:
-        return 10.0
-    return min(60.0, max(3.0, (ts[0] - ts[-1]) / (len(ts) - 1)))
+def seconds_per_url() -> float:
+    """Average time per queue item over the last 30 (a URL can give several result rows, so rows don't measure it).
+    15 s until 3 have been timed since the last restart."""
+    d = list(_durations)
+    return sum(d) / len(d) if len(d) >= 3 else 15.0
 
 
 def restore_saved_queue() -> None:
@@ -255,6 +258,7 @@ def submission_worker() -> NoReturn:
     while True:
         tracker = submitted_queue.get()
         _in_flight[:] = [tracker.url]
+        _started[0] = time()
         try:
             process_new_tracker(tracker)
             save_deque_to_disk(submitted_data, submitted_history_file)
@@ -264,6 +268,7 @@ def submission_worker() -> NoReturn:
             _in_flight.clear()
             submitted_queue.task_done()
             save_queue()
+            _durations.append(time() - _started[0])
 
 
 def process_new_tracker(tracker_candidate: Tracker) -> None:

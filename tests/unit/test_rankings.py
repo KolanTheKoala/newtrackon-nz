@@ -114,21 +114,25 @@ def test_submitted_page_shows_the_queue_as_pending(flask_client: FlaskClient) ->
         assert [(p["url"], p["checking"]) for p in ingest.pending()] == [
             ("udp://now.example:1/announce", True), ("udp://wait.example:1/announce", False)]
         html = flask_client.get("/submitted").get_data(as_text=True)
-    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html and "Queue position 2 &middot; ETA ~15 s" in html  # 10 s default: one ahead plus half of the current one
+    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html and "Queue position 2 &middot; ETA" in html
     assert "table tbody tr.nt-pending:not(#_nt) > *:not(#_nt)" in html  # grey must outrank the white row rule
     assert html.index("wait.example") < html.index("now.example")  # newest at the top, next to be checked at the bottom
 
 
-def test_submission_rate_from_recent_results() -> None:
+def test_submission_eta_uses_timed_queue_items() -> None:
+    from collections import deque as _dq
     from time import time as _now
+    from types import SimpleNamespace
     from unittest.mock import patch
 
     from newtrackon import ingest
 
-    n = int(_now())
-    with patch.object(ingest, "submitted_data", [{"time": n - 12 * k} for k in range(30)]):
-        assert ingest.seconds_per_url() == 12.0
-    with patch.object(ingest, "submitted_data", [{"time": n - 7200 - k} for k in range(30)]):
-        assert ingest.seconds_per_url() == 10.0  # nothing recent: the default
-    with patch.object(ingest, "submitted_data", [{"time": n}] * 30):
-        assert ingest.seconds_per_url() == 10.0  # all at once: no rate to measure
+    q = _dq([SimpleNamespace(url="udp://w%d.example:1/announce" % k, added=0) for k in range(3)])
+    with patch.object(ingest, "_durations", _dq([20.0, 20.0, 20.0], maxlen=30)), patch.object(ingest.submitted_queue, "queue", q), \
+            patch.object(ingest, "_in_flight", ["udp://now.example:1/announce"]), patch.object(ingest, "_started", [_now() - 5]):
+        assert ingest.seconds_per_url() == 20.0
+        assert [p["eta"] for p in ingest.pending()] == [0, 35, 55, 75]  # 15 s left on the current one, then 20 s each
+    with patch.object(ingest, "_durations", _dq([20.0], maxlen=30)), patch.object(ingest.submitted_queue, "queue", q), \
+            patch.object(ingest, "_in_flight", []):
+        assert ingest.seconds_per_url() == 15.0  # too few timed yet
+        assert [p["eta"] for p in ingest.pending()] == [15, 30, 45]  # nothing in progress: the first one starts now
