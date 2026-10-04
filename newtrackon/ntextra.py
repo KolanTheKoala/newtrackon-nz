@@ -131,6 +131,7 @@ _BASE = "https://newtrackon.co.nz"
 def _feed():
     import hashlib
     from datetime import datetime, timezone
+    from urllib.parse import quote
     from xml.sax.saxutils import escape
     evs = list(T.EVENTS)
     tr = (request.args.get("tracker") or "").lower()
@@ -150,9 +151,12 @@ def _feed():
            '<author><name>newtrackon.co.nz</name></author>']
     for e in evs:
         eid = hashlib.md5(f'{e["t"]}|{e["url"]}|{e["type"]}|{e["text"]}'.encode()).hexdigest()
-        out.append(f'<entry><title>{escape(e.get("host", e["url"]) + " " + e["text"])}</title>'
-                   f'<link href="{_BASE}/"/><id>tag:newtrackon.co.nz,2026:{eid}</id><updated>{iso(e["t"])}</updated>'
-                   f'<category term="{escape(e["type"])}"/><content type="text">{escape(e["url"] + ": " + e["text"])}</content></entry>')
+        host = e.get("host") or e["url"]
+        page = _BASE + "/tracker/" + quote(host, safe=".-")  # removed trackers keep a page too
+        html = '<a href="%s">%s</a>: %s' % (escape(page, {'"': "&quot;"}), escape(e["url"]), escape(e["text"]))
+        out.append(f'<entry><title>{escape(host + " " + e["text"])}</title>'
+                   f'<link href="{escape(page)}"/><id>tag:newtrackon.co.nz,2026:{eid}</id><updated>{iso(e["t"])}</updated>'
+                   f'<category term="{escape(e["type"])}"/><content type="html">{escape(html)}</content></entry>')
     out.append('</feed>')
     return Response("\n".join(out), mimetype="application/atom+xml", headers={"Access-Control-Allow-Origin": "*"})
 

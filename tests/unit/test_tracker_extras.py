@@ -114,3 +114,18 @@ class TestBadge:
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert '<img src="/badge/akl.example.svg"' in html
         assert "[![newTrackon NZ status](https://newtrackon.co.nz/badge/akl.example.svg)](https://newtrackon.co.nz/tracker/akl.example)" in html
+
+
+def test_feed_links_each_entry_to_its_tracker_page(flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import xml.etree.ElementTree as ET
+
+    monkeypatch.setattr(T, "EVENTS", [{"t": int(time()) - 60, "url": "udp://akl.example:1/announce", "host": "akl.example",
+                                       "type": "down", "text": "went Down (<b>timeout</b>)"}])
+    r = flask_client.get("/feed.xml")
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    entry = ET.fromstring(r.get_data()).find("a:entry", ns)
+    assert entry.find("a:link", ns).get("href") == "https://newtrackon.co.nz/tracker/akl.example"
+    content = entry.find("a:content", ns)
+    assert content.get("type") == "html"
+    assert content.text == ('<a href="https://newtrackon.co.nz/tracker/akl.example">udp://akl.example:1/announce</a>: '
+                            "went Down (&lt;b&gt;timeout&lt;/b&gt;)")  # the tracker's own text stays escaped
