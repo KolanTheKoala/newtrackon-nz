@@ -1,0 +1,142 @@
+{% extends "base.jinja" %}
+{% block head %}
+    <script src="/static/js/region-guess.js"></script>
+    <script src="/static/js/tools.js"></script>
+    <style>
+    .nt-tools h4 { margin-top: 2rem; }
+    .nt-tools .nt-note { font-size: .88rem; opacity: .75; }
+    .nt-tools textarea { font-family: monospace; font-size: .82rem; word-break: break-all; }
+    .nt-tools .nt-opts { display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; align-items: center; margin: .6rem 0; }
+    .nt-tools .nt-opts label { white-space: nowrap; }
+    .nt-tools .nt-msg { margin: .5rem 0; font-size: .92rem; }
+    .nt-tools .nt-msg.err { color: #ff6b6b; }
+    .nt-tools .nt-msg.ok { color: #00e676; }
+    .nt-tools ul.nt-rep { font-size: .85rem; margin: .3rem 0 0; padding-left: 1.2rem; word-break: break-all; }
+    .nt-tools code.nt-hash { word-break: break-all; }
+    </style>
+{% endblock head %}
+{% block body %}
+<div class="container nt-tools" style="max-width: 900px">
+    <h2>Tools</h2>
+    <p>Add working trackers to a magnet link or a .torrent file. Both run in your browser: your magnet or torrent never
+       leaves your device. Only the tracker list is fetched from this site.</p>
+
+    <div class="nt-opts">
+        <label>Trackers fast from
+            <select id="nt-fast" class="form-select form-select-sm d-inline-block w-auto">
+                <option value="">anywhere</option>
+                <option value="oceania">Australia, NZ &amp; Pacific</option>
+                <option value="asia">Asia</option>
+                <option value="europe">Europe, Middle East &amp; Africa</option>
+                <option value="americas">the Americas</option>
+            </select></label>
+        <label>Add up to
+            <select id="nt-max" class="form-select form-select-sm d-inline-block w-auto">
+                <option>5</option><option selected>10</option><option>20</option>
+            </select></label>
+    </div>
+    <p class="nt-note">The best trackers from the <a href="/list">stable list</a> (score 90+), fastest first for the place you pick.</p>
+
+    <h4 id="magnet">Magnet booster</h4>
+    <textarea id="nt-mag-in" class="form-control" rows="3" placeholder="Paste a magnet link (magnet:?xt=urn:btih:...)"></textarea>
+    <div class="nt-opts"><button id="nt-mag-go" class="btn btn-primary btn-sm">Add trackers</button></div>
+    <div id="nt-mag-msg" class="nt-msg"></div>
+    <div id="nt-mag-res" hidden>
+        <textarea id="nt-mag-out" class="form-control" rows="4" readonly></textarea>
+        <div class="nt-opts">
+            <button id="nt-mag-copy" class="btn btn-secondary btn-sm">Copy</button>
+            <a id="nt-mag-open" class="btn btn-secondary btn-sm" href="#">Open in your torrent client</a>
+        </div>
+    </div>
+
+    <h4 id="torrent">Torrent fixer</h4>
+    <input id="nt-tor-in" type="file" accept=".torrent,application/x-bittorrent" class="form-control form-control-sm">
+    <div class="nt-opts">
+        <label><input type="checkbox" id="nt-tor-down" checked> Drop trackers this site lists as Down</label>
+        <label><input type="checkbox" id="nt-tor-only"> Keep only trackers on this site's list</label>
+        <label><input type="checkbox" id="nt-tor-add" checked> Add the best trackers</label>
+    </div>
+    <p class="nt-note">Trackers this site doesn't list are unknown rather than dead, so they're kept unless you tick
+       "keep only". Private torrents are left alone. The torrent's contents and info hash never change.</p>
+    <div class="nt-opts"><button id="nt-tor-go" class="btn btn-primary btn-sm">Fix torrent</button></div>
+    <div id="nt-tor-msg" class="nt-msg"></div>
+    <div id="nt-tor-res" hidden>
+        <a id="nt-tor-dl" class="btn btn-success btn-sm" href="#">Download fixed torrent</a>
+        <ul id="nt-tor-rep" class="nt-rep"></ul>
+    </div>
+</div>
+<script>
+(function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var fast = $('nt-fast'), guess = typeof ntGuessRegion === 'function' ? ntGuessRegion() : '';
+    if (guess) { fast.value = guess; }
+    var cache = {};
+    function best() {  // tracker URLs from /api/clean, best first
+        var k = fast.value;
+        if (!cache[k]) {
+            cache[k] = fetch('/api/clean' + (k ? '?fast_from=' + encodeURIComponent(k) : ''))
+                .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.text(); })
+                .then(function (t) { return t.split(/\s+/).filter(Boolean); });
+        }
+        return cache[k];
+    }
+    var listed = null;
+    function statuses() {  // {url: status} for every tracker this site lists
+        if (!listed) {
+            listed = fetch('/api/details').then(function (r) { return r.json(); }).then(function (a) {
+                var m = {}; a.forEach(function (t) { m[t.url] = t.status; }); return m;
+            });
+        }
+        return listed;
+    }
+    function msg(el, text, cls) { el.textContent = text; el.className = 'nt-msg' + (cls ? ' ' + cls : ''); }
+    var max = function () { return parseInt($('nt-max').value, 10) || 10; };
+
+    // magnet booster
+    $('nt-mag-go').addEventListener('click', function () {
+        var m = $('nt-mag-msg'); $('nt-mag-res').hidden = true; msg(m, 'Getting the tracker list…');
+        best().then(function (urls) {
+            var r = NtTools.boostMagnet($('nt-mag-in').value, urls, max());
+            if (r.error) { msg(m, r.error, 'err'); return; }
+            $('nt-mag-out').value = r.magnet; $('nt-mag-open').href = r.magnet; $('nt-mag-res').hidden = false;
+            msg(m, r.added.length ? 'Added ' + r.added.length + ' tracker' + (r.added.length === 1 ? '' : 's') + '.' : 'It already has all of them: nothing to add.', 'ok');
+        }).catch(function (e) { msg(m, 'Couldn\'t get the tracker list (' + e.message + '). Try again.', 'err'); });
+    });
+    $('nt-mag-copy').addEventListener('click', function () {
+        var o = $('nt-mag-out'); o.select();
+        (navigator.clipboard ? navigator.clipboard.writeText(o.value) : Promise.reject()).then(
+            function () { msg($('nt-mag-msg'), 'Copied.', 'ok'); },
+            function () { document.execCommand('copy'); msg($('nt-mag-msg'), 'Copied.', 'ok'); });
+    });
+
+    // torrent fixer
+    var dlUrl = null;
+    $('nt-tor-go').addEventListener('click', function () {
+        var m = $('nt-tor-msg'), f = $('nt-tor-in').files[0];
+        $('nt-tor-res').hidden = true;
+        if (!f) { msg(m, 'Choose a .torrent file first.', 'err'); return; }
+        if (f.size > 20 * 1024 * 1024) { msg(m, 'That file is too big to be a .torrent.', 'err'); return; }
+        msg(m, 'Working…');
+        var wantAdd = $('nt-tor-add').checked;
+        Promise.all([f.arrayBuffer(), statuses(), wantAdd ? best() : Promise.resolve([])]).then(function (x) {
+            var bytes = new Uint8Array(x[0]);
+            var r = NtTools.fixTorrent(bytes, {dropDown: $('nt-tor-down').checked, onlyListed: $('nt-tor-only').checked, add: x[2], max: max()}, x[1]);
+            if (r.error) { msg(m, r.error, 'err'); return; }
+            var before = NtTools.bdecode(bytes).map.info.raw, after = NtTools.bdecode(r.bytes).map.info.raw;
+            return Promise.all([NtTools.infoHashes(before, crypto.subtle), NtTools.infoHashes(after, crypto.subtle)]).then(function (h) {
+                if (h[0].v1 !== h[1].v1 || h[0].v2 !== h[1].v2) { msg(m, 'Something went wrong (the info hash would change), so nothing was produced.', 'err'); return; }
+                if (dlUrl) { URL.revokeObjectURL(dlUrl); }
+                dlUrl = URL.createObjectURL(new Blob([r.bytes], {type: 'application/x-bittorrent'}));
+                var a = $('nt-tor-dl'); a.href = dlUrl; a.download = f.name.replace(/\.torrent$/i, '') + ' (fixed).torrent';
+                var rep = $('nt-tor-rep'); rep.textContent = '';
+                var li = function (t) { var e = document.createElement('li'); e.textContent = t; rep.appendChild(e); };
+                li('Kept ' + r.kept.length + ', removed ' + r.removed.length + (r.removed.length ? ' (' + r.removed.join(', ') + ')' : '') + ', added ' + r.added.length + '.');
+                li('Info hash ' + h[1].v1 + (h[1].v2 ? ' / v2 ' + h[1].v2 : '') + ': unchanged.');
+                $('nt-tor-res').hidden = false;
+                msg(m, 'Done.', 'ok');
+            });
+        }).catch(function (e) { msg(m, 'Couldn\'t do it (' + e.message + '). Try again.', 'err'); });
+    });
+})();
+</script>
+{% endblock %}

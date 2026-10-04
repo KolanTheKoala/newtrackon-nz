@@ -60,3 +60,17 @@ class TestRankings:
 
     def test_in_the_menu(self, flask_client: FlaskClient) -> None:
         assert 'href="/rankings"' in flask_client.get("/").get_data(as_text=True)
+
+
+def test_tools_page(flask_client: FlaskClient) -> None:
+    r = flask_client.get("/tools")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200
+    assert '<script src="/static/js/tools.js"></script>' in html and 'id="nt-mag-in"' in html and 'id="nt-tor-in"' in html
+    assert "never leaves your device" in html and 'href="/tools"' in html
+    assert flask_client.get("/static/js/tools.js").status_code == 200
+
+
+def test_menu_bar_is_sticky_not_fixed(flask_client: FlaskClient) -> None:
+    html = flask_client.get("/about").get_data(as_text=True)
+    assert 'navbar-dark sticky-top"' in html and "fixed-top" not in html

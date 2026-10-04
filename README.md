@@ -40,6 +40,7 @@ this server's own latency is measured).
 | `/tracker/<host>` | "Is it down?" answer, uptime by day and for 48 h, latency history by region, score breakdown, details, recent events, "check again now", and a Follow link (Atom feed of that tracker's changes). |
 | `/fix` | What each problem means and how a tracker operator fixes it. |
 | `/list`, `/api` | Ready-made lists, with the same filters as the main table. |
+| `/tools` | Magnet booster and torrent fixer: add the best trackers to a magnet link or a .torrent, drop Down ones. Runs in the browser; the info hash never changes and private torrents are left alone. |
 | `/rankings` | Most reliable over the last 14 days, longest unbroken uptime, fastest from each region. |
 | `/map` | Where the trackers are. |
 | `/feed.xml` | Atom feed of status changes (`?tracker=<host>` for one tracker). Optional Telegram alerts. |
@@ -73,7 +74,7 @@ Both containers use host networking: the app listens on 127.0.0.1:8080 and Caddy
 
 ## Tests
 
-All 851 tests pass, with no network needed; GitHub Actions runs them on every push.
+All Python tests pass, plus JavaScript tests for the browser tools (`tests/js`), with no network needed; GitHub Actions runs them on every push.
 
 ```
 pip install . pytest freezegun

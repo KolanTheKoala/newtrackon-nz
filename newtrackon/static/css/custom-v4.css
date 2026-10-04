@@ -14,8 +14,13 @@ html {
   min-height: 100%;
 }
 
+/* the menu bar is sticky (it takes its own space), so content never starts under it, however tall it gets */
+html {
+  scroll-padding-top: 96px;
+}
+
 body {
-  padding-top: 50px;
+  padding-top: 0;
   margin-bottom: 80px;
   overflow-y: scroll;
   font-family: 'Roboto', sans-serif;
@@ -165,7 +170,7 @@ td.rejected {
   visibility: hidden;
 }
 
-.fixed-top {
+.navbar.sticky-top {
   font-size: 17px;
 }
 

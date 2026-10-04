@@ -20,3 +20,10 @@ jobs:
         run: pip install . pytest freezegun
       - name: Test
         run: python -m pytest tests -q -p no:cacheprovider
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Test the browser tools (magnet booster, torrent fixer)
+        run: |
+          python tests/js/make_fixtures.py "$RUNNER_TEMP/fx"
+          NT_FIXTURES="$RUNNER_TEMP/fx" node --test tests/js/tools.test.js

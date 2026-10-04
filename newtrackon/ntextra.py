@@ -404,6 +404,13 @@ def _rankings_page():
                                        "and the fastest from Oceania, Asia, Europe and North America. Checked from New Zealand.")
 
 
+def _tools_page():
+    from flask import render_template
+    return render_template("tools.jinja", active="Tools", title="Magnet booster and torrent fixer",
+                           description="Add working, fast BitTorrent trackers to a magnet link or a .torrent file, and drop dead ones. "
+                                       "Runs in your browser: your magnet or torrent never leaves your device.")
+
+
 def _is_it_down(t):
     """The honest one-line answer for the tracker page and its search snippet."""
     import time
@@ -455,6 +462,7 @@ def register(app):
     app.add_url_rule("/tracker/<host>/recheck", "nt_recheck", _recheck, methods=["POST"])
     app.add_url_rule("/fix", "nt_fix", _fix_page)
     app.add_url_rule("/rankings", "nt_rankings", _rankings_page)
+    app.add_url_rule("/tools", "nt_tools", _tools_page)
     app.jinja_env.globals["nt_health"] = _monitor_health
 
     @app.route("/api/tracker/<host>")
