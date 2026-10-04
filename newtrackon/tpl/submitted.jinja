@@ -25,8 +25,9 @@
 {% block body %}
     <style>
         /* queued submissions: greyed out until they've been tried */
-        tr.nt-pending td { color: #8b93a1 !important; }
-        td.pending { background-color: rgba(139, 147, 161, .18) !important; }
+        /* same strength as base.jinja's nt-navy-rows (white text in every cell), so this wins */
+        table tbody tr.nt-pending:not(#_nt) > *:not(#_nt), table tbody tr.nt-pending:not(#_nt) > *:not(#_nt) * { color: #8b93a1 !important; }
+        table tbody tr.nt-pending:not(#_nt) > td.pending:not(#_nt) { background: #1f2a3d !important; }
     </style>
     <div class="container">
         <h2>Submitted Trackers</h2>
