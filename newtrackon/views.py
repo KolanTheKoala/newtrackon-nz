@@ -66,6 +66,8 @@ def _submission_refused(text: str) -> str | None:
 
 app = Flask(__name__)
 app.template_folder = "tpl"
+# Flask only auto-escapes .html templates; ours are .jinja, and they show text that comes from trackers (errors, networks)
+app.jinja_env.autoescape = True
 
 
 class RegexConverter(BaseConverter):

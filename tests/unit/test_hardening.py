@@ -171,3 +171,15 @@ class TestSubmissionLimits:
         r = flask_client.post("/", data={"new_trackers": _urls(501)}, headers=self.STRANGER)
         assert r.status_code == 429
         assert b"Too many trackers in one submission" in r.get_data()
+
+
+class TestTemplatesEscape:
+    def test_tracker_text_is_escaped_on_the_main_page(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from time import time
+
+        from newtrackon import tracker as T
+
+        evil = '<script>alert(1)</script>'
+        monkeypatch.setattr(T, "EVENTS", [{"t": int(time()), "url": "udp://x.example:1/announce", "host": "x.example", "type": "down", "text": "went Down (" + evil + ")"}])
+        html = flask_client.get("/").get_data(as_text=True)
+        assert evil not in html and "&lt;script&gt;alert(1)&lt;/script&gt;" in html
