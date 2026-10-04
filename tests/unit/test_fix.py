@@ -166,3 +166,11 @@ class TestOfflineLatency:
         assert html.count('<span class="nt-offl">Offline</span>') == 1  # down.example only
         cell = html[:html.index('<span class="nt-offl">')].rsplit("<td", 1)[1]
         assert "nt-lat-" not in cell  # the latency colour rules (green/orange/red, !important) would override the red
+
+
+@pytest.mark.usefixtures("region_db")
+class TestStatusClick:
+    def test_rows_carry_host_and_status_cells_link_through(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/").get_data(as_text=True)
+        assert html.count("data-nt-host=") == 5 and 'data-nt-host="akl.example"' in html
+        assert "location.href = '/tracker/' + encodeURIComponent(host)" in html
