@@ -355,6 +355,15 @@ class Tracker:
             self.to_be_deleted = True
             self._nt_ban()
             return
+        # Up/Bad (no peers or fake peers, not a dead address) for UPBAD_DAYS in a row, and still failing now: fixed or gone.
+        ub = _nt_upbad_days(self.url, now_ts)
+        fake = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
+        if ub is not None and ub >= UPBAD_DAYS and (fake or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT):
+            _NT_DEL_REASON[self.url] = "%s for %d days (Up/Bad)" % ("returned fake peers" if fake else "handed out no peers", int(ub))
+            logger.info("Evicting %s (Up/Bad for %.1f days)", self.url, ub)
+            self.to_be_deleted = True
+            self._nt_ban()
+            return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
         if age_days >= 3 and (dead_days >= 5 or (n >= 144 and availability * stability < 0.15)):
@@ -953,6 +962,18 @@ def _warn_set(url, msg):
     else:
         WARNINGS.pop(url, None)
     _jsave(WARNINGS, _WARN_FILE)
+
+
+UPBAD_DAYS = 7  # Up/Bad this long (no peers or fake peers) and it's removed and banned for 30 days
+
+
+def _nt_upbad_days(url, now=None):
+    """Days in a row it's been Up/Bad for no peers or fake peers (a dead address doesn't count), or None."""
+    s = LAST_STATE.get(url) or {}
+    if s.get("st") != "up_bad" or not any("no peers" in b or "fake peers" in b for b in (s.get("bad") or [])):
+        return None
+    now = now or time()
+    return (now - int(s.get("since") or now)) / 86400.0
 
 
 _CLOSED_FILE = "data/closed.json"

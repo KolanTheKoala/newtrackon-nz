@@ -145,9 +145,9 @@ def test_dying_trackers_are_dark_grey() -> None:
     from newtrackon import ntextra
 
     now = 1_800_000_000
-    t = SimpleNamespace(last_uptime=now - 3 * 86400 - 60)
+    t = SimpleNamespace(url="udp://d.example:1/announce", last_uptime=now - 3 * 86400 - 60)
     with patch.object(ntextra, "_rowcls", return_value="offline"):
-        assert ntextra._dying(t, now) == 3
-        assert ntextra._dying(SimpleNamespace(last_uptime=now - 2 * 86400), now) is None  # down, but not close yet
+        assert ntextra._dying(t, now) == "No answer for 3+ days: removed and banned for 30 days after 5"
+        assert ntextra._dying(SimpleNamespace(url="udp://d.example:1/announce", last_uptime=now - 2 * 86400), now) is None  # down, but not close yet
     with patch.object(ntextra, "_rowcls", return_value="orange"):
         assert ntextra._dying(t, now) is None  # answering again

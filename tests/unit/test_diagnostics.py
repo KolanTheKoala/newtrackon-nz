@@ -124,3 +124,48 @@ def test_submission_refused_when_its_first_answer_says_closed() -> None:
         assert ingest._closed_on_submit("http://other.example:80/announce") is None
     finally:
         persistence.submitted_data.clear()
+
+
+class TestUpBadClock:
+    NOPEERS = ["hands out no peers (3+ of its last 6 peer tests failed)"]
+
+    def _state(self, url: str, days: float, bad: list[str]) -> None:
+        from time import time
+        T.LAST_STATE[url] = {"st": "up_bad", "bad": bad, "dead": [], "since": int(time() - days * 86400)}
+
+    def test_days_counts_no_or_fake_peers_only(self) -> None:
+        self._state(AKL, 3, self.NOPEERS)
+        assert 2.99 < T._nt_upbad_days(AKL) < 3.01
+        self._state(AKL, 3, ["its published IPv4 address is dead"])
+        assert T._nt_upbad_days(AKL) is None  # Up/Broken: not on the clock
+
+    def test_grey_from_day_5(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        t = SimpleNamespace(url=AKL, last_uptime=0)
+        with patch.object(ntextra, "_rowcls", return_value="orange"):
+            self._state(AKL, 4.5, self.NOPEERS)
+            assert ntextra._dying(t) is None
+            self._state(AKL, 5.2, self.NOPEERS)
+            assert ntextra._dying(t) == "Up/Bad for 5+ days: removed and banned for 30 days after 7 unless fixed"
+
+    def _check(self, t, days: float, peer_fails: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        from collections import deque
+        from time import time
+        self._state(t.url, days, self.NOPEERS)
+        monkeypatch.setitem(T.PEER_FAILS, t.url, peer_fails)
+        t.added, t.last_uptime, t.status = int(time()) - 30 * 86400, int(time()), 1
+        t.historic = deque([1] * 48, maxlen=1440)
+        t.update_uptime()
+
+    def test_removed_after_7_days(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, 7.1, T.PEER_FAIL_LIMIT, monkeypatch)
+        assert sample_tracker.to_be_deleted is True
+        assert T._NT_DEL_REASON[sample_tracker.url] == "handed out no peers for 7 days (Up/Bad)"
+        assert open("data/denylist.txt").read().split()[0] == sample_tracker.host
+
+    def test_kept_before_7_days_or_once_fixed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, 6.5, T.PEER_FAIL_LIMIT, monkeypatch)
+        assert sample_tracker.to_be_deleted is False
+        self._check(sample_tracker, 8, 0, monkeypatch)  # passing the peer test again now
+        assert sample_tracker.to_be_deleted is False

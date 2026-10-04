@@ -30,12 +30,16 @@ _DYING_DAYS = 3  # trackers are removed, and banned for 30 days, after 5 days wi
 
 
 def _dying(t, now=None):
-    """Days since its last successful check if it's Down and within 2 days of removal, else None."""
+    """The tooltip for a tracker within 2 days of removal (Down for 3+ days, or Up/Bad for 5+), else None."""
     import time
-    if _rowcls(t) != "offline":
-        return None
-    days = ((now or time.time()) - int(t.last_uptime or 0)) / 86400.0
-    return int(days) if days >= _DYING_DAYS else None
+    now = now or time.time()
+    if _rowcls(t) == "offline":
+        days = (now - int(t.last_uptime or 0)) / 86400.0
+        return "No answer for %d+ days: removed and banned for 30 days after 5" % int(days) if days >= _DYING_DAYS else None
+    ub = T._nt_upbad_days(t.url, now)
+    if ub is not None and ub >= T.UPBAD_DAYS - 2:
+        return "Up/Bad for %d+ days: removed and banned for 30 days after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
+    return None
 
 
 def _rowcls(t):
@@ -370,6 +374,12 @@ def _evidence(t, d):
     w = _warning(t.url)
     if w and fix in ("no-peers", "fake-peers", "unreliable"):
         out.append("The tracker itself says: \u201c%s\u201d. %s" % (w[0], w[1] or "That's its own message to clients, sent with each answer."))
+    ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") else None
+    if ub is not None:
+        left = T.UPBAD_DAYS - ub
+        out.append("Up/Bad for %s. Trackers that stay Up/Bad for %d days are removed and banned for 30 days: %s."
+                   % ("under a day" if ub < 1 else "%d day%s" % (int(ub), "" if int(ub) == 1 else "s"), T.UPBAD_DAYS,
+                      "it's due now" if left <= 0 else "about %s left to fix it" % ("%d h" % max(1, round(left * 24)) if left < 1 else "%d day%s" % (int(left), "" if int(left) == 1 else "s"))))
     if fix == "no-peers":
         out.append("Peer test passed %d of the last %d times: a second test client wasn't told about the first." % (d["peer_test"]["passed"], d["peer_test"]["of"]))
     if fix == "fake-peers":
