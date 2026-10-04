@@ -17,7 +17,11 @@
     // countries whose main landmass reaches within EQUATOR_BAND degrees of the equator form a band of greens
     var EQUATOR_BAND = 10;
     var GREENS = ['#2e9d48', '#1b5e20', '#7cb342', '#4caf50', '#9ccc65', '#388e3c', '#00897b'];
-    var PALETTE = ['#3f6f9f', '#a0884a', '#7d5f9a', '#4f9a96', '#9a6a4f', '#6b7fb0', '#b07aa1'];  // no reds, greens or white
+    // Sahara and Middle East countries get desert tans and browns (ahead of the green band)
+    var DESERT = {'504': 1, '732': 1, '012': 1, '788': 1, '434': 1, '818': 1, '478': 1, '466': 1, '562': 1, '148': 1, '729': 1,
+        '682': 1, '887': 1, '512': 1, '784': 1, '634': 1, '414': 1, '368': 1, '400': 1, '760': 1, '376': 1, '275': 1, '422': 1, '364': 1};
+    var TANS = ['#d2b48c', '#c19a6b', '#e0c9a6', '#a67b5b', '#deb887', '#b8956a', '#8b6b4a'];
+    var PALETTE = ['#3f6f9f', '#5c6bc0', '#7d5f9a', '#4f9a96', '#8e6fb5', '#6b7fb0', '#b07aa1'];  // no reds, greens, tans or white
     // neighbours across a narrow sea, which must not share a colour either
     var SEA_NEIGHBORS = [['036', '554'], ['036', '360'], ['826', '372'], ['826', '250'], ['392', '410'], ['392', '156'],
         ['158', '156'], ['144', '356'], ['450', '508'], ['840', '192'], ['124', '304'], ['352', '304']];
@@ -88,8 +92,9 @@
             return choices.filter(function (c) { return !used[c]; })[0];
         }
         var order = geoms.map(function (g, i) { return i; }).sort(function (a, b) { return neighbors[b].length - neighbors[a].length; });
+        order.forEach(function (i) { if (!color[i] && DESERT[geoms[i].id]) { color[i] = pick(i, TANS) || pick(i, PALETTE); } });
         order.forEach(function (i) { if (!color[i] && equatorial[geoms[i].id]) { color[i] = pick(i, GREENS) || pick(i, PALETTE); } });
-        order.forEach(function (i) { if (!color[i]) { color[i] = pick(i, PALETTE) || pick(i, GREENS) || PALETTE[i % PALETTE.length]; } });
+        order.forEach(function (i) { if (!color[i]) { color[i] = pick(i, PALETTE) || pick(i, GREENS) || pick(i, TANS) || PALETTE[i % PALETTE.length]; } });
         var colorById = {};
         geoms.forEach(function (g, i) { colorById[g.id] = color[i]; });
 
