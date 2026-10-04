@@ -37,7 +37,7 @@
         #trackon_table { margin-left: calc(var(--bs-gutter-x, 1.5rem) * -.5); margin-right: calc(var(--bs-gutter-x, 1.5rem) * -.5); width: calc(100% + var(--bs-gutter-x, 1.5rem)) !important; }
         /* key: each entry reads as one line, symbol first */
         .nt-legend { grid-template-columns: 1fr !important; gap: 14px !important; }
-        .nt-lg .r { display: block !important; line-height: 1.45; margin: 0 0 6px !important; }
+        .nt-lg .r { display: inline-block !important; line-height: 1.45; margin: 0 1.1em 6px 0 !important; }  /* short entries sit side by side */
         .nt-lg .k { display: inline; min-width: 0 !important; margin-right: .45em; }
         .nt-lg .s { display: inline-block; min-width: 1.6em; text-align: left; }
         /* events: time and host on one line, what happened underneath */
@@ -364,52 +364,48 @@ fmt();setInterval(fmt,1000)})();</script>
 <style>.nt-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px 28px;margin:16px 0 24px;font-size:.85rem}.nt-lg h6{margin:0 0 4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;opacity:.65;border-bottom:1px solid rgba(255,255,255,.15);padding-bottom:3px}.nt-lg .r{display:grid;grid-template-columns:78px 1fr;align-items:center;line-height:1.7}.nt-lg .s{text-align:center;white-space:nowrap}</style><style>.nt-lg .r{display:flex;gap:8px;align-items:baseline;margin:2px 0}.nt-lg .k{min-width:96px;font-weight:600;white-space:nowrap}</style>
 <div class="nt-legend">
 <div class="nt-lg"><h6>Status</h6>
-<div class="r"><span class="k" style="color:#00e676">Up/Good &#11014;&#65038;</span>Answering, passes every test, score 90+ (on the stable list)</div>
-<div class="r"><span class="k" style="color:#00e676">Up/Slow &#128034;</span>Healthy but slow: averages 300&nbsp;ms or more, or 200&nbsp;ms or more with latency alone pulling its score under 90 (green if still 90+, orange below)</div>
-<div class="r"><span class="k" style="color:#ffa500">Up/Unreliable &#127922;</span>Answering now, but score under 90 from recent misses</div>
-<div class="r"><span class="k" style="color:#4fc3f7">Up/New &#128035;</span>Healthy, under 7 days old: score capped while it builds history</div>
-<div class="r"><span class="k" style="color:#ffa500">Up/Junk &#128465;&#65039;</span>Answering, but score under 50</div>
-<div class="r"><span class="k" style="color:#ffa500">Up/Broken &#128295;</span>One published address family (IPv4 or IPv6) is dead; still works on the other. Score capped at 50</div>
-<div class="r"><span class="k" style="color:#ffa500">Up/Bad &#128683;</span>Fails a quality test (hover for why)</div>
-<div class="r"><span class="k" style="color:#ff3b30">Down</span>Not answering</div></div>
+<div class="r" title="Answering, passes every test, score 90+ (on the stable list)"><span class="k" style="color:#00e676">Up/Good &#11014;&#65038;</span>passes everything, 90+</div>
+<div class="r" title="Averages 300 ms or more, or 200 ms or more with latency alone pulling its score under 90 (green if still 90+, orange below)"><span class="k" style="color:#00e676">Up/Slow &#128034;</span>healthy but slow</div>
+<div class="r" title="Answering now, but score under 90 from recent misses"><span class="k" style="color:#ffa500">Up/Unreliable &#127922;</span>recent misses, under 90</div>
+<div class="r" title="Healthy, under 7 days old: score capped while it builds history"><span class="k" style="color:#4fc3f7">Up/New &#128035;</span>under 7 days old</div>
+<div class="r" title="Answering, but score under 50"><span class="k" style="color:#ffa500">Up/Junk &#128465;&#65039;</span>score under 50</div>
+<div class="r" title="One published address family is dead; still works on the other. Score capped at 50"><span class="k" style="color:#ffa500">Up/Broken &#128295;</span>IPv4 or IPv6 dead</div>
+<div class="r" title="Fails a quality test (hover the status for why)"><span class="k" style="color:#ffa500">Up/Bad &#128683;</span>fails a quality test</div>
+<div class="r"><span class="k" style="color:#ff3b30">Down</span>not answering</div></div>
 <div class="nt-lg"><h6>Latency</h6>
-<div class="r"><span class="k">Figure</span>Average of the per-region medians (hover for the breakdown)</div>
-<div class="r"><span class="k" style="color:#00e676">green</span>under 200&nbsp;ms</div>
+<div class="r" title="Average of the per-region medians; hover a latency for the breakdown"><span class="k" style="color:#00e676">green</span>under 200&nbsp;ms</div>
 <div class="r"><span class="k" style="color:#ff9100">orange</span>200&ndash;299&nbsp;ms</div>
-<div class="r"><span class="k" style="color:#ff3b30">red</span>300&nbsp;ms or more</div>
-<div class="r"><span class="k">Penalty</span>&minus;0.02/ms over 150&nbsp;ms up to 1&nbsp;s, steeper beyond (max &minus;40)</div></div>
+<div class="r" title="Penalty: &minus;0.02 per ms over 150 ms up to 1 s, steeper beyond (max &minus;40)"><span class="k" style="color:#ff3b30">red</span>300&nbsp;ms+</div></div>
 <div class="nt-lg"><h6>Score</h6>
-<div class="r"><span class="k">0&ndash;100</span>Availability × stability, minus penalties (latency, peer tests, fake peers, dead IP family). New trackers are capped at 80, rising to 100 over 7 days</div>
-<div class="r"><span class="k" style="color:#f5c518">&#9733;</span>1 star per 20 points &middot; &#9733;&#9733;&#9733;&#9733;&#9733; = 90+</div>
-<div class="r"><span class="k" style="color:#8b93a1">Grey text</span>Score under 90, not on the stable list (Up/New excepted)</div></div>
+<div class="r" title="Score 0&ndash;100: availability &times; stability, minus penalties. New trackers are capped at 80, rising to 100 over 7 days"><span class="k" style="color:#f5c518">&#9733;</span>20 points each</div>
+<div class="r" title="Up/New excepted"><span class="k" style="color:#8b93a1">Grey</span>under 90, not on the stable list</div></div>
 <div class="nt-lg"><h6>Peer test</h6>
-<div class="r"><span class="k" style="color:#00e676">&#10004;</span>Hands our peer to a 2nd client</div>
-<div class="r"><span class="k" style="color:#ffa500">&#9888;</span>Latest peer test failed</div>
-<div class="r"><span class="k" style="color:#ff3b30">&#9888;</span>Failed 3 of last 6 &rarr; score 0</div></div>
+<div class="r" title="Hands our peer to a 2nd client"><span class="k" style="color:#00e676">&#10004;</span>passes</div>
+<div class="r" title="Latest peer test failed"><span class="k" style="color:#ffa500">&#9888;</span>failed</div>
+<div class="r"><span class="k" style="color:#ff3b30">&#9888;</span>failed 3 of 6: score 0</div></div>
 <div class="nt-lg"><h6>Fake peers</h6>
-<div class="r"><span class="k" style="color:#ffa500">&#9760;</span>Returned fake peers</div>
-<div class="r"><span class="k" style="color:#ff3b30">&#9760;</span>3&times; running &rarr; score &le; 50</div></div>
+<div class="r" title="Returned fake peers"><span class="k" style="color:#ffa500">&#9760;</span>fake peers</div>
+<div class="r"><span class="k" style="color:#ff3b30">&#9760;</span>3&times; running: score &le; 50</div></div>
 <div class="nt-lg"><h6>IP families</h6>
-<div class="r"><span class="k" style="color:#00e676">IPv4</span>Answers</div>
-<div class="r"><span class="k" style="color:#ff3b30">IPv4</span>Published but dead (3 checks) &rarr; score &le; 50</div>
-<div class="r"><span class="k" style="color:#555">IPv6</span>Not published</div></div>
+<div class="r"><span class="k" style="color:#00e676">IPv4</span>works</div>
+<div class="r" title="Published but dead for 3 checks"><span class="k" style="color:#ff3b30">IPv4</span>dead: score &le; 50</div>
+<div class="r"><span class="k" style="color:#555">IPv6</span>not published</div></div>
 <div class="nt-lg"><h6>Security shield</h6>
-<div class="r"><span class="k" style="color:#28a745"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>Spoof-proof: HTTP(S), or UDP that enforces the connection-ID handshake</div>
-<div class="r"><span class="k" style="color:#dc3545"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>Spoofable UDP (no penalty)</div>
-<div class="r"><span class="k" style="color:#6c757d"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>UDP, not tested yet &middot; none shown when down</div></div>
-<div class="nt-lg"><h6>Same operator</h6>
-<div class="r"><span class="k" style="color:#8ab4f8">&#10697;N</span>This tracker and N&minus;1 others share servers or a domain: adding several gains little</div></div>
-<div class="nt-lg"><h6>Flags (no penalty)</h6>
-<div class="r"><span class="k" style="color:#ffa500">&#9650;</span>Inflated seed/leech counts</div>
-<div class="r"><span class="k" style="color:#ffa500">&#8856;</span>Keeps peers after they stop</div></div>
+<div class="r" title="HTTP(S), or UDP that enforces the connection-ID handshake"><span class="k" style="color:#28a745"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>spoof-proof</div>
+<div class="r" title="No penalty"><span class="k" style="color:#dc3545"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>spoofable UDP</div>
+<div class="r" title="UDP, not tested yet; no shield is shown when down"><span class="k" style="color:#6c757d"><svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M8 0 1.5 2.5v5c0 4 2.8 7.2 6.5 8.5 3.7-1.3 6.5-4.5 6.5-8.5v-5z"/></svg></span>not tested yet</div></div>
+<div class="nt-lg"><h6>Other</h6>
+<div class="r" title="These share servers or a domain: adding several gains little"><span class="k" style="color:#8ab4f8">&#10697;N</span>same operator as N&minus;1 others</div>
+<div class="r" title="Inflated seed/leech counts (no penalty)"><span class="k" style="color:#ffa500">&#9650;</span>inflated counts</div>
+<div class="r" title="Keeps peers after they stop (no penalty)"><span class="k" style="color:#ffa500">&#8856;</span>keeps stopped peers</div></div>
 <div class="nt-lg"><h6>History dots</h6>
-<div class="r"><span class="k" style="color:#00e676">&#9679;</span>Up</div>
-<div class="r"><span class="k" style="color:#ff3b30">&#9679;</span>Down (any failed check in that period)</div>
-<div class="r"><span class="k">&#9675;</span>Not monitored yet</div>
-<div class="r"><span class="k">Scale</span>7 days: 1 dot = 1 day &middot; 24 hours: 1 dot = 2 hours</div></div>
+<div class="r"><span class="k" style="color:#00e676">&#9679;</span>up</div>
+<div class="r" title="Any failed check in that period"><span class="k" style="color:#ff3b30">&#9679;</span>down</div>
+<div class="r"><span class="k">&#9675;</span>not monitored yet</div>
+<div class="r"><span class="k">Scale</span>7 days: 1/day &middot; 24 h: 1 per 2&nbsp;h</div></div>
 </div>
         <div class="nt-uptime-note">
-            <p><b>* Score is out of 100, not an uptime percentage.</b> Recent checks count more than old ones, and a tracker that keeps dropping in and out scores lower than one that had a single outage. Healthy trackers are checked every 30&ndash;60 minutes (up to 4h for trackers scoring 95+ with a clean record of 12&ndash;48 hours) shaky ones every 15, and dead ones back off to every 1&ndash;4 hours; trackers that stop answering for 5 days, or are too unreliable to be useful, are removed (About, section 8).</p>
+            <p><b>* Score out of 100, not uptime %:</b> recent checks count more, and dropping in and out costs more than one outage. Details in <a href="/about">About</a>.</p>
         </div>
     </div>
 {% endblock %}
