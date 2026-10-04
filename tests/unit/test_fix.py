@@ -155,3 +155,10 @@ class TestMainPageLayout:
         assert '<h1 class="h3 text-center mt-3">Tracker Status</h1>' in html
         form = html[html.index('<form method="post" action="/"'):html.index("</form>")]
         assert '<div class="d-flex gap-2 align-items-start">' in form and "<p>" not in form
+
+
+@pytest.mark.usefixtures("region_db")
+class TestOfflineLatency:
+    def test_down_tracker_shows_offline(self, flask_client: FlaskClient) -> None:
+        html = flask_client.get("/").get_data(as_text=True)
+        assert html.count('<span class="nt-offl">Offline</span>') == 1  # down.example only
