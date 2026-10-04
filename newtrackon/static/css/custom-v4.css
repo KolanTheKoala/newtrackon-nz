@@ -195,7 +195,10 @@ body {
 
 /* phones: footer lines stacked and centred */
 @media (max-width: 767.98px) {
-  .footer { flex-direction: column; gap: .6rem; padding: 15px 12px; text-align: center; }
+  .footer { flex-direction: column; gap: .5rem; padding: 14px 16px; text-align: center; font-size: .82rem; line-height: 1.5; }
+  .footer p { margin: 0; text-wrap: balance; }
   .footer .nt-credit { text-align: center !important; }
-  body { margin-bottom: 190px; }
+  .footer .nt-sep { display: none; }
+  .footer .nt-iplinks a, .footer .nt-mail { display: block; }
+  body { margin-bottom: 210px; }
 }

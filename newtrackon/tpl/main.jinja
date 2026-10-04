@@ -33,7 +33,18 @@
         #nt-filters select { width: 100% !important; }
         #nt-tablebar .dt-length { display: none !important; }
         #nt-yl { word-break: break-all; }
-        .container-fluid.table-responsive { padding-left: 0; padding-right: 0; }
+        /* cards run edge to edge; everything else keeps the container's side padding */
+        #trackon_table { margin-left: calc(var(--bs-gutter-x, 1.5rem) * -.5); margin-right: calc(var(--bs-gutter-x, 1.5rem) * -.5); width: calc(100% + var(--bs-gutter-x, 1.5rem)) !important; }
+        /* key: each entry reads as one line, symbol first */
+        .nt-legend { grid-template-columns: 1fr !important; gap: 14px !important; }
+        .nt-lg .r { display: block !important; line-height: 1.45; margin: 0 0 6px !important; }
+        .nt-lg .k { display: inline; min-width: 0 !important; margin-right: .45em; }
+        .nt-lg .s { display: inline-block; min-width: 1.6em; text-align: left; }
+        /* events: time and host on one line, what happened underneath */
+        .nt-ev { grid-template-columns: auto 1fr !important; column-gap: .8em !important; row-gap: 0 !important; line-height: 1.45 !important;
+                 padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, .08); }
+        .nt-ev > span:first-child { white-space: nowrap; opacity: .7; }
+        .nt-events h6 code { display: block; margin-top: 2px; word-break: break-all; }
     }
     </style>
         <style>
