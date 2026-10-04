@@ -117,9 +117,20 @@ def pending(limit: int = PENDING_SHOWN) -> list[dict[str, object]]:
         if t.url not in seen:
             seen.add(t.url)
             out.append({"url": t.url, "time": int(t.added or 0), "checking": False})
+    rate = seconds_per_url()
     for n, p in enumerate(out, 1):
         p["pos"] = n
+        p["eta"] = 0 if p["checking"] else int((n - 1) * rate + rate / 2)  # the one being checked is about half done
     return out
+
+
+def seconds_per_url(sample: int = 30) -> float:
+    """Recent processing time per submitted URL, from the last results' times (newest first); 10 s if unknown."""
+    ts = [int(d.get("time") or 0) for d in list(submitted_data)[:sample]]
+    ts = [t for t in ts if t]
+    if len(ts) < 5 or ts[0] - ts[-1] <= 0 or time() - ts[0] > 3600:
+        return 10.0
+    return min(60.0, max(3.0, (ts[0] - ts[-1]) / (len(ts) - 1)))
 
 
 def restore_saved_queue() -> None:

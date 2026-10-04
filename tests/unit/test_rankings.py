@@ -114,6 +114,21 @@ def test_submitted_page_shows_the_queue_as_pending(flask_client: FlaskClient) ->
         assert [(p["url"], p["checking"]) for p in ingest.pending()] == [
             ("udp://now.example:1/announce", True), ("udp://wait.example:1/announce", False)]
         html = flask_client.get("/submitted").get_data(as_text=True)
-    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html and "Queue position 2" in html
+    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html and "Queue position 2 &middot; ETA ~15 s" in html  # 10 s default: one ahead plus half of the current one
     assert "table tbody tr.nt-pending:not(#_nt) > *:not(#_nt)" in html  # grey must outrank the white row rule
     assert html.index("wait.example") < html.index("now.example")  # newest at the top, next to be checked at the bottom
+
+
+def test_submission_rate_from_recent_results() -> None:
+    from time import time as _now
+    from unittest.mock import patch
+
+    from newtrackon import ingest
+
+    n = int(_now())
+    with patch.object(ingest, "submitted_data", [{"time": n - 12 * k} for k in range(30)]):
+        assert ingest.seconds_per_url() == 12.0
+    with patch.object(ingest, "submitted_data", [{"time": n - 7200 - k} for k in range(30)]):
+        assert ingest.seconds_per_url() == 10.0  # nothing recent: the default
+    with patch.object(ingest, "submitted_data", [{"time": n}] * 30):
+        assert ingest.seconds_per_url() == 10.0  # all at once: no rate to measure

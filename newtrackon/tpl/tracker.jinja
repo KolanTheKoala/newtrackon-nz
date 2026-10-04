@@ -21,7 +21,7 @@
     .nt-axis { display: flex; justify-content: space-between; font-size: .8rem; opacity: .75; }
     .nt-chart text { fill: currentColor; font-size: 11px; opacity: .75; }
     .nt-chart .grid { stroke: currentColor; stroke-opacity: .15; }
-    .nt-legend span { margin-right: 1.2rem; white-space: nowrap; }
+    .nt-legend > span { margin-right: 1.2rem; white-space: nowrap; }
     .nt-legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: .35rem; }
     .nt-problem { border: 1px solid #ffb070; background: rgba(255, 145, 0, .08); border-radius: 6px; padding: .8rem 1rem; margin-bottom: 1rem; }
     .nt-t .nt-stt { display: grid; grid-template-columns: max-content 1fr; gap: 2px 18px; }
@@ -33,7 +33,7 @@
         .nt-chart text { font-size: 26px; }
         .nt-t dl, .nt-t .nt-stt { grid-template-columns: 1fr; gap: 0; }
         .nt-t dd, .nt-t .nt-stt > .v { margin-bottom: .45rem; }
-        .nt-legend span { display: block; }
+        .nt-legend > span { display: block; }  /* each region on its own line; not the ms inside */
     }
     .nt-ev td { padding: .25rem .8rem .25rem 0; vertical-align: top; }
     </style>

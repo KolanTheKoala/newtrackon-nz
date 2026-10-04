@@ -8,12 +8,12 @@
     .nt-rank td, .nt-rank th { padding: .3rem .45rem; vertical-align: middle; }
     .nt-rank th { font-weight: 600; opacity: .7; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
     .nt-rank td.n { width: 2.2em; opacity: .6; text-align: right; }
-    .nt-rank td.h { word-break: break-all; }
+    .nt-rank td.h { white-space: normal !important; overflow-wrap: anywhere; }  /* long names wrap instead of pushing the figure off a phone */
     .nt-rank td.v { white-space: nowrap; text-align: right; font-weight: 600; }
     .nt-rank td.s { white-space: nowrap; font-size: .85rem; }
     .nt-rank a.nt-tl { color: #c15cff; margin-left: .35em; font-size: .85em; }
     .nt-rank .nt-grp { color: #8ab4f8; font-size: .8em; margin-left: .3em; }
-    .nt-rank .nt-fastgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0 2rem; }
+    .nt-rank .nt-fastgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr)); gap: 0 2rem; }
     .nt-rank .nt-fastgrid h5 { margin-top: 1rem; font-size: 1rem; }
     </style>
 {% endblock head %}
