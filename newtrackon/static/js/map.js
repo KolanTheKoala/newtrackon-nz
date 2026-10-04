@@ -10,6 +10,7 @@
         '192': '#c62828',  // Cuba
         '643': '#7f0000',  // Russia
         '304': '#f2f2f2',  // Greenland
+        '010': '#f2f2f2',  // Antarctica
         '076': '#2e9d48',  // Brazil
         '124': '#43a047',  // Canada
         '036': '#b5653a'   // Australia (outback red ochre)
@@ -42,8 +43,8 @@
 
     var box = document.getElementById('nt-map');
     var tip = document.getElementById('nt-map-tip');
-    var width = box.clientWidth, height = Math.max(420, Math.round(width * 0.62));
-    var svg = d3.select(box).append('svg').attr('viewBox', [0, 0, width, height]).attr('width', '100%').attr('height', height);
+    var width = box.clientWidth, height = Math.round(width * 0.75);   // set from the projection once the map loads
+    var svg = d3.select(box).append('svg').attr('width', '100%');
     var world = svg.append('g'), flagsLayer = svg.append('g');
 
     function host(u) { try { return new URL(u).hostname; } catch (e) { return u; } }
@@ -70,8 +71,15 @@
         var topo = r[0], iso = r[1], trackers = r[2];
         var geoms = topo.objects.countries.geometries;
         geoms.forEach(function (g, i) { if (!g.id) { g.id = 'x' + i; } });   // Kosovo, Somaliland, N. Cyprus have no ISO number
-        var countries = topojson.feature(topo, topo.objects.countries).features.filter(function (f) { return f.id !== '010'; });  // no Antarctica
-        var projection = d3.geoMercator().fitExtent([[8, 8], [width - 8, height - 8]], {type: 'FeatureCollection', features: countries});
+        var countries = topojson.feature(topo, topo.objects.countries).features;
+        // fit the map to everything but Antarctica, plus 77°S so Antarctica's coast shows as a strip along the bottom
+        var fitTo = countries.filter(function (f) { return f.id !== '010'; }).concat([{type: 'Feature', geometry: {type: 'Point', coordinates: [0, -77]}}]);
+        var projection = d3.geoMercator().fitWidth(width - 16, {type: 'FeatureCollection', features: fitTo});
+        var top = d3.geoPath(projection).bounds({type: 'FeatureCollection', features: fitTo});
+        projection.translate([projection.translate()[0] + 8 - top[0][0], projection.translate()[1] + 8 - top[0][1]]);
+        height = Math.round(projection([0, -77])[1]);
+        projection.clipExtent([[0, 0], [width, height]]);
+        svg.attr('viewBox', [0, 0, width, height]).attr('height', height);
         var path = d3.geoPath(projection);
 
         // colour: fixed ones first; everyone else gets a palette colour different from all neighbours (land and sea)
