@@ -12,7 +12,7 @@
         '304': '#f2f2f2',  // Greenland
         '076': '#2e9d48',  // Brazil
         '124': '#43a047',  // Canada
-        '036': '#c9a227'   // Australia (gold)
+        '036': '#b5653a'   // Australia (outback red ochre)
     };
     // countries whose main landmass reaches within EQUATOR_BAND degrees of the equator form a band of greens
     var EQUATOR_BAND = 10;
