@@ -173,3 +173,32 @@ class TestUpBadClock:
 
 def test_one_clock_for_down_and_up_bad() -> None:
     assert T.UPBAD_DAYS == T.REMOVE_DAYS == 5 and ntextra._DYING_DAYS == 3
+
+
+class TestBadStretch:
+    H = 3600
+    BAD = "is Up/Bad: hands out no peers (3+ of its last 6 peer tests failed)"
+
+    def test_short_recovery_does_not_reset(self) -> None:
+        s = {"st": "up_bad", "since": 0, **T._bad_track(None, "up_bad", 0)}
+        s = {"st": "up_good", "since": 10 * self.H, **T._bad_track(s, "up_good", 10 * self.H)}  # passes for an hour
+        s = {"st": "up_bad", "since": 11 * self.H, **T._bad_track(s, "up_bad", 11 * self.H)}
+        assert s["bad_since"] == 0
+
+    def test_long_recovery_resets(self) -> None:
+        s = {"st": "up_bad", "since": 0, **T._bad_track(None, "up_bad", 0)}
+        s = {"st": "up_good", "since": 10 * self.H, **T._bad_track(s, "up_good", 10 * self.H)}
+        s = {"st": "up_good", "since": 10 * self.H, **T._bad_track(s, "up_good", 23 * self.H)}  # still good 13 h later
+        assert "bad_since" not in s
+        assert T._bad_track(s, "up_bad", 31 * self.H) == {"bad_since": 31 * self.H}
+
+    def test_seeded_from_events_like_corpscorp(self) -> None:
+        url, now = "udp://cc.example:80/announce", 200 * self.H
+        evs = [(122.8, "good", "is Up/Good again"), (121.7, "bad", self.BAD), (120.2, "good", "is Up/Good again"), (119.3, "bad", self.BAD),
+               (72.2, "good", "is Up/Good again"), (50.8, "bad", self.BAD), (47.1, "good", "is Up/Good again"), (46.2, "bad", self.BAD),
+               (9.6, "good", "is Up/Good again"), (8.6, "bad", self.BAD), (6.1, "good", "is Up/Good again"), (5.2, "bad", self.BAD)]
+        T.EVENTS[:] = [{"t": int(now - h * self.H), "url": url, "host": "cc.example", "type": k, "text": x} for h, k, x in evs]
+        T.LAST_STATE[url] = {"st": "up_bad", "bad": ["hands out no peers (3+ of its last 6 peer tests failed)"], "dead": [], "since": int(now - 5.2 * self.H)}
+        T._bad_seed(now)
+        assert T.LAST_STATE[url]["bad_since"] == int(now - 50.8 * self.H)  # the 21 h recovery 72 h ago counts; the 1 h blips don't
+        assert 2.1 < T._nt_upbad_days(url, now) < 2.2

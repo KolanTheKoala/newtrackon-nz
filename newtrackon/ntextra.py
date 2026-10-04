@@ -377,7 +377,7 @@ def _evidence(t, d):
     ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") else None
     if ub is not None:
         left = T.UPBAD_DAYS - ub
-        out.append("Up/Bad for %s. Trackers that stay Up/Bad for %d days are removed and banned for 30 days: %s."
+        out.append("Up/Bad for %s (passing again for under 12 hours doesn't reset this). Trackers that stay Up/Bad for %d days are removed and banned for 30 days: %s."
                    % ("under a day" if ub < 1 else "%d day%s" % (int(ub), "" if int(ub) == 1 else "s"), T.UPBAD_DAYS,
                       "it's due now" if left <= 0 else "about %s left to fix it" % ("%d h" % max(1, round(left * 24)) if left < 1 else "%d day%s" % (int(left), "" if int(left) == 1 else "s"))))
     if fix == "no-peers":

@@ -541,6 +541,7 @@ class Tracker:
                 cur["since"] = now if prev["st"] != st else prev.get("since", now)
             else:
                 cur["since"] = prev.get("since", now)
+            cur.update(_bad_track(prev, st, now))
             if prev != cur:
                 LAST_STATE[url] = cur
                 _jsave(LAST_STATE, _LAST_STATE_FILE)
@@ -968,13 +969,64 @@ REMOVE_DAYS = 5  # Down (no answer) or Up/Bad (no or fake peers) this long and i
 UPBAD_DAYS = REMOVE_DAYS  # one clock for both
 
 
+BAD_BRIDGE = 12 * 3600  # an Up/Good spell shorter than this doesn't restart the Up/Bad clock
+
+
 def _nt_upbad_days(url, now=None):
-    """Days in a row it's been Up/Bad for no peers or fake peers (a dead address doesn't count), or None."""
+    """Days it's been Up/Bad for no peers or fake peers (a dead address doesn't count), or None. Counted from the start of
+    the current bad stretch: recoveries under BAD_BRIDGE don't reset it, so briefly passing a test can't dodge removal."""
     s = LAST_STATE.get(url) or {}
     if s.get("st") != "up_bad" or not any("no peers" in b or "fake peers" in b for b in (s.get("bad") or [])):
         return None
     now = now or time()
-    return (now - int(s.get("since") or now)) / 86400.0
+    start = s.get("bad_since", s.get("since"))
+    return (now - int(now if start is None else start)) / 86400.0
+
+
+def _bad_track(prev, st, now):
+    """The bad-stretch fields for a tracker's new state: bad_since (start of the stretch) and bad_left (when it last
+    stopped being Up/Bad, kept while a return within BAD_BRIDGE would continue the stretch)."""
+    prev = prev or {}
+    was = prev.get("st") == "up_bad"
+    start = prev.get("bad_since")
+    if start is None and was:
+        start = prev.get("since")
+    recent = prev.get("bad_left") is not None and now - int(prev["bad_left"]) < BAD_BRIDGE and start is not None
+    if st == "up_bad":
+        return {"bad_since": int(start) if (was or recent) and start is not None else now}
+    if was:
+        return {"bad_since": int(start if start is not None else now), "bad_left": now}
+    if recent:
+        return {"bad_since": int(start), "bad_left": int(prev["bad_left"])}
+    return {}
+
+
+def _bad_seed(now=None):
+    """Fill in bad_since/bad_left from the event history for states saved before they existed."""
+    now = now or time()
+    changed = False
+    for url, s in LAST_STATE.items():
+        if "bad_since" in s or not isinstance(s, dict):
+            continue
+        start = left = None
+        for e in EVENTS:
+            if e.get("url") != url:
+                continue
+            txt, kind, t = str(e.get("text") or ""), e.get("type"), int(e.get("t") or 0)
+            if (kind == "bad" and txt.startswith("is Up/Bad")) or (kind == "up" and ", but Up/Bad" in txt):
+                if start is None or left is None or t - left >= BAD_BRIDGE:
+                    start = t
+                left = None
+            elif start is not None and left is None and kind in ("good", "down", "up", "bad") and not txt.startswith("is still Up/Bad"):
+                left = t
+        if s.get("st") == "up_bad":
+            s["bad_since"] = start if start is not None and left is None else s.get("since", int(now))
+            changed = True
+        elif start is not None and left is not None and now - left < BAD_BRIDGE:
+            s["bad_since"], s["bad_left"] = start, left
+            changed = True
+    if changed:
+        _jsave(LAST_STATE, _LAST_STATE_FILE)
 
 
 _CLOSED_FILE = "data/closed.json"
@@ -1304,6 +1356,7 @@ def _removed_seed():
 
 
 _removed_seed()
+_bad_seed()
 
 
 def _event(url, kind, text):
