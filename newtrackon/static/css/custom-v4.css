@@ -193,12 +193,10 @@ body {
     background-color: #07101c !important;
 }
 
-/* phones: footer lines stacked and centred */
-@media (max-width: 767.98px) {
-  .footer { flex-direction: column; gap: .5rem; padding: 14px 16px; text-align: center; font-size: .82rem; line-height: 1.5; }
-  .footer p { margin: 0; text-wrap: balance; }
-  .footer .nt-credit { text-align: center !important; }
-  .footer .nt-sep { display: none; }
-  .footer .nt-iplinks a, .footer .nt-mail { display: block; }
-  body { margin-bottom: 210px; }
-}
+/* footer: lines stacked and centred, one link per line (phones and desktop alike) */
+.footer { flex-direction: column; gap: .5rem; padding: 14px 16px; text-align: center; font-size: .82rem; line-height: 1.5; }
+.footer p { margin: 0; text-wrap: balance; }
+.footer .nt-credit { text-align: center !important; }
+.footer .nt-sep { display: none; }
+.footer .nt-iplinks a, .footer .nt-mail { display: block; }
+body { margin-bottom: 210px; }
