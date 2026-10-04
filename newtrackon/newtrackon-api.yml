@@ -3,7 +3,7 @@ info:
   title: newTrackon API
   version: "2.1_NZ"
   description: |
-    API for retrieving and submitting trackers to newTrackon (Wellington NZ mirror).
+    API for retrieving and submitting trackers to newTrackon (Wellington NZ fork).
 
     **Just want a tracker list? Pick where you are and copy the link into your torrent client:**
 
@@ -55,7 +55,7 @@ tags:
 paths:
   /clean:
     get:
-      summary: Clean list for torrent clients (NZ mirror)
+      summary: Clean list for torrent clients (NZ fork)
       tags: [Recommended]
       description: >-
         Trackers that are up and not Junk, Bad or Broken (Up/Good or Up/Slow; also Up/New or Up/Unreliable if they still reach min_score), listed at least min_age_days days, with a score of at least min_score, no confirmed
@@ -106,7 +106,7 @@ paths:
           description: min_score, min_age_days or max_latency is not a number, or a region option is invalid.
   /details:
     get:
-      summary: Full state of every tracker as JSON (NZ mirror)
+      summary: Full state of every tracker as JSON (NZ fork)
       tags: [Recommended]
       description: >-
         Everything the site knows about each tracker - status (up_good / up_new / up_slow / up_unreliable / up_junk / up_broken / up_bad / down) and problems, score, latency
@@ -157,7 +157,7 @@ paths:
                       last_checked: {}
   /tracker/{host}:
     get:
-      summary: Full state of one tracker as JSON (NZ mirror)
+      summary: Full state of one tracker as JSON (NZ fork)
       tags: [Recommended]
       description: >-
         The same object /details gives for each tracker, for one host - handy for watching your own tracker
@@ -186,7 +186,7 @@ paths:
     servers:  # feed-root-server: the feed lives at the site root, not under /api
       - url: https://newtrackon.co.nz
     get:
-      summary: Atom/RSS feed of tracker events (NZ mirror)
+      summary: Atom/RSS feed of tracker events (NZ fork)
       tags: [Recommended]
       description: >-
         A tracker going down or coming back up, turning Up/Bad, Up/Broken, Up/Slow, Up/Unreliable, Up/Junk or Up/Good, an IP family dying or recovering, trackers

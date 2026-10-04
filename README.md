@@ -1,11 +1,11 @@
 # newTrackon NZ (newtrackon.co.nz)
 
-The code behind [newtrackon.co.nz](https://newtrackon.co.nz/), a New Zealand instance of
+The code behind [newtrackon.co.nz](https://newtrackon.co.nz/), a New Zealand fork of
 [newTrackon](https://github.com/CorralPeltzer/newTrackon): live health checks of public BitTorrent trackers.
 It is upstream newTrackon at commit `e1a0104` plus the NZ changes, packaged as one self-contained
 Docker project (app + Caddy). `git log upstream/master..main` shows every change.
 
-## What it adds to upstream
+## What this fork adds to upstream
 
 **Checks.** Besides "does it answer", every check can test:
 

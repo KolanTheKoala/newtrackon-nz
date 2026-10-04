@@ -1,4 +1,4 @@
-"""NZ mirror extras: /api/details (full JSON state per tracker) and /api/clean (Up/Good, filtered, one per operator)."""
+"""NZ fork extras: /api/details (full JSON state per tracker) and /api/clean (Up/Good, filtered, one per operator)."""
 from flask import Response, jsonify, request
 
 from newtrackon import db

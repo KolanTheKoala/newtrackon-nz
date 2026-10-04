@@ -61,7 +61,7 @@ class TestIsItDownPage:
         assert 'href="/feed.xml?tracker=akl.example"' in html.split("<body", 1)[1]
 
     def test_other_pages_keep_the_default_description(self, flask_client: FlaskClient) -> None:
-        assert "mirror of newTrackon" in re.search(r'<meta name="description" content="([^"]*)"', flask_client.get("/about").get_data(as_text=True)).group(1)
+        assert "fork of newTrackon" in re.search(r'<meta name="description" content="([^"]*)"', flask_client.get("/about").get_data(as_text=True)).group(1)
 
 
 @pytest.mark.usefixtures("region_db")

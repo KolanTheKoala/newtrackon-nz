@@ -1,4 +1,4 @@
-"""Disabled on this mirror. ngosang ingest is handled by newtrackon-submit-ngosang.sh."""
+"""Disabled in this fork. ngosang ingest is handled by newtrackon-submit-ngosang.sh."""
 from time import sleep
 from typing import NoReturn
 

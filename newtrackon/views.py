@@ -299,6 +299,6 @@ def reject_announce_requests():
         return abort(Response("newTrackon is not a tracker and cannot provide peers", 403))
 
 
-from newtrackon import ntextra  # noqa: E402  NZ mirror extras (/api/details, /api/clean)
+from newtrackon import ntextra  # noqa: E402  NZ fork extras (/api/details, /api/clean)
 
 ntextra.register(app)
