@@ -42,6 +42,8 @@ class TestFixLinks:
         monkeypatch.setattr(T, "DOWN_WHY", {DOWN: "UDP timeout"})
         html = flask_client.get("/").get_data(as_text=True)
         assert html.count('class="nt-fixlink"') == 1 and 'href="/fix#down-timeout"' in html
+        cell = html[html.index('class="nt-fixlink"') - 3000:html.index('class="nt-fixlink"')]
+        assert "</b>" not in cell.split("<b>")[-1]  # inside the status line, not after it
 
     def test_bad_trackers(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(T, "PEER_FAILS", {AKL: 3})
