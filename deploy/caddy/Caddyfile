@@ -31,6 +31,7 @@ newtrackon.co.nz {
 		header Content-Type "text/plain; charset=utf-8"
 		respond "User-agent: *
 Allow: /
+Disallow: /tracker/*/recheck
 Sitemap: https://newtrackon.co.nz/sitemap.xml
 " 200
 	}
