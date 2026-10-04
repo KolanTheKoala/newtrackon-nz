@@ -84,3 +84,18 @@ def test_clients_page(flask_client: FlaskClient) -> None:
         assert s in html, s
     assert 'href="/clients"' in flask_client.get("/").get_data(as_text=True)
     assert 'href="/clients"' in flask_client.get("/faq").get_data(as_text=True)
+
+
+def test_clients_page_screenshots(flask_client: FlaskClient) -> None:
+    import re
+    from pathlib import Path
+
+    html = flask_client.get("/clients").get_data(as_text=True)
+    srcs = re.findall(r'<img src="(/static/img/clients/[a-z0-9-]+\.png)"[^>]*loading="lazy" alt="([^"]+)"', html)
+    assert len(srcs) == 6
+    static = Path(__file__).resolve().parents[2] / "newtrackon"
+    for src, alt in srcs:
+        f = static / src.lstrip("/")
+        assert f.exists() and f.stat().st_size < 60_000, src
+        assert len(alt) > 10, src
+    assert "Tools &rarr; Preferences" in html and "Default Public Trackers" in html and "tracker list URL" in html

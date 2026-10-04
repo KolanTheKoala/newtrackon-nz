@@ -7,6 +7,10 @@
     .nt-cl .nt-url { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .4rem 0 .2rem; }
     .nt-cl .nt-url code { font-size: .95rem; word-break: break-all; }
     .nt-cl .nt-note { font-size: .88rem; opacity: .75; }
+    .nt-cl figure.nt-shots { display: flex; flex-wrap: wrap; gap: .8rem; align-items: flex-start; margin: .6rem 0 1rem; }
+    .nt-cl figure.nt-shots img { max-width: 100%; height: auto; border: 1px solid rgba(127, 127, 127, .5); border-radius: 6px; }
+    .nt-cl figure.nt-shots figcaption { flex-basis: 100%; font-size: .82rem; opacity: .7; }
+    .nt-cl kbd { font-size: .8em; }
     .nt-cl pre { background: rgba(127, 127, 127, .12); padding: .6rem .8rem; border-radius: 6px; font-size: .82rem; white-space: pre-wrap; word-break: break-all; }
     </style>
 {% endblock head %}
@@ -16,6 +20,8 @@
     <p>More trackers means more peers and faster downloads, especially for older or less popular torrents.
        The best way is to give your client this site's list <b>as a link</b>, so it stays up to date by itself.</p>
 
+    <p class="nt-note">Each client below has screenshots with the settings marked &#9312;&#9313;&#9314;, matching the steps. Tap one to see it full size.</p>
+
     <p class="mb-0"><b>Your list</b> (working trackers, fast from <span id="nt-where">anywhere</span>):</p>
     <div class="nt-url"><code id="nt-list">https://newtrackon.co.nz/api/clean</code>
         <button id="nt-copy" class="btn btn-secondary btn-sm">Copy</button></div>
@@ -23,34 +29,50 @@
 
     <h4 id="qbittorrent">qBittorrent</h4>
     <ol>
-        <li>Open <b>Tools &rarr; Options &rarr; BitTorrent</b> (on a Mac: <b>qBittorrent &rarr; Preferences &rarr; BitTorrent</b>).</li>
-        <li>Tick <b>Automatically append trackers from URL to new downloads</b> and paste your list link into the box.</li>
-        <li>Click <b>OK</b>. New torrents get the trackers from then on.</li>
+        <li>Open <b>Tools &rarr; Preferences</b> (<kbd>Alt</kbd>+<kbd>O</kbd>). Older versions call it <b>Options</b>; on a Mac it's <b>qBittorrent &rarr; Preferences</b>.</li>
+        <li>Pick the <b>BitTorrent</b> page.</li>
+        <li>Scroll down, tick <b>Automatically append trackers from URL to new downloads</b>, paste your list link into <b>URL</b>, and click <b>OK</b>.
+            New torrents get the trackers from then on, and the list stays up to date.</li>
     </ol>
-    <p class="nt-note">Older versions don't have that option: tick <b>Automatically add these trackers to new downloads</b> instead
+    <figure class="nt-shots">
+        <a href="/static/img/clients/qbittorrent-1.png"><img src="/static/img/clients/qbittorrent-1.png" width="401" height="141" loading="lazy" alt="qBittorrent: Tools menu, Preferences"></a>
+        <a href="/static/img/clients/qbittorrent-2.png"><img src="/static/img/clients/qbittorrent-2.png" width="803" height="617" loading="lazy" alt="qBittorrent Preferences, BitTorrent page: Automatically append trackers from URL to new downloads, with the list link in URL"></a>
+        <figcaption>qBittorrent 5.1 on Linux; Windows looks the same.</figcaption>
+    </figure>
+    <p class="nt-note">No URL option in your version? Tick <b>Automatically append these trackers to new downloads</b> (just above it) instead
        and paste the list itself (open the link, copy everything). That copy won't update, so redo it now and then.
        Torrents added from the command line while qBittorrent isn't running don't get the URL trackers.</p>
 
     <h4 id="transmission">Transmission (4.0 or later)</h4>
-    <p>Transmission has a <code>default-trackers</code> setting, added to all public torrents. It's set in
-       <code>settings.json</code> (the GTK app, the daemon and the command-line version; not the Mac app):</p>
     <ol>
-        <li>Quit Transmission (or stop the daemon): it rewrites <code>settings.json</code> on exit.</li>
-        <li>Open the list link and copy the trackers into <code>"default-trackers"</code>, separated by <code>\n\n</code>
-            typed literally inside the quotes, as in the example below (real line breaks would break the file).</li>
-        <li>Start Transmission again.</li>
+        <li>Open <b>Edit &rarr; Preferences</b>.</li>
+        <li>Pick the <b>Network</b> tab.</li>
+        <li>Open your list link, copy everything, paste it into <b>Default Public Trackers</b>, and click <b>Close</b>.
+            Transmission adds them to every public torrent.</li>
     </ol>
-    <pre>"default-trackers": "udp://tracker.example.org:1337/announce\n\nhttps://tracker.example.net:443/announce",</pre>
-    <p class="nt-note">Like a pasted list, this one doesn't update by itself.</p>
+    <figure class="nt-shots">
+        <a href="/static/img/clients/transmission-1.png"><img src="/static/img/clients/transmission-1.png" width="284" height="164" loading="lazy" alt="Transmission: Edit menu, Preferences"></a>
+        <a href="/static/img/clients/transmission-2.png"><img src="/static/img/clients/transmission-2.png" width="665" height="695" loading="lazy" alt="Transmission Preferences, Network tab: Default Public Trackers filled in"></a>
+        <figcaption>Transmission 4.1 on Linux. The Mac app doesn't have this box.</figcaption>
+    </figure>
+    <p class="nt-note">A pasted list doesn't update by itself: paste a fresh copy now and then. Running the daemon or the
+       command-line version? The same setting is <code>"default-trackers"</code> in <code>settings.json</code> (stop Transmission first,
+       and separate the trackers with <code>\n\n</code> typed inside the quotes).</p>
 
     <h4 id="deluge">Deluge</h4>
     <p>Deluge can't do it on its own, but the <a href="https://github.com/stefantalpalaru/deluge-default-trackers">Default Trackers</a>
-       plugin can: it adds trackers to new public torrents (never to private ones) and can reload them from a link.</p>
+       plugin can: it adds trackers to new public torrents (never to private ones) and reloads them from a link.</p>
     <ol>
-        <li>Install the plugin (<b>Preferences &rarr; Plugins &rarr; Install Plugin</b>, using the file for your Deluge's Python version)
-            and enable it.</li>
-        <li>In <b>Preferences &rarr; Default Trackers</b>, add your list link as the URL to load.</li>
+        <li>Install the plugin: <b>Edit &rarr; Preferences &rarr; Plugins &rarr; Install</b> (pick the file built for your Deluge's Python version),
+            then tick <b>DefaultTrackers</b>.</li>
+        <li>A <b>Default Trackers</b> page appears: pick it.</li>
+        <li>Paste your list link into <b>tracker list URL</b> (it reloads every day) and click <b>OK</b>.</li>
     </ol>
+    <figure class="nt-shots">
+        <a href="/static/img/clients/deluge-1.png"><img src="/static/img/clients/deluge-1.png" width="494" height="324" loading="lazy" alt="Deluge Preferences, Plugins: DefaultTrackers ticked"></a>
+        <a href="/static/img/clients/deluge-2.png"><img src="/static/img/clients/deluge-2.png" width="784" height="304" loading="lazy" alt="Deluge Preferences, Default Trackers page: tracker list URL filled in"></a>
+        <figcaption>Deluge 2.2 on Linux with Default Trackers 0.7.</figcaption>
+    </figure>
 
     <h4 id="other">Any other client, or one download</h4>
     <p>Most clients let you add trackers to a torrent in its properties or <b>Trackers</b> tab: paste the list there.
