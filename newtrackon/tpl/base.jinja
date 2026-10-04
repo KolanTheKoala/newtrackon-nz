@@ -25,6 +25,10 @@
               href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css"
               integrity="sha512-2SwdPD6INVrV/lHTZbO2nodKhrnDdJK9/kg2XD1r9uGqPo1cUbujc+IYdlYdEErWNu69gVcYgdxlmVmzTWnetw=="
               crossorigin="anonymous" />
+        <link rel="stylesheet"
+              href="https://cdnjs.cloudflare.com/ajax/libs/flag-icons/7.5.0/css/flag-icons.min.css"
+              integrity="sha512-+WVTaUIzUw5LFzqIqXOT3JVAc5SrMuvHm230I9QAZa6s+QRk8NDPswbHo2miIZj3yiFyV9lAgzO1wVrjdoO4tw=="
+              crossorigin="anonymous" />
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
                 integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
                 crossorigin="anonymous"></script>
@@ -104,7 +108,7 @@
     <body>
         <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
             <div class="container">
-                <a href="./" class="navbar-brand">newTrackon</a>
+                <a href="./" class="navbar-brand">newTrackon <span class="fi fi-nz" title="Wellington, New Zealand" style="font-size: .8em; border-radius: 2px; vertical-align: 0"></span></a>
                 <button class="navbar-toggler order-2 ms-2"
                         type="button"
                         data-bs-toggle="collapse"
@@ -114,7 +118,7 @@
                         aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
-                {% set navigation = [('Home', 'fa-home', '/'), ('List', 'fa-list', '/list'), ('Map', 'fa-globe-asia', '/map'), ('Submitted', 'fa-plus', '/submitted'), ('FAQ', 'fa-question-circle', '/faq'), ('API', 'fa-code', '/api'), ('Raw data', 'fa-terminal', '/raw')] %}
+                {% set navigation = [('Status', 'fa-home', '/'), ('List', 'fa-list', '/list'), ('Map', 'fa-globe-asia', '/map'), ('Submitted', 'fa-plus', '/submitted'), ('FAQ', 'fa-question-circle', '/faq'), ('API', 'fa-code', '/api'), ('Raw data', 'fa-terminal', '/raw')] %}
                 <div class="collapse navbar-collapse order-3 order-lg-0" id="navbar-main">
                     <ul class="navbar-nav me-auto">
                         {% for name, icon, url in navigation %}

@@ -111,7 +111,7 @@ def main(form_feedback: str | None = None, form_reason: str | None = None) -> st
     trackers_list = db.get_all_data()
     trackers_list = format_uptime_and_downtime_time(trackers_list)
     return render_template(
-        "main.jinja", form_feedback=form_feedback, form_reason=form_reason, trackers=trackers_list, active="Home"
+        "main.jinja", form_feedback=form_feedback, form_reason=form_reason, trackers=trackers_list, active="Status"
     )
 
 
