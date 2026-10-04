@@ -61,6 +61,8 @@
             it gets added to the list, whatever its announce interval (this site sets its own check schedule). If no port is specified, the tracker is tried only with HTTP on port 80 and HTTPS on port 443. For HTTP/S, trackers must return a
             <a href="https://www.bittorrent.org/beps/bep_0023.html">compact peer list</a>.
         </p>
+        <p>A tracker that answers is checked once more 30 minutes later, and listed only if it answers then too, so one answer
+            from a machine that then goes away doesn't get it listed.</p>
         <p>The queue is processed at about 10 seconds per URL tried. If a working UDP version of a tracker already listed over HTTP/HTTPS is submitted, it replaces that entry and keeps its history.</p>
         {% set bans = nt_bans() %}
         <p>
@@ -68,7 +70,7 @@
             {% if bans %}&middot; <a href="#banned">{{ bans|length }} banned tracker{{ "" if bans|length == 1 else "s" }}</a>{% endif %}
         </p>
     </div>
-    {% if data or pending %}
+    {% if data or pending or confirming %}
         <div class="container-fluid">
             <div class="table-responsive">
                 <table class="sortable table table-responsive table-striped table-bordered initially-hidden nt-sub">
@@ -85,6 +87,15 @@
                     {% if size > pending|length %}
                         <tr class="nt-pending"><td></td><td colspan="4">&hellip; and {{ size - pending|length }} more waiting behind these</td></tr>
                     {% endif %}
+                    {% for c in confirming %}
+                        <tr class="nt-pending">
+                            <td class="t"></td>
+                            <td class="u">{{ c.url }}</td>
+                            <td class="c-ip"></td>
+                            <td class="pending"><b>Pending</b></td>
+                            <td>Answered once &middot; second check in {{ eta(c.eta) }}, then listed if it answers</td>
+                        </tr>
+                    {% endfor %}
                     {% for p in pending|reverse %}
                         <tr class="nt-pending">
                             <td class="t">{% if p.time %}<span data-nt-ago="{{ p.time }}"></span>{% endif %}</td>
@@ -95,7 +106,7 @@
                         </tr>
                     {% endfor %}
                     {% for response in data %}
-                        <tr{% if response.get("refused") %} class="nt-pending"{% endif %}>
+                        <tr{% if response.get("refused") or response.get("confirm") %} class="nt-pending"{% endif %}>
                             <td class="t">
                                 <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
@@ -104,6 +115,10 @@
                             {% if response["status"] == 1 %}
                                 <td class="up">
                                     <b>Accepted</b>
+                                </td>
+                            {% elif response.get("confirm") %}
+                                <td class="pending" title="Answered once: listed only if it answers again 30 minutes later">
+                                    <b>Pending</b>
                                 </td>
                             {% elif response.get("refused") %}
                                 <td class="pending" title="Not checked: refused before it reached the queue">

@@ -171,8 +171,63 @@ def enqueue_new_trackers(input_string: str) -> None:
         add_one_tracker_to_submitted_queue(url)
 
 
-REINSTATE: dict[str, float] = {}  # host -> when its operator asked: one pass past its ban, valid for an hour
-REINSTATE_TTL = 3600
+REINSTATE: dict[str, float] = {}  # host -> when its operator asked: one pass past its ban (covers both checks)
+REINSTATE_TTL = 3 * 3600
+
+# A new tracker must answer twice, CONFIRM_DELAY apart, before it's listed: one answer from a machine that then goes
+# away for good (a home PC on a dynamic address) no longer gets it listed. {submitted url: {"t": first answer, "queued": bool}}
+CONFIRM_DELAY = 1800
+CONFIRM_FILE = "data/confirm.json"
+try:
+    with open(CONFIRM_FILE) as _cf:
+        CONFIRM: dict[str, dict] = json.load(_cf)
+except Exception:
+    CONFIRM = {}
+
+
+def _confirm_save() -> None:
+    try:
+        tmp = CONFIRM_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(CONFIRM, f)
+        os.replace(tmp, CONFIRM_FILE)
+    except OSError:
+        logger.exception("could not save the confirmation list")
+
+
+def confirm_due(now: float | None = None) -> None:
+    """From the check loop: queue each tracker whose second check is due. Entries whose second check never ran are dropped."""
+    now = now or time()
+    changed = False
+    for url, e in list(CONFIRM.items()):
+        if e.get("queued"):
+            if now - e["t"] > CONFIRM_DELAY + 4 * 3600:
+                CONFIRM.pop(url, None)
+                changed = True
+            continue
+        if now - e["t"] >= CONFIRM_DELAY:
+            e["queued"] = True
+            changed = True
+            __import__("threading").Thread(target=add_one_tracker_to_submitted_queue, args=(url,), daemon=True).start()
+    if changed:
+        _confirm_save()
+
+
+def confirming(now: float | None = None) -> list[dict[str, object]]:
+    """Trackers waiting for their second check, for the submitted page, newest first."""
+    now = now or time()
+    return [{"url": u, "eta": max(0, int(e["t"] + CONFIRM_DELAY - now))}
+            for u, e in sorted(CONFIRM.items(), key=lambda x: -x[1]["t"]) if not e.get("queued")]
+
+
+def _mark_confirm_row(url: str) -> None:
+    """The submitted page's row for a first answer: pending, not accepted yet."""
+    if submitted_data and submitted_data[0].get("url") == url:
+        row = submitted_data[0]
+        info = row.get("info")
+        first = info[0] if isinstance(info, list) and info else info if isinstance(info, str) else ""
+        row.update({"status": 0, "confirm": True,
+                    "info": [first, "Answered. It's checked again in 30 minutes, and listed if it answers then too."]})
 
 
 def _reinstating(host: str) -> bool:
@@ -225,6 +280,9 @@ def add_one_tracker_to_submitted_queue(url: str) -> None:
         pass
     with submitted_queue.mutex:
         queued_trackers = list(cast("deque[Tracker]", submitted_queue.queue))
+    if url in CONFIRM and not CONFIRM[url].get("queued"):
+        logger.info("Tracker %s denied, already waiting for its second check", url)
+        return
     for tracker_in_queue in queued_trackers:
         if urlparse(tracker_in_queue.url).netloc == urlparse(url).netloc and urlparse(tracker_in_queue.url).scheme == urlparse(url).scheme:
             logger.info("Tracker %s denied, already in the queue", url)
@@ -305,6 +363,10 @@ def _closed_on_submit(url: str) -> str | None:
 
 def process_new_tracker(tracker_candidate: Tracker) -> None:
     logger.info("Processing new tracker: %s", tracker_candidate.url)
+    submitted_url = tracker_candidate.url
+    second = CONFIRM.pop(submitted_url, None)  # this is its second check (if it fails below, it simply isn't listed)
+    if second is not None:
+        _confirm_save()
     with list_lock:
         trackers_in_db = db.get_all_data()
     old: Tracker | None = None
@@ -349,6 +411,12 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
     closed = _closed_on_submit(tracker_candidate.url)
     if closed:
         log_wrong_interval_denial(closed)
+        return
+    if CONFIRM_DELAY > 0 and (second is None or time() - second["t"] < CONFIRM_DELAY - 120):
+        CONFIRM[submitted_url] = {"t": int(time()), "queued": False}
+        _confirm_save()
+        _mark_confirm_row(tracker_candidate.url)
+        logger.info("Tracker %s answered: checked again in %d min before it's listed", submitted_url, CONFIRM_DELAY // 60)
         return
     # Any announce interval is accepted: this instance sets its own adaptive check interval and never uses the tracker's.
     tracker_candidate.update_ipapi_data()
@@ -457,6 +525,8 @@ class _NtRejectRows(_nt_logging.Filter):
                 pass  # re-queuing the saved queue at startup: not a submission
             elif m.startswith("Tracker %s denied, already in the queue"):
                 why = "Already waiting in the queue"
+            elif m.startswith("Tracker %s denied, already waiting for its second check"):
+                why = "Already answered once: waiting for its second check"
             elif m.startswith("Tracker %s denied, already being tracked as %s"):
                 why = "Already listed as %s" % a[1]
             elif m.startswith("Tracker %s denied, submission queue is full"):

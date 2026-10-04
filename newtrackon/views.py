@@ -157,6 +157,7 @@ def submitted():
         data=list(persistence.submitted_data),
         size=ingest.submitted_queue.qsize(),
         pending=ingest.pending(),
+        confirming=ingest.confirming(),
         active="Submitted",
     )
 

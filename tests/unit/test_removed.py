@@ -176,7 +176,7 @@ class TestReinstate:
         r = flask_client.post("/tracker/gone.example/recheck")  # once an hour
         assert "recheck=wait" in r.headers["Location"] and len(calls) == 1
 
-    def test_pass_lets_it_past_the_denylist_for_an_hour(self, removed: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    def test_pass_lets_it_past_the_denylist_for_a_while(self, removed: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.INFO, logger="newtrackon")
         monkeypatch.setattr(T.Tracker, "from_url", staticmethod(lambda url: (_ for _ in ()).throw(ValueError("stop here"))))
         monkeypatch.setattr(ingest.db, "get_all_data", lambda: [])
@@ -186,7 +186,7 @@ class TestReinstate:
         ingest.REINSTATE[GONE] = time()
         ingest.add_one_tracker_to_submitted_queue(URL)
         assert "host denylisted" not in caplog.text and "preprocessing failed" in caplog.text
-        ingest.REINSTATE[GONE] = time() - 3700  # expired
+        ingest.REINSTATE[GONE] = time() - ingest.REINSTATE_TTL - 100  # expired
         assert ingest._reinstating(GONE) is False
 
     def test_lifting_the_ban_keeps_permanent_entries(self, removed: None) -> None:
@@ -208,3 +208,64 @@ class TestReinstate:
         _deny(GONE)
         assert "Check again now" not in flask_client.get("/tracker/gone.example").get_data(as_text=True)
         assert flask_client.post("/tracker/gone.example/recheck").status_code == 404
+
+
+class TestSecondCheck:
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ingest, "CONFIRM", {})
+        monkeypatch.setattr(ingest, "CONFIRM_DELAY", 1800)
+
+    def test_due_entries_are_queued_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import threading
+        calls = []
+
+        class Now:
+            def __init__(self, target, args, daemon=None):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+        monkeypatch.setattr(threading, "Thread", Now)
+        monkeypatch.setattr(ingest, "add_one_tracker_to_submitted_queue", lambda url: calls.append(url))
+        ingest.CONFIRM.update({"udp://a.example:1/announce": {"t": NOW - 1900, "queued": False},
+                               "udp://b.example:1/announce": {"t": NOW - 600, "queued": False}})
+        ingest.confirm_due(NOW)
+        ingest.confirm_due(NOW + 5)
+        assert calls == ["udp://a.example:1/announce"] and ingest.CONFIRM["udp://a.example:1/announce"]["queued"] is True
+        assert [c["url"] for c in ingest.confirming(NOW)] == ["udp://b.example:1/announce"]
+        assert ingest.confirming(NOW)[0]["eta"] == 1200
+        ingest.confirm_due(NOW + 6 * 3600)  # its second check never ran: dropped
+        assert "udp://a.example:1/announce" not in ingest.CONFIRM
+
+    def test_first_answer_waits_second_answer_lists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        url = "udp://new.example:6969/announce"
+        inserted = []
+        monkeypatch.setattr(ingest.db, "get_all_data", lambda: [])
+        monkeypatch.setattr(ingest.db, "insert_new_tracker", lambda t: inserted.append(t.url))
+        monkeypatch.setattr(ingest, "attempt_submitted", lambda u: (1800, u, 50))
+        persistence.submitted_data.clear()
+
+        def cand():
+            persistence.submitted_data.appendleft({"url": url, "time": NOW, "ip": "", "status": 1, "info": ["{'interval': 1800}"]})
+            t = T.Tracker.from_url.__func__ if False else None  # noqa: F841
+            return SimpleNamespace(url=url, host="new.example", ips=None, interval=0, latency=0, last_downtime=0, last_checked=0,
+                                   update_ipapi_data=lambda: None, is_up=lambda: None, update_uptime=lambda: None)
+        try:
+            ingest.process_new_tracker(cand())
+            assert inserted == [] and url in ingest.CONFIRM
+            row = persistence.submitted_data[0]
+            assert row["confirm"] and row["status"] == 0 and "checked again in 30 minutes" in row["info"][1]
+            ingest.CONFIRM[url]["t"] -= 1800  # half an hour later
+            ingest.CONFIRM[url]["queued"] = True
+            ingest.process_new_tracker(cand())
+            assert inserted == [url] and url not in ingest.CONFIRM
+        finally:
+            persistence.submitted_data.clear()
+
+    def test_resubmitting_while_waiting_is_refused(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+        caplog.set_level(logging.INFO, logger="newtrackon")
+        monkeypatch.setattr(ingest.db, "get_all_data", lambda: [])
+        ingest.CONFIRM["udp://w.example:1/announce"] = {"t": NOW, "queued": False}
+        ingest.add_one_tracker_to_submitted_queue("udp://w.example:1/announce")
+        assert "already waiting for its second check" in caplog.text

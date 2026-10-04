@@ -21,7 +21,7 @@
     <p>For people who run a tracker. Each problem below starts in plain words, with things to try that don't need the command line,
         and what to ask your hosting provider if someone else runs the server for you. If you're comfortable with a terminal,
         open <b>For advanced users</b> in each section for exact commands.</p>
-    <p class="nt-toc">{% for k, v in titles.items() %}<a href="#{{ k }}">{{ v }}</a> {% endfor %}<a href="#interval">Announce interval</a> <a href="#removed">Removed and banned</a></p>
+    <p class="nt-toc">{% for k, v in titles.items() %}<a href="#{{ k }}">{{ v }}</a> {% endfor %}</p>
 
     <h3 id="start">Start here</h3>
     <ol>
@@ -380,18 +380,26 @@ bantime  = 1h</pre>
         <code>connect</code> but not <code>announce</code>, or an HTTP tracker that returns non-bencoded data, shows up here.</p>
     </details>
 
-    <h3 id="interval">Announce interval too short or too long</h3>
-    <p>Every answer tells clients how long to wait before announcing again (the <b>interval</b>). Around <b>30 minutes</b>
-        (1800 seconds), with a <b>min interval</b> of about 15 minutes, is what almost every public tracker uses.</p>
+    <h4 id="interval">Announce interval too short or too long</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> every answer tells torrent clients how long to wait before asking again (the <b>interval</b>).
+            Yours asks for far too often (some trackers say every 2 minutes) or far too rarely (some say once a day).</p>
+        <p><b>How we know:</b> it's in every answer your tracker sends. The tracker's page shows it under <b>Details</b>, and the
+            points it costs in the score breakdown.</p>
+    </div>
+    <p><b>Why it matters:</b></p>
     <ul>
-        <li><b>Under 15 minutes</b> (some trackers say 2 minutes): every client announces far more than it needs to. It multiplies
-            the tracker's load for no benefit and makes overload and dropouts more likely. <b>&minus;5 points</b> under 15 minutes,
+        <li><b>Too short (under 15 minutes):</b> every client announces far more than it needs to. That multiplies the tracker's
+            load for no benefit, and makes overload and dropouts more likely. <b>&minus;5 points</b> under 15 minutes,
             <b>&minus;10</b> under 5.</li>
-        <li><b>Over 2 hours</b> (some say 24 hours): clients rarely come back, so they seldom get new peers from it, and a dead peer
+        <li><b>Too long (over 2 hours):</b> clients rarely come back, so they seldom get new peers from it, and a peer that's gone
             stays on its lists for hours. <b>&minus;5 points</b> over 2 hours, <b>&minus;10</b> over 6.</li>
     </ul>
-    <p>The points only affect the score and ranking. They don't change the status, and the tracker stays listed. The score
-        updates at the next check after you change it.</p>
+    <p><b>What to do:</b> set it to about <b>30 minutes</b> (1800 seconds), with a <b>min interval</b> of about 15 minutes. That's
+        what almost every public tracker uses. The points only affect the score and ranking: they don't change the status, and the
+        tracker stays listed. The score updates at the next check after you change it.</p>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Can you set our tracker's announce interval to 30 minutes (1800 s)
+        and its min interval to 15 minutes (900 s)?"</p></div>
     <details><summary>For advanced users: where to set it</summary>
     <ul>
         <li><b>Torrust:</b> in the config, <code>[core.announce_policy]</code> with <code>interval = 1800</code> and
@@ -403,16 +411,34 @@ bantime  = 1h</pre>
     </ul>
     </details>
 
-    <h3 id="removed">Removed and banned</h3>
-    <p>A tracker is removed from the list when it hasn't answered for <b>5 days</b>, or when it answers so rarely that it's no use
-        (under 15% once dropouts are counted), or when its own replies say 3 checks in a row that it's private (asks for a
-        passkey) or only serves its own torrents (a whitelist), or when it stays <b>Up/Bad</b> (no peers or fake peers) for
-        <b>5 days</b> (briefly passing for under 12 hours doesn't reset that count), or is Up/Bad for 80% of a week. It's then <b>banned</b>: for 30 days the first time, 90 days the second, and for good after that. Submitting it
-        again is refused until the ban ends. Its
-        page still says when and why it was removed, and when it can come back. A tracker turns dark grey in the
-        <a href="/">status table</a> once it's 2 days from removal (Down or Up/Bad for 3 days), so there's still time to fix it. See the <a href="/submitted#banned">banned trackers</a>.</p>
-    <p>Once the ban ends, fix the problem and <a href="/">submit the tracker again</a>: it's checked like any new tracker.
-        Questions: see the <a href="/faq">FAQ</a>.</p>
+    <h4 id="removed">Removed and banned</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker was taken off the list because it stopped working, or never worked as a public
+            tracker, for too long. For a while it can't be submitted again.</p>
+        <p><b>How we know:</b> its page (the same address as before) says when and why it was removed, and when the ban ends.</p>
+    </div>
+    <p><b>A tracker is removed when:</b></p>
+    <ul>
+        <li>it hasn't answered for <b>5 days</b>;</li>
+        <li>it stays <b>Up/Bad</b> (no peers or fake peers) for <b>5 days</b> (briefly passing for under 12 hours doesn't reset
+            that count), or is Up/Bad for 80% of a week;</li>
+        <li>it answers so rarely that it's no use (under 15% once dropouts are counted);</li>
+        <li>its own answers say, 3 checks in a row, that it's <b>private</b> (asks for a passkey) or only serves <b>its own
+            torrents</b> (a whitelist).</li>
+    </ul>
+    <p>It's then <b>banned</b>: for 30 days the first time, 90 days the second, and for good after that. Submitting it again is
+        refused until the ban ends. A tracker turns dark grey in the <a href="/">status table</a> once it's 2 days from removal
+        (Down or Up/Bad for 3 days), so there's still time to fix it. See the <a href="/submitted#banned">banned trackers</a>.</p>
+    <p><b>What to do:</b> fix the problem (the sections above), then press <b>Check again now</b> on the tracker's page. It's
+        checked like a new submission: if it answers properly (twice, 30 minutes apart), it's listed again and the ban is lifted,
+        even before the ban ends. If the ban is permanent, it can't come back.</p>
+    <details><summary>For advanced users</summary>
+    <p>The removal reason, ban end and removal count are also in <code>/api/tracker/&lt;host&gt;</code> (a 404 with a
+        <code>removed</code> object) and in <code>/api/removed</code>. A tracker removed for Up/Bad keeps its 5-day count when it's
+        reinstated, and a reinstated tracker gets back its last week of uptime, so a fix has to be real to stick.</p>
+    </details>
+
+    <p class="mt-4">Questions: see the <a href="/faq">FAQ</a>.</p>
 </div>
 {% endblock %}
 {% set title = "How to fix a tracker - newTrackon" %}

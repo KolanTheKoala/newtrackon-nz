@@ -72,6 +72,9 @@ def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[N
     (workdir / "data").mkdir(parents=True)
     monkeypatch.chdir(workdir)
     monkeypatch.setattr(T, "_monitor_online", lambda: True)
+    from newtrackon import ingest as _ingest
+    monkeypatch.setattr(_ingest, "CONFIRM_DELAY", 0)  # one answer lists a tracker here; tests of the second check turn it on
+    monkeypatch.setattr(_ingest, "CONFIRM", {})
     monkeypatch.setattr(T, "_nt_public_ips", lambda host: set())
     monkeypatch.setattr(T, "_nt_local_fault", lambda t, err: False)
     monkeypatch.setattr(T, "_notify", lambda ev: None)

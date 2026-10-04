@@ -3,7 +3,7 @@ import logging
 from time import sleep, time
 from typing import NoReturn
 
-from newtrackon import db
+from newtrackon import db, ingest
 from newtrackon.persistence import (
     raw_data,
     raw_history_file,
@@ -40,6 +40,10 @@ def update_outdated_trackers() -> NoReturn:
             _T.daily_update(trackers_all, now)
         except Exception:
             logger.exception("daily summary failed")
+        try:
+            ingest.confirm_due(now)
+        except Exception:
+            logger.exception("second checks failed")
         trackers_outdated: list[Tracker] = []
         forced = set(_T.FORCE_CHECK)
         for tracker in trackers_all:
