@@ -58,18 +58,19 @@
                             <th>Response/Error</th>
                         </tr>
                     </thead>
-                    {% for p in pending %}
+                    {# the queue: newest at the top, position 1 (checked now or next) at the bottom, just above the results #}
+                    {% if size > pending|length %}
+                        <tr class="nt-pending"><td></td><td colspan="4">&hellip; and {{ size - pending|length }} more waiting behind these</td></tr>
+                    {% endif %}
+                    {% for p in pending|reverse %}
                         <tr class="nt-pending">
                             <td>{% if p.time %}<span data-nt-ago="{{ p.time }}"></span>{% endif %}</td>
                             <td>{{ p.url }}</td>
                             <td></td>
                             <td class="pending"><b>Pending</b></td>
-                            <td>{{ "Being checked now" if p.checking else "Waiting in the queue" }}</td>
+                            <td>{{ "Being checked now" if p.checking else "Queue position " ~ p.pos }}</td>
                         </tr>
                     {% endfor %}
-                    {% if size > pending|length %}
-                        <tr class="nt-pending"><td></td><td colspan="4">&hellip; and {{ size - pending|length }} more waiting</td></tr>
-                    {% endif %}
                     {% for response in data %}
                         <tr>
                             <td>

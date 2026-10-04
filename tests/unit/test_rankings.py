@@ -114,5 +114,5 @@ def test_submitted_page_shows_the_queue_as_pending(flask_client: FlaskClient) ->
         assert [(p["url"], p["checking"]) for p in ingest.pending()] == [
             ("udp://now.example:1/announce", True), ("udp://wait.example:1/announce", False)]
         html = flask_client.get("/submitted").get_data(as_text=True)
-    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html
-    assert html.index("now.example") < html.index("wait.example")
+    assert html.count('<td class="pending"><b>Pending</b></td>') == 2 and "Being checked now" in html and "Queue position 2" in html
+    assert html.index("wait.example") < html.index("now.example")  # newest at the top, next to be checked at the bottom

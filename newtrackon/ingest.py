@@ -106,7 +106,7 @@ PENDING_SHOWN = 600  # like the history: the submitted page lists at most this m
 
 
 def pending(limit: int = PENDING_SHOWN) -> list[dict[str, object]]:
-    """The submission queue for the submitted page, in processing order: the URL being checked now first."""
+    """The submission queue for the submitted page, in processing order (position 1: being checked now, or next)."""
     with submitted_queue.mutex:
         waiting = list(cast("deque[Tracker]", submitted_queue.queue))
     out: list[dict[str, object]] = [{"url": u, "time": 0, "checking": True} for u in list(_in_flight)]
@@ -117,6 +117,8 @@ def pending(limit: int = PENDING_SHOWN) -> list[dict[str, object]]:
         if t.url not in seen:
             seen.add(t.url)
             out.append({"url": t.url, "time": int(t.added or 0), "checking": False})
+    for n, p in enumerate(out, 1):
+        p["pos"] = n
     return out
 
 
