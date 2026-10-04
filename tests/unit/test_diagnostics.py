@@ -285,3 +285,4 @@ class TestIntervalPenalty:
         T.ANN_IV[AKL] = 120
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "Around 30 minutes" in html and "&minus;10 (every 2 min" in html
+        assert html.count('href="/fix#interval"') == 2
