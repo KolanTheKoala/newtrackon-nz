@@ -427,13 +427,21 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
         raise RuntimeError(f"UDP error: {err}")
 
     last_error = RuntimeError("UDP announce failed")
-    for attempt in range(2):
+    # Each attempt goes to the next published address, alternating IPv4/IPv6, so one dead record (an old address
+    # still in DNS) can't fail the check: up to 4 attempts, and at least 2 (the same address twice if there's one).
+    _uniq: list[AddrInfo] = []
+    for r in getaddr_responses:
+        if all(r[4][0] != u[4][0] for u in _uniq):
+            _uniq.append(r)
+    _fa = [r for r in _uniq if r[0] == _uniq[0][0]] if _uniq else []
+    _fb = [r for r in _uniq if _uniq and r[0] != _uniq[0][0]]
+    _addrs = [r for pair in __import__("itertools").zip_longest(_fa, _fb) for r in pair if r is not None]
+    for attempt in range(max(2, min(4, len(_addrs)))):
         logger.info("%s UDP attempt %d", udp_url, attempt + 1)
 
         sock: socket.socket | None = None
-        _order = list(getaddr_responses)
-        if attempt and len({r[0] for r in _order}) > 1:  # retry on the other IP family: one dead A/AAAA can't mark the tracker down
-            _order = [r for r in _order if r[0] != _order[0][0]] + [r for r in _order if r[0] == _order[0][0]]
+        k = attempt % len(_addrs) if _addrs else 0
+        _order = _addrs[k:] + _addrs[:k]  # this attempt's address first; the rest only if it can't even be connected to
         for res in _order:
             af, socktype, proto, _, sa = res
             ip = str(sa[0])

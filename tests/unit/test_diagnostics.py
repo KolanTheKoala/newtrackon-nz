@@ -286,3 +286,44 @@ class TestIntervalPenalty:
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "Around 30 minutes" in html and "&minus;10 (every 2 min" in html
         assert html.count('href="/fix#interval"') == 2
+
+
+def test_udp_tries_every_published_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+    import struct as st
+
+    addrs = [(socket.AF_INET6, socket.SOCK_DGRAM, 17, "", ("2001:db8::dead", 6969, 0, 0)),
+             (socket.AF_INET6, socket.SOCK_DGRAM, 17, "", ("2001:db8::bad", 6969, 0, 0)),
+             (socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("192.0.2.66", 6969)),
+             (socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("192.0.2.7", 6969))]  # only this one answers
+    tried: list[str] = []
+
+    class Sock:
+        def __init__(self, af, *a):
+            self.family, self.addr, self.req = af, None, b""
+
+        def settimeout(self, t): pass
+        def close(self): pass
+
+        def connect(self, sa):
+            self.addr = sa[0]
+
+        def sendall(self, req):
+            self.req = req
+            tried.append(self.addr)
+
+        def recv(self, n):
+            if self.addr != "192.0.2.7":
+                raise TimeoutError
+            tid = st.unpack("!i", self.req[12:16])[0]
+            if st.unpack("!i", self.req[8:12])[0] == 0:
+                return st.pack("!iiq", 0, tid, 77)
+            return st.pack("!iiiii", 1, tid, 1800, 0, 1) + bytes([192, 0, 2, 9, 0x1a, 0xe1])
+
+    monkeypatch.setattr(scraper.socket, "getaddrinfo", lambda *a, **k: addrs)
+    monkeypatch.setattr(scraper.socket, "socket", Sock)
+    monkeypatch.setattr(scraper, "require_public", lambda sa: None)
+    monkeypatch.setattr(scraper, "check_peer_count", lambda r: None)
+    resp, _ = scraper.announce_udp("udp://multi.example:6969/announce")
+    assert resp["interval"] == 1800
+    assert [a for a in dict.fromkeys(tried)] == ["2001:db8::dead", "192.0.2.66", "2001:db8::bad", "192.0.2.7"]  # alternating families
