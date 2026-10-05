@@ -163,7 +163,8 @@ EOF</pre>
             a normal client announces only every half hour or so. See <b>For advanced users</b> below for examples.</li>
         <li><b>The name sometimes points at an old address</b>: see <a href="#dead-address">Dead IPv4 or IPv6 address</a>.</li>
     </ul>
-    <p>Once it's steady, the score climbs back by itself over about a week. There's nothing to reset.</p>
+    <p>Once it's steady, the score climbs back by itself over about a week. There's nothing to reset. A tracker that stays
+        <b>Up/Junk</b> (score under 50) for 30 days is removed: a month is long enough for any temporary overload to pass.</p>
     <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker keeps dropping out (newtrackon.co.nz shows Up/Unreliable). Can you
         check the logs for crashes, restarts or running out of memory, make sure it restarts automatically, and that rate limits aren't
         rejecting normal announces?"</p></div>
@@ -422,7 +423,8 @@ bantime  = 1h</pre>
         <li>it hasn't answered for <b>5 days</b>;</li>
         <li>it stays <b>Up/Bad</b> (no peers or fake peers) for <b>5 days</b> (briefly passing for under 12 hours doesn't reset
             that count), or is Up/Bad for 80% of a week;</li>
-        <li>it answers so rarely that it's no use (under 15% once dropouts are counted);</li>
+        <li>it answers so rarely that it's no use (under 15% once dropouts are counted), or stays <b>Up/Junk</b> (score under 50)
+            for <b>30 days</b> (a day or so above 50 doesn't reset that count);</li>
         <li>its own answers say, 3 checks in a row, that it's <b>private</b> (asks for a passkey) or only serves <b>its own
             torrents</b> (a whitelist).</li>
     </ul>

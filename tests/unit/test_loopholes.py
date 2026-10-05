@@ -124,3 +124,45 @@ def test_reinstated_tracker_gets_its_history_back(sample_tracker) -> None:
     T.REMOVED["back.example"] = {"url": "udp://back.example:1/announce", "t": 0, "reason": "x", "added": 1_700_000_000, "hist": "110h0"}
     ingest._restore_history(sample_tracker, "back.example")
     assert list(sample_tracker.historic) == [1, 1, 0, 0.5, 0] and sample_tracker.added == 1_700_000_000
+
+
+class TestJunkClock:
+    def _state(self, url: str, days: float, **extra) -> None:
+        T.LAST_STATE[url] = {"st": "up_junk", "bad": [], "dead": [], "since": int(time() - days * DAY), **extra}
+
+    def test_short_spells_above_junk_do_not_reset(self) -> None:
+        s = {"st": "up_junk", "since": 0, **T._bad_track(None, "up_junk", 0)}
+        s = {"st": "up_unreliable", "since": 20 * DAY, **T._bad_track(s, "up_unreliable", 20 * DAY)}  # scrapes over 50
+        s = {"st": "up_junk", "since": 20 * DAY + 6 * 3600, **T._bad_track(s, "up_junk", 20 * DAY + 6 * 3600)}  # 6 h later
+        assert s["junk_since"] == 0
+
+    def test_a_day_or_more_above_resets(self) -> None:
+        s = {"st": "up_junk", "since": 0, **T._bad_track(None, "up_junk", 0)}
+        s = {"st": "up_good", "since": 20 * DAY, **T._bad_track(s, "up_good", 20 * DAY)}
+        s = {"st": "up_good", "since": 20 * DAY, **T._bad_track(s, "up_good", 21 * DAY + 60)}
+        assert "junk_since" not in s
+
+    def _check(self, t, days: float) -> None:
+        self._state(t.url, days)
+        t.added, t.last_uptime, t.status = int(time()) - 60 * DAY, int(time()), 1
+        t.historic = deque([1, 1, 1, 0] * 360, maxlen=1440)  # up 3 checks in 4, flipping: Junk (about 19), above the 15% line
+        t.update_uptime()
+
+    def test_removed_after_30_days_of_junk(self, sample_tracker) -> None:
+        self._check(sample_tracker, 30.2)
+        assert sample_tracker.to_be_deleted is True
+        assert T._NT_DEL_REASON[sample_tracker.url] == "too unreliable: Up/Junk (score under 50) for 30 days"
+
+    def test_kept_before_30_days(self, sample_tracker) -> None:
+        self._check(sample_tracker, 29)
+        assert 15 < sample_tracker.uptime < 50 and sample_tracker.to_be_deleted is False
+
+    def test_grey_from_day_28(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        t = SimpleNamespace(url=URL, last_uptime=0)
+        with patch.object(ntextra, "_rowcls", return_value="orange"):
+            self._state(URL, 27)
+            assert ntextra._dying(t) is None
+            self._state(URL, 28.5)
+            assert ntextra._dying(t) == "Up/Junk for 28+ days: removed and banned after 30 unless it improves"

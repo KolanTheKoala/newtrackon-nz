@@ -374,6 +374,14 @@ class Tracker:
             self.to_be_deleted = True
             self._nt_ban()
             return
+        # Up/Junk for JUNK_DAYS and still Junk now (the same score the status rule uses: after latency, before interval points)
+        jd = _nt_junk_days(self.url, now_ts)
+        if jd is not None and jd >= JUNK_DAYS and float(self.uptime or 0) - _nt_lat_penalty(_nt_region_avg(self.url)) < 50:
+            _NT_DEL_REASON[self.url] = "too unreliable: Up/Junk (score under 50) for %d days" % int(jd)
+            logger.info("Evicting %s (Up/Junk for %.1f days)", self.url, jd)
+            self.to_be_deleted = True
+            self._nt_ban()
+            return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
         if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and availability * stability < 0.15)):
@@ -1094,6 +1102,20 @@ def _nt_upbad_days(url, now=None):
     return (now - int(now if start is None else start)) / 86400.0
 
 
+JUNK_DAYS = 30  # Up/Junk (score under 50) this long and it's removed: long enough for any overload to pass
+JUNK_BRIDGE = 24 * 3600  # spells above Junk shorter than this don't restart that count
+
+
+def _nt_junk_days(url, now=None):
+    """Days it's been Up/Junk (spells above it under JUNK_BRIDGE don't count as a break), or None if it isn't Up/Junk."""
+    s = LAST_STATE.get(url) or {}
+    if s.get("st") != "up_junk":
+        return None
+    now = now or time()
+    start = s.get("junk_since", s.get("since"))
+    return (now - int(now if start is None else start)) / 86400.0
+
+
 BAD_SHARE_DAYS, BAD_SHARE = 7, 0.8  # Up/Bad for 80% of the last 7 days is removed too, whatever its good spells
 
 
@@ -1117,6 +1139,7 @@ def _bad_track(prev, st, now, bad=None):
     stopped being Up/Bad, kept while a return within BAD_BRIDGE would continue the stretch) and bad_log (its closed
     Up/Bad spells over the last BAD_SHARE_DAYS)."""
     d = _bad_stretch(prev, st, now)
+    d.update(_stretch(prev, st, now, "up_junk", "junk", JUNK_BRIDGE))
     prev = prev or {}
     log = [x for x in (prev.get("bad_log") or []) if now - x[1] <= BAD_SHARE_DAYS * 86400]
     if _peer_bad(prev.get("st"), prev.get("bad")) and not _peer_bad(st, bad):
@@ -1127,18 +1150,25 @@ def _bad_track(prev, st, now, bad=None):
 
 
 def _bad_stretch(prev, st, now):
+    return _stretch(prev, st, now, "up_bad", "bad", BAD_BRIDGE)
+
+
+def _stretch(prev, st, now, state, key, bridge):
+    """<key>_since: start of the current stretch in `state`, where spells out of it shorter than `bridge` don't break it;
+    <key>_left: when it last left the state, kept while a return would continue the stretch."""
     prev = prev or {}
-    was = prev.get("st") == "up_bad"
-    start = prev.get("bad_since")
+    since_k, left_k = key + "_since", key + "_left"
+    was = prev.get("st") == state
+    start = prev.get(since_k)
     if start is None and was:
         start = prev.get("since")
-    recent = prev.get("bad_left") is not None and now - int(prev["bad_left"]) < BAD_BRIDGE and start is not None
-    if st == "up_bad":
-        return {"bad_since": int(start) if (was or recent) and start is not None else now}
+    recent = prev.get(left_k) is not None and now - int(prev[left_k]) < bridge and start is not None
+    if st == state:
+        return {since_k: int(start) if (was or recent) and start is not None else now}
     if was:
-        return {"bad_since": int(start if start is not None else now), "bad_left": now}
+        return {since_k: int(start if start is not None else now), left_k: now}
     if recent:
-        return {"bad_since": int(start), "bad_left": int(prev["bad_left"])}
+        return {since_k: int(start), left_k: int(prev[left_k])}
     return {}
 
 

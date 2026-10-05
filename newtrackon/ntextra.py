@@ -39,6 +39,9 @@ def _dying(t, now=None):
     ub = T._nt_upbad_days(t.url, now)
     if ub is not None and ub >= _DYING_DAYS:
         return "Up/Bad for %d+ days: removed and banned after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
+    jd = T._nt_junk_days(t.url, now)
+    if jd is not None and jd >= T.JUNK_DAYS - 2:
+        return "Up/Junk for %d+ days: removed and banned after %d unless it improves" % (int(jd), T.JUNK_DAYS)
     return None
 
 
@@ -416,6 +419,12 @@ def _evidence(t, d):
     if fix.startswith("down"):
         out.append("Last error: %s" % (T.DOWN_WHY.get(t.url) or "no answer"))
         out.append("Last successful check: %s." % (_ago(t.last_uptime) + " ago" if t.last_uptime else "none recorded"))
+    jd = T._nt_junk_days(t.url) if fix == "unreliable" else None
+    if jd is not None:
+        left = T.JUNK_DAYS - jd
+        out.append("Up/Junk for %s. Trackers that stay Up/Junk (score under 50) for %d days are removed and banned: %s."
+                   % ("under a day" if jd < 1 else "%d day%s" % (int(jd), "" if int(jd) == 1 else "s"), T.JUNK_DAYS,
+                      "it's due now" if left <= 0 else "about %d day%s left to improve it" % (max(1, int(left)), "" if int(left) == 1 else "s")))
     if fix == "unreliable":
         h = [int(x) for x in (t.historic or [])][-336:]
         if h:
