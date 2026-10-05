@@ -423,9 +423,9 @@ class Tracker:
             r = REMOVED.get(host)
             prior = int(r.get("count", 1)) if r else 0  # removals before this one
             # earlier removals of other names on the same server count too, so a new name doesn't start the ladder again
-            mine = set(getattr(self, "ips", None) or []) | set((getattr(self, "recent_ips", None) or {}).keys())
+            mine = _nt_ip_keys(list(getattr(self, "ips", None) or []) + list((getattr(self, "recent_ips", None) or {}).keys()))
             prior += sum(int(o.get("count", 1)) for h, o in REMOVED.items()
-                         if h != host and mine & set(o.get("ips") or []) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS))
+                         if h != host and mine & _nt_ip_keys(o.get("ips")) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS))
             days = BAN_STEPS[min(prior, len(BAN_STEPS) - 1)]
             with open(_DENY_FILE, "a", encoding="utf-8") as fh:
                 fh.write(f"{host}\n" if days is None else (f"{host} {int(time())}\n" if days == 30 else f"{host} {int(time())} {days}\n"))
@@ -1625,12 +1625,31 @@ def _removed_add(t, reason, now=None):
 _CDN_WORDS = ("cloudflare", "akamai", "fastly", "cloudfront", "amazon.com", "google", "microsoft", "incapsula", "imperva", "sucuri")
 
 
+def _nt_ip_key(ip):
+    """What identifies a server for a ban: an IPv4 address exactly, an IPv6 address by its /64 (a server's IPv6 block:
+    picking another address in it takes seconds). Any spelling of an address gives the same key."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(str(ip).strip("[]"))
+    except ValueError:
+        return None
+    if isinstance(a, ipaddress.IPv6Address) and a.ipv4_mapped:
+        a = a.ipv4_mapped
+    if a.version == 6:
+        return str(ipaddress.ip_network(f"{a}/64", strict=False))
+    return str(a)
+
+
+def _nt_ip_keys(ips):
+    return {k for k in (_nt_ip_key(x) for x in (ips or [])) if k}
+
+
 def _nt_ban_ips(ips, skip_host=None, listed_ips=()):
     """The banned tracker (removed by this site, ban still running) that shares one of these addresses, or None.
     Addresses of CDNs and shared front ends are never treated as banned (thousands of unrelated sites share them), nor
     addresses a listed tracker still uses."""
     from newtrackon import ntextra
-    ips = {str(x) for x in (ips or [])} - {str(x) for x in (listed_ips or ())}
+    ips = _nt_ip_keys(ips) - _nt_ip_keys(listed_ips)
     if not ips:
         return None
     for host, r in REMOVED.items():
@@ -1638,7 +1657,7 @@ def _nt_ban_ips(ips, skip_host=None, listed_ips=()):
             continue
         if any(w in str(r.get("network") or "").lower() for w in _CDN_WORDS):
             continue
-        if ips & set(r["ips"]):
+        if ips & _nt_ip_keys(r["ips"]):
             b = ntextra._ban(host)
             if b and b["active"]:
                 return host

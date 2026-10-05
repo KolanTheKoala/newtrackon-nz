@@ -359,3 +359,22 @@ def test_repeat_ban_counts_other_names_on_the_same_server(sample_tracker) -> Non
     open("data/denylist.txt", "w").close()
     sample_tracker._nt_ban()
     assert open("data/denylist.txt").read().split()[2] == "90"  # its second removal on that server: 90 days, not 30
+
+
+class TestIpBanBothFamilies:
+    @pytest.fixture(autouse=True)
+    def _setup(self, removed: None) -> None:
+        T.REMOVED[GONE]["ips"] = ["203.0.113.5", "2001:db8:1:2::5"]
+
+    @pytest.mark.parametrize(("ips", "hit"), [
+        (["203.0.113.5"], True),                      # same IPv4
+        (["2001:db8:1:2::5"], True),                  # same IPv6
+        (["2001:0db8:0001:0002:0000:0000:0000:0005"], True),  # same IPv6, spelt out
+        (["2001:db8:1:2:abcd::99"], True),            # another address in the same IPv6 /64
+        (["198.51.100.1", "2001:db8:1:2::77"], True),  # dual-stack: either family is enough
+        (["::ffff:203.0.113.5"], True),               # IPv4 written as IPv6
+        (["2001:db8:1:3::5"], False),                 # next /64: a different server
+        (["203.0.113.6"], False),                     # next IPv4: a different server
+    ])
+    def test_match(self, ips: list[str], hit: bool) -> None:
+        assert (T._nt_ban_ips(ips) == GONE) is hit
