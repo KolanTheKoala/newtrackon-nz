@@ -420,7 +420,7 @@ def _evidence(t, d):
         out.append("Not working (down or Up/Bad) for %d days in all: a tracker that doesn't work for %d days, either way, is "
                    "removed and banned." % (int(ud), T.REMOVE_DAYS))
     if fix in ("no-peers", "fake-peers") and not T._peer_rule_applies(t.url):
-        out.append("This site's peer test for HTTP(S) trackers is being reviewed, so for now failing it doesn't remove a tracker.")
+        out.append("This site's peer test is being reviewed for trackers like this one, so for now failing it doesn't remove it.")
     ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") and T._peer_rule_applies(t.url) else None
     if ub is not None:
         left = T.UPBAD_DAYS - ub

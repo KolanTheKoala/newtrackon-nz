@@ -1084,8 +1084,18 @@ def _warn_set(url, msg):
 HTTP_PEER_TEST_TRUSTED = True
 
 
+# The peer test runs over whichever family answered and keeps one result, so a tracker that shares peers on IPv4 but not
+# on IPv6 (tracker.farted.net, 2026-10-05) gets recorded as failing outright. Until results are kept per family, failing
+# it doesn't remove a tracker that publishes both families (single-family trackers are unaffected).
+PEER_TEST_PER_FAMILY = False
+
+
 def _peer_rule_applies(url):
-    return HTTP_PEER_TEST_TRUSTED or str(url).startswith("udp")
+    if not (HTTP_PEER_TEST_TRUSTED or str(url).startswith("udp")):
+        return False
+    if not PEER_TEST_PER_FAMILY and len(FAMS.get(url) or {}) >= 2:
+        return False
+    return True
 
 
 REMOVE_DAYS = 5  # Down (no answer) or Up/Bad (no or fake peers) this long and it's removed and banned for 30 days
