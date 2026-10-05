@@ -204,10 +204,17 @@ class Tracker:
             if _ex.get("inflated"):
                 logger.info("%s INFLATED COUNTS: %s seeders / %s leechers on a random hash", self.url, *_ex["inflated"])
             if self.peer_ok is True:
-                _peer_hist_add(self.url, True)
+                _peer_hist_add(self.url, True, _ex.get("fam"))
             elif self.peer_ok is False:
-                _peer_hist_add(self.url, False)
+                _peer_hist_add(self.url, False, _ex.get("fam"))
             _peer_conclusive(self.url, self.peer_ok)
+            # the other published family gets its own peer test, so one family's result can't stand for both
+            _main = _ex.get("fam")
+            _other = {"v4": "v6", "v6": "v4"}.get(_main)
+            if _other and len(_fr) == 2 and _fr.get(_other):
+                _ok2 = scraper.peer_probe_family(self.url, _other)
+                if _ok2 is not None:
+                    _peer_hist_add(self.url, _ok2, _other)
             logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             self.is_up()
             _FAILSTREAK[0] = 0  # a success: not an outage
@@ -518,6 +525,9 @@ class Tracker:
                 df = FAM_FAILS.get(url) or {}
                 if df.get("n", 0) >= PEER_FAIL_LIMIT:
                     bad.append(f"its published IPv{str(df.get('fam', '?'))[-1]} address is dead")
+                pfb = _peer_fam_bad(url) if PEER_FAILS.get(url, 0) < PEER_FAIL_LIMIT else None
+                if pfb:
+                    bad.append(f"its IPv{pfb[-1]} side doesn't share peers (3+ of its last 6 IPv{pfb[-1]} peer tests failed)")
                 if bad:
                     st = "up_bad"
                 else:  # same ladder as the page/API, with a little hysteresis so borderline trackers don't flap
@@ -897,7 +907,7 @@ def _nt_fix_for_event(ev):
         return "fake-peers"
     if "no peers" in low:
         return "no-peers"
-    if "address is dead" in low:
+    if "address is dead" in low or "side doesn't share peers" in low:
         return "dead-address"
     if "up/slow" in low:
         return "slow"
@@ -962,12 +972,43 @@ except Exception:
     PEER_HIST = {}
 
 
-def _peer_hist_add(url, ok):
+# Peer results are also kept per family ("v4"/"v6"), since a tracker can share peers on one and not the other.
+# "?" holds results from before families were told apart; it counts only until a real family has PEER_WINDOW // 2 results.
+_PEER_HIST_FAM_FILE = "data/peer_hist_fam.json"
+PEER_HIST_FAM: dict = _jload(_PEER_HIST_FAM_FILE)  # url -> {"v4": [1, 0, ...], "v6": [...], "?": [...]}, oldest first
+
+
+def _peer_fams(url):
+    """The per-family histories that count. A family counts once it has PEER_WINDOW // 2 results (one result is no
+    evidence); until one does, the pre-split '?' history decides, or for a new tracker whatever results there are."""
+    h = PEER_HIST_FAM.get(url) or {}
+    real = {k: v for k, v in h.items() if k != "?" and len(v) >= PEER_WINDOW // 2}
+    if real:
+        return real
+    if h.get("?"):
+        return {"?": h["?"]}
+    return {k: v for k, v in h.items() if k != "?" and v}
+
+
+def _peer_fam_bad(url):
+    """'v4'/'v6' if that family fails the peer test (3+ of its last 6) while another family passes: partly broken."""
+    fams = {k: v for k, v in _peer_fams(url).items() if k != "?"}
+    bad = [k for k, v in fams.items() if v.count(0) >= PEER_FAIL_LIMIT]
+    good = [k for k, v in fams.items() if v.count(0) < PEER_FAIL_LIMIT and len(v) >= PEER_WINDOW // 2]
+    return bad[0] if bad and good else None
+
+
+def _peer_hist_add(url, ok, fam=None):
     h = PEER_HIST.get(url)
     if h is None:  # seed from the old streak counter
         h = [0] * min(PEER_FAILS.get(url, 0), PEER_WINDOW)
+    hf = PEER_HIST_FAM.setdefault(url, {})
+    if not hf and h:
+        hf["?"] = list(h)  # results from before families were told apart
     h = (h + [1 if ok else 0])[-PEER_WINDOW:]
     PEER_HIST[url] = h
+    key = fam if fam in ("v4", "v6") else "?"
+    hf[key] = (hf.get(key, []) + [1 if ok else 0])[-PEER_WINDOW:]
     try:
         tmp = _PEER_HIST_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -975,7 +1016,10 @@ def _peer_hist_add(url, ok):
         _os.replace(tmp, _PEER_HIST_FILE)
     except OSError:
         pass
-    _peer_fail_set(url, h.count(0))
+    _jsave(PEER_HIST_FAM, _PEER_HIST_FAM_FILE)
+    # "hands out no peers" (Up/Bad) only when every family that counts fails; one failing family is _peer_fam_bad
+    fams = _peer_fams(url)
+    _peer_fail_set(url, min(v.count(0) for v in fams.values()) if fams else h.count(0))
 
 
 # A peer test that's never conclusive (only our first test client is ever answered) would freeze its last 6 results
@@ -1087,7 +1131,7 @@ HTTP_PEER_TEST_TRUSTED = True
 # The peer test runs over whichever family answered and keeps one result, so a tracker that shares peers on IPv4 but not
 # on IPv6 (tracker.farted.net, 2026-10-05) gets recorded as failing outright. Until results are kept per family, failing
 # it doesn't remove a tracker that publishes both families (single-family trackers are unaffected).
-PEER_TEST_PER_FAMILY = False
+PEER_TEST_PER_FAMILY = True  # results are kept per family since 2026-10-06 (_peer_fam_bad)
 
 
 def _peer_rule_applies(url):
@@ -1196,8 +1240,8 @@ JUNK_BRIDGE = 24 * 3600  # spells out of it shorter than this don't restart that
 
 
 def _broken(st, bad):
-    """Up/Broken: its only fault is a dead IPv4 or IPv6 address (the feed ladder calls this up_bad)."""
-    return st == "up_bad" and bool(bad) and all("address is dead" in b for b in bad)
+    """Up/Broken: its only faults are a dead IPv4/IPv6 address or one family not sharing peers (the feed ladder: up_bad)."""
+    return st == "up_bad" and bool(bad) and all("address is dead" in b or "side doesn't share peers" in b for b in bad)
 
 
 def _poor(st, bad):
@@ -1847,7 +1891,7 @@ def _nt_bad_lbl(bad):
     # a dead IP family on its own is Up/Broken (same rule as the page); anything else is Up/Bad
     try:
         b = [str(x).lower() for x in (bad or [])]
-        if b and all(("ipv4" in x or "ipv6" in x) and "peer" not in x for x in b):
+        if b and all(("ipv4" in x or "ipv6" in x) and ("peer" not in x or "side doesn't share peers" in x) for x in b):
             return "Up/Broken"
     except Exception:
         pass

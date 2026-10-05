@@ -98,12 +98,16 @@ curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000002&amp;port=6882&amp;uplo
         announce replies (<code>Cache-Control: no-store</code> on the announce path). The status clears as soon as a check sees only real peers.</p>
     </details>
 
-    <h4 id="dead-address">Dead IPv4 or IPv6 address (Up/Broken)</h4>
+    <h4 id="dead-address">IPv4 or IPv6 broken (Up/Broken)</h4>
     <div class="nt-plain">
         <p><b>In plain words:</b> your tracker's name points to two kinds of address: an older one (IPv4) and a newer one (IPv6).
             One of them works and the other doesn't. People whose computer picks the broken one can't reach your tracker at all.</p>
         <p><b>How we know:</b> we check both addresses separately. One answers; the other has failed several checks in a row.</p>
     </div>
+    <p><b>Or: one family doesn't share peers.</b> Both addresses answer, but clients on one of them (often IPv6) are never
+        told about each other: our two test clients on IPv6 never meet, while on IPv4 they do. Usual causes: the tracker keeps no
+        peer lists for that family (an IPv4-only build answering on IPv6), or something in front of it hides IPv6 clients' real
+        addresses. The tracker's page says which family.</p>
     <p><b>Most likely causes, and what to do:</b></p>
     <ul>
         <li><b>An old or wrong address is still in your domain's settings</b> (the DNS records). In your domain or hosting control panel,

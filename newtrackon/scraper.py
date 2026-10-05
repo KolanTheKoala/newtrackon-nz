@@ -837,7 +837,7 @@ def _two_distinct(r):
     return isinstance(s, int) and isinstance(l, int) and s >= 1 and l >= 1
 
 
-def peer_probe() -> bool | None:
+def peer_probe(only_family: int | None = None) -> bool | None:
     """Authenticity tests on the random hash the check just announced from the VPS (as seeder A).
     The second client B announces from a DIFFERENT IP (the AirVPN exit), so trackers that merge
     clients sharing an IP can't fail unfairly. No tunnel -> peer test is n/a (never a fail).
@@ -851,6 +851,8 @@ def peer_probe() -> bool | None:
         return None
     kind, thash, a, b, pid_a = p
     pid_b = generate_peer_id()
+    if kind == "udp":
+        extra["fam"] = "v6" if a == socket.AF_INET6 else "v4"  # the family this test ran over
     sleep = __import__("time").sleep
     if kind == "udp":
         want = 0x76FD
@@ -943,6 +945,8 @@ def peer_probe() -> bool | None:
     # A and B must share an address family: trackers only hand out peers of the asker's family.
     fam = sa_s = None
     for f in (socket.AF_INET, socket.AF_INET6):
+        if only_family and f != only_family:
+            continue
         if not _probe_src(f):
             continue
         try:
@@ -955,6 +959,7 @@ def peer_probe() -> bool | None:
         break
     if fam is None:
         return None
+    extra["fam"] = "v6" if fam == socket.AF_INET6 else "v4"  # the family this test ran over
     ok = None
     fb = False
     sb_s = None
@@ -992,6 +997,32 @@ def peer_probe() -> bool | None:
     if fb and extra.get("stale"):  # same-IP pass whose peer outlives "stopped" = echoed IP entry, not real peer sharing
         ok, extra["stale"], extra["inconclusive"] = None, None, True  # a fallback result only ever counts as a pass, never a fail
     return ok
+
+
+def peer_probe_family(url, fam_name):
+    """The peer test over one given family ('v4'/'v6'): client A first registers from this server on that family, then
+    the usual test runs. The main check's own probe state is left as it was. None if it can't be run (n/a)."""
+    from urllib.parse import urlparse as _up
+    fam = socket.AF_INET6 if fam_name == "v6" else socket.AF_INET
+    p = _up(url)
+    saved = (getattr(rtt, "probe", None), getattr(rtt, "probe_extra", None))
+    try:
+        if p.scheme == "udp":
+            sa = ordered_addrs(p.hostname, p.port, fam)[0][4]
+            thash, pid = urandom(20), generate_peer_id()
+            s_, ann = _udp_session(fam, sa, None)
+            try:
+                ann(pid, 0, 0x76FD, 2, thash)
+            finally:
+                s_.close()
+            rtt.probe = ("udp", thash, fam, sa, pid)
+            return peer_probe()
+        rtt.probe = ("http", urandom(20), url, None, generate_peer_id())
+        return peer_probe(only_family=fam)
+    except Exception:
+        return None
+    finally:
+        rtt.probe, rtt.probe_extra = saved
 
 
 def family_probe(url):

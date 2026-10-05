@@ -76,9 +76,12 @@ def _state(t):
     df = T.FAM_FAILS.get(t.url) or {}
     if df.get("n", 0) >= T.PEER_FAIL_LIMIT:
         bad.append("dead_ipv" + str(df.get("fam", "?"))[-1])
+    pfb = T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
+    if pfb:
+        bad.append("nopeers_ipv" + pfb[-1])  # one family doesn't share peers, the other does
     if bad:
-        # only fault is a dead IPv4/IPv6 address: still works on the other family, so "broken", not "bad"
-        return ("up_broken" if all(x.startswith("dead_ipv") for x in bad) else "up_bad"), bad
+        # only faults on one family (a dead address, or no peer sharing): still works on the other, so "broken", not "bad"
+        return ("up_broken" if all(x.startswith(("dead_ipv", "nopeers_ipv")) for x in bad) else "up_bad"), bad
     sc = round(float(t.uptime or 0) + T._nt_iv_penalty(t.url))  # the interval penalty is only for ranking, not the status
     if sc < 50:
         return "up_junk", bad
@@ -352,7 +355,7 @@ def _latency_chart(hist, now, w=900, h=220, pad=60):  # pad fits 3-digit labels 
     return {"w": w, "h": h, "pad": pad, "lines": lines, "grid": grid, "ticks": ticks}
 
 
-FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peers", "dead-address": "Dead IPv4 or IPv6 address",
+FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peers", "dead-address": "IPv4 or IPv6 broken",
               "unreliable": "Drops out (Up/Unreliable, Up/Junk)", "slow": "Slow (Up/Slow)", "down-timeout": "Down: timeout",
               "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
               "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer",
@@ -435,7 +438,14 @@ def _evidence(t, d):
     if fix == "fake-peers":
         out.append("Returned %s peer(s) for a random torrent only this site knows, in %d of its last 6 checks."
                    % (d["fake_peers"]["latest"] if d["fake_peers"]["latest"] is not None else "unknown", d["fake_peers"]["streak"]))
-    if fix == "dead-address":
+    pfb = T._peer_fam_bad(t.url) if fix == "dead-address" else None
+    if pfb:
+        fams = T._peer_fams(t.url)
+        other = "v6" if pfb == "v4" else "v4"
+        out.append("Over IPv%s it doesn't share peers: passed %d of its last %d IPv%s peer tests, while IPv%s passed %d of %d. "
+                   "Clients on IPv%s get no peers from it." % (pfb[-1], fams[pfb].count(1), len(fams[pfb]), pfb[-1], other[-1],
+                                                              (fams.get(other) or []).count(1), len(fams.get(other) or []), pfb[-1]))
+    if fix == "dead-address" and (T.FAM_FAILS.get(t.url) or {}).get("n", 0) >= T.PEER_FAIL_LIMIT:
         df = T.FAM_FAILS.get(t.url) or {}
         fam = str(df.get("fam", "?"))[-1]
         ips = [ip for ip in (t.ips or []) if (":" in ip) == (fam == "6")]

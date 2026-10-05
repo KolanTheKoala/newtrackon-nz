@@ -483,6 +483,12 @@ class TestHttpPeerRulePaused:
             assert ntextra._dying(SimpleNamespace(url=url, status=1, last_uptime=0)) is None
 
 
+@pytest.fixture
+def per_family_paused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(T, "PEER_TEST_PER_FAMILY", False)
+
+
+@pytest.mark.usefixtures("per_family_paused")
 class TestDualStackPeerRulePaused:
     BAD = ["hands out no peers (3+ of its last 6 peer tests failed)"]
 
@@ -504,3 +510,57 @@ class TestDualStackPeerRulePaused:
     def test_single_family_still_is(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
         self._check(sample_tracker, {"v4": True}, monkeypatch)
         assert sample_tracker.to_be_deleted is True
+
+
+class TestPeerTestPerFamily:
+    U = "udp://pf.example:6969/announce"
+
+    def _feed(self, v4: list[int], v6: list[int]) -> None:
+        for a, b in zip(v4, v6):
+            T._peer_hist_add(self.U, bool(a), "v4")
+            T._peer_hist_add(self.U, bool(b), "v6")
+
+    def test_one_family_failing_is_partial_not_bad(self) -> None:
+        self._feed([1] * 6, [0] * 6)
+        assert T.PEER_FAILS.get(self.U, 0) == 0 and T._peer_fam_bad(self.U) == "v6"
+
+    def test_every_family_failing_is_bad(self) -> None:
+        self._feed([0] * 6, [0] * 6)
+        assert T.PEER_FAILS[self.U] == 6 and T._peer_fam_bad(self.U) is None
+
+    def test_old_combined_history_counts_until_families_have_results(self) -> None:
+        T.PEER_HIST[self.U] = [0] * 6  # from before families were told apart: failing
+        T._peer_hist_add(self.U, True, "v4")
+        assert T.PEER_HIST_FAM[self.U]["?"] == [0] * 6 and T.PEER_FAILS[self.U] == 6  # one IPv4 pass isn't evidence yet
+        T._peer_hist_add(self.U, True, "v4")
+        T._peer_hist_add(self.U, True, "v4")
+        assert "?" not in T._peer_fams(self.U) and T.PEER_FAILS.get(self.U, 0) == 0  # three are
+
+    def test_both_status_rules_agree_on_up_broken(self, sample_tracker) -> None:
+        from collections import deque
+        from time import time
+        t = sample_tracker
+        t.url = self.U
+        t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 1440, maxlen=1440)
+        self._feed([1] * 6, [0] * 6)
+        t.update_uptime()
+        st, bad = ntextra._state(t)
+        assert st == "up_broken" and bad == ["nopeers_ipv6"]
+        T.LAST_STATE.pop(self.U, None)
+        t._emit_events()
+        s = T.LAST_STATE[self.U]
+        assert s["st"] == "up_bad" and s["bad"] == ["its IPv6 side doesn't share peers (3+ of its last 6 IPv6 peer tests failed)"]
+        assert T._nt_bad_lbl(s["bad"]) == "Up/Broken" and T._broken(s["st"], s["bad"]) and not T._peer_bad(s["st"], s["bad"])
+        assert ntextra._fix_anchor(t) == "dead-address"
+        assert t.to_be_deleted is False
+
+    def test_probe_family_restores_the_main_probe_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import socket
+        monkeypatch.setattr(scraper, "ordered_addrs", lambda *a, **k: [(socket.AF_INET6, 2, 17, "", ("2001:db8::1", 6969, 0, 0))])
+        calls = []
+        monkeypatch.setattr(scraper, "_udp_session", lambda fam, sa, src: (type("S", (), {"close": lambda self: None})(), lambda *a: calls.append(a) or {}))
+        monkeypatch.setattr(scraper, "peer_probe", lambda only_family=None: (scraper.rtt.probe[2], only_family))
+        scraper.rtt.probe, scraper.rtt.probe_extra = ("udp", b"main", socket.AF_INET, ("192.0.2.1", 6969), b"pid"), {"fam": "v4"}
+        assert scraper.peer_probe_family(self.U, "v6") == (socket.AF_INET6, None)
+        assert calls and calls[0][2] == 0x76FD  # client A registered on IPv6 with the probe's port
+        assert scraper.rtt.probe[1] == b"main" and scraper.rtt.probe_extra == {"fam": "v4"}
