@@ -444,3 +444,34 @@ class TestHttpAddresses:
         assert scraper._public_create_connection(("x.example", 80)) == "sock" and tried == ["192.0.2.21", "192.0.2.20"]
         assert scraper.ADDR_HEALTH["x.example:80"]["192.0.2.21"]["fails"] == 1
         scraper._conn.track = False
+
+
+class TestHttpPeerRulePaused:
+    BAD = ["hands out no peers (3+ of its last 6 peer tests failed)"]
+
+    def _check(self, t, url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        from collections import deque
+        from time import time
+        t.url = url
+        T.LAST_STATE[url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 6 * 86400),
+                             "bad_since": int(time() - 6 * 86400), "useless_since": int(time() - 6 * 86400)}
+        monkeypatch.setitem(T.PEER_FAILS, url, T.PEER_FAIL_LIMIT)
+        t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 48, maxlen=1440)
+        t.update_uptime()
+
+    def test_http_tracker_is_not_removed_for_the_peer_test(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, "http://tracker.example.com:80/announce", monkeypatch)
+        assert sample_tracker.to_be_deleted is False
+
+    def test_udp_tracker_still_is(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, "udp://tracker.example.com:6969/announce", monkeypatch)
+        assert sample_tracker.to_be_deleted is True
+
+    def test_no_grey_row_for_http(self) -> None:
+        from time import time
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        url = "https://h.example:443/announce"
+        T.LAST_STATE[url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 4 * 86400), "useless_since": int(time() - 4 * 86400)}
+        with patch.object(ntextra, "_rowcls", return_value="orange"):
+            assert ntextra._dying(SimpleNamespace(url=url, status=1, last_uptime=0)) is None

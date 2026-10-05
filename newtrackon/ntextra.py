@@ -36,10 +36,12 @@ def _dying(t, now=None):
     if _rowcls(t) == "offline":
         days = (now - int(t.last_uptime or 0)) / 86400.0
         return "No answer for %d+ days: removed and banned after %d" % (int(days), T.REMOVE_DAYS) if days >= _DYING_DAYS else None
-    ub = T._nt_upbad_days(t.url, now)
+    ub = T._nt_upbad_days(t.url, now) if T._peer_rule_applies(t.url) else None
     if ub is not None and ub >= _DYING_DAYS:
         return "Up/Bad for %d+ days: removed and banned after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
     ud = T._nt_useless_days(t.url, now)
+    if ud is not None and getattr(t, "status", 1) == 1 and not T._peer_rule_applies(t.url):
+        ud = None
     if ud is not None and ud >= _DYING_DAYS:
         return "Not working (down or Up/Bad) for %d+ days: removed and banned after %d unless fixed" % (int(ud), T.REMOVE_DAYS)
     jd = T._nt_junk_days(t.url, now)
@@ -417,7 +419,9 @@ def _evidence(t, d):
     if ud is not None and ud >= 1 and ud > ((T._nt_upbad_days(t.url) or 0) + 0.5):
         out.append("Not working (down or Up/Bad) for %d days in all: a tracker that doesn't work for %d days, either way, is "
                    "removed and banned." % (int(ud), T.REMOVE_DAYS))
-    ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") else None
+    if fix in ("no-peers", "fake-peers") and not T._peer_rule_applies(t.url):
+        out.append("This site's peer test for HTTP(S) trackers is being reviewed, so for now failing it doesn't remove a tracker.")
+    ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") and T._peer_rule_applies(t.url) else None
     if ub is not None:
         left = T.UPBAD_DAYS - ub
         out.append("Up/Bad for %s (passing again for under 12 hours doesn't reset this). Trackers that stay Up/Bad for %d days are removed and banned: %s."

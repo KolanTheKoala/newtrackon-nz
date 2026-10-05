@@ -364,6 +364,8 @@ class Tracker:
         listed_days = (now_ts - int(self.added or now_ts)) / 86400.0
         what = "returned fake peers" if fake else "handed out no peers"
         why = None
+        if not _peer_rule_applies(self.url):
+            ub = None  # paused for HTTP(S): see HTTP_PEER_TEST_TRUSTED
         if ub is not None and failing and ub >= UPBAD_DAYS:
             why = "%s for %d days (Up/Bad)" % (what, int(ub))
         elif ub is not None and failing and share >= BAD_SHARE and listed_days >= BAD_SHARE_DAYS:
@@ -377,6 +379,8 @@ class Tracker:
         # down or Up/Bad for REMOVE_DAYS in one stretch, however it's split between the two, and still not working now
         ud = _nt_useless_days(self.url, now_ts)
         listed = (now_ts - int(self.added or now_ts)) / 86400.0
+        if ud is not None and self.status != 0 and not _peer_rule_applies(self.url):
+            ud = None  # answering but failing the (paused) HTTP peer test: not counted as "not working"
         if ud is not None and ud >= REMOVE_DAYS and listed >= 3 and (self.status == 0 or failing):
             _NT_DEL_REASON[self.url] = "not working for %d days: down, or answering without handing out peers" % int(ud)
             logger.info("Evicting %s (down or Up/Bad for %.1f days)", self.url, ud)
@@ -1072,6 +1076,15 @@ def _warn_set(url, msg):
     else:
         WARNINGS.pop(url, None)
     _jsave(WARNINGS, _WARN_FILE)
+
+
+# The HTTP(S) peer test is under review (2026-10-05: 10 of 27 HTTP trackers fail it vs 3 of 49 UDP). Until it's verified,
+# failing it doesn't remove or ban an HTTP(S) tracker (it still shows as Up/Bad). UDP is unaffected.
+HTTP_PEER_TEST_TRUSTED = False
+
+
+def _peer_rule_applies(url):
+    return HTTP_PEER_TEST_TRUSTED or str(url).startswith("udp")
 
 
 REMOVE_DAYS = 5  # Down (no answer) or Up/Bad (no or fake peers) this long and it's removed and banned for 30 days
