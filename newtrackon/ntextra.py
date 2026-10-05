@@ -39,6 +39,9 @@ def _dying(t, now=None):
     ub = T._nt_upbad_days(t.url, now)
     if ub is not None and ub >= _DYING_DAYS:
         return "Up/Bad for %d+ days: removed and banned after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
+    ud = T._nt_useless_days(t.url, now)
+    if ud is not None and ud >= _DYING_DAYS:
+        return "Not working (down or Up/Bad) for %d+ days: removed and banned after %d unless fixed" % (int(ud), T.REMOVE_DAYS)
     jd = T._nt_junk_days(t.url, now)
     if jd is not None and jd >= T.JUNK_DAYS - 2:
         return "Up/Junk for %d+ days: removed and banned after %d unless it improves" % (int(jd), T.JUNK_DAYS)
@@ -389,6 +392,10 @@ def _evidence(t, d):
     w = _warning(t.url)
     if w and fix in ("no-peers", "fake-peers", "unreliable"):
         out.append("The tracker itself says: \u201c%s\u201d. %s" % (w[0], w[1] or "That's its own message to clients, sent with each answer."))
+    ud = T._nt_useless_days(t.url) if (fix or "").startswith("down") or fix in ("no-peers", "fake-peers") else None
+    if ud is not None and ud >= 1 and ud > ((T._nt_upbad_days(t.url) or 0) + 0.5):
+        out.append("Not working (down or Up/Bad) for %d days in all: a tracker that doesn't work for %d days, either way, is "
+                   "removed and banned." % (int(ud), T.REMOVE_DAYS))
     ub = T._nt_upbad_days(t.url) if fix in ("no-peers", "fake-peers") else None
     if ub is not None:
         left = T.UPBAD_DAYS - ub

@@ -32,6 +32,9 @@ def build_ip_indexes(trackers: list[Tracker]) -> tuple[dict[str, set[str]], dict
     return current_index, recent_index
 
 
+_USELESS_SEEDED: list = []  # done once per start
+
+
 def update_outdated_trackers() -> NoReturn:
     while True:
         now = int(time())
@@ -40,6 +43,12 @@ def update_outdated_trackers() -> NoReturn:
             _T.daily_update(trackers_all, now)
         except Exception:
             logger.exception("daily summary failed")
+        if not _USELESS_SEEDED:
+            try:
+                _T._useless_seed(trackers_all, now)
+            except Exception:
+                logger.exception("useless-stretch seeding failed")
+            _USELESS_SEEDED.append(True)
         try:
             ingest.confirm_due(now)
         except Exception:

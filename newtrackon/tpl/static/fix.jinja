@@ -420,7 +420,7 @@ bantime  = 1h</pre>
     </div>
     <p><b>A tracker is removed when:</b></p>
     <ul>
-        <li>it hasn't answered for <b>5 days</b>;</li>
+        <li>it hasn't answered for <b>5 days</b>, or hasn't <i>worked</i> for 5 days: down, Up/Bad, or a mix of the two;</li>
         <li>it stays <b>Up/Bad</b> (no peers or fake peers) for <b>5 days</b> (briefly passing for under 12 hours doesn't reset
             that count), or is Up/Bad for 80% of a week;</li>
         <li>it answers so rarely that it's no use (under 15% once dropouts are counted), or stays <b>Up/Junk</b> (score under 50)

@@ -166,3 +166,36 @@ class TestJunkClock:
             assert ntextra._dying(t) is None
             self._state(URL, 28.5)
             assert ntextra._dying(t) == "Up/Junk for 28+ days: removed and banned after 30 unless it improves"
+
+
+class TestUselessClock:
+    BAD = ["hands out no peers (3+ of its last 6 peer tests failed)"]
+
+    def test_down_then_up_bad_is_one_stretch(self) -> None:
+        s = {"st": "down", "bad": [], "since": 0, **T._bad_track(None, "down", 0, [])}
+        s = {"st": "up_bad", "bad": self.BAD, "since": 4 * DAY, **T._bad_track(s, "up_bad", 4 * DAY, self.BAD)}
+        assert s["useless_since"] == 0
+        s = {"st": "up_good", "bad": [], "since": 5 * DAY, **T._bad_track(s, "up_good", 5 * DAY, [])}
+        s = {"st": "up_good", "bad": [], "since": 5 * DAY, **T._bad_track(s, "up_good", 5 * DAY + 13 * 3600, [])}
+        assert "useless_since" not in s  # working for 13 h: the stretch is over
+
+    def test_seeded_like_farted(self) -> None:
+        from types import SimpleNamespace
+        now = 1_800_000_000 - 1_800_000_000 % 1800
+        url = "udp://f.example:1/announce"
+        h = [1] * 60 + [0] * 211 + [1] * 21  # up, 4.4 days down, back 10.5 h: 2.5 h on probation, then 8 h Up/Bad
+        T.LAST_REC[url] = now
+        T.LAST_STATE[url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": now - 16 * 1800}
+        T._useless_seed([SimpleNamespace(url=url, historic=h, last_checked=now)], now)
+        assert T.LAST_STATE[url]["useless_since"] == now - (20 + 211) * 1800  # the first down slot (the newest slot is "now")
+        assert 4.8 < T._nt_useless_days(url, now) < 4.9
+
+    def test_removed_after_5_days_mixed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        t = sample_tracker
+        now = int(time())
+        T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": now - int(0.5 * DAY),
+                               "bad_since": now - int(0.5 * DAY), "useless_since": now - int(5.1 * DAY)}
+        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
+        t.update_uptime()
+        assert t.to_be_deleted is True and T._NT_DEL_REASON[t.url].startswith("not working for 5 days")
