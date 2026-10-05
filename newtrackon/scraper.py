@@ -413,6 +413,63 @@ def check_peer_count(response: Mapping[str, object]) -> None:
         raise RuntimeError(f"Tracker rejected for reporting more than {MAX_PEERS} peers for a random info hash")
 
 
+# ---- per-address health (UDP): which of a tracker's published addresses answer. Addresses that answered recently are
+# tried first; the tracker page lists the ones that don't (an old address left in DNS fails every client that picks it).
+_ADDR_FILE = "data/addr_health.json"
+try:
+    with open(_ADDR_FILE) as _af:
+        ADDR_HEALTH: dict = __import__("json").load(_af)  # "host:port" -> {ip: {"ok": last answer, "fails": in a row, "t": last try}}
+except Exception:
+    ADDR_HEALTH = {}
+
+
+def _addr_key(host, port):
+    return f"{(host or '').lower()}:{port}"
+
+
+def addr_record(host, port, ip, ok, published=None):
+    """Note whether one address answered. `published`: the addresses DNS gives now (others are forgotten)."""
+    import json as _j
+    k = _addr_key(host, port)
+    h = ADDR_HEALTH.setdefault(k, {})
+    if published is not None:
+        for old in [x for x in h if x not in published]:
+            h.pop(old)
+    now = int(time())
+    e = h.setdefault(str(ip), {"ok": 0, "fails": 0})
+    if ok:
+        e["ok"], e["fails"] = now, 0
+    else:
+        e["fails"] = int(e.get("fails", 0)) + 1
+    e["t"] = now
+    try:
+        tmp = _ADDR_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _j.dump(ADDR_HEALTH, f)
+        __import__("os").replace(tmp, _ADDR_FILE)
+    except OSError:
+        pass
+
+
+def _addr_rank(host, port, ip):
+    """Known-good first (most recent answer first), then never tried, then failing (fewest failures first)."""
+    e = (ADDR_HEALTH.get(_addr_key(host, port)) or {}).get(str(ip))
+    if e and not e.get("fails") and e.get("ok"):
+        return (0, -int(e["ok"]))
+    if not e:
+        return (1, 0)
+    return (2, int(e.get("fails", 0)))
+
+
+def ordered_addrs(host, port, family=0, socktype=socket.SOCK_DGRAM):
+    """getaddrinfo, one entry per address, the best bet first (see _addr_rank). Raises OSError like getaddrinfo."""
+    uniq = []
+    for r in socket.getaddrinfo(host, port, family, socktype):
+        if all(r[4][0] != u[4][0] for u in uniq):
+            uniq.append(r)
+    return sorted(uniq, key=lambda r: _addr_rank(host, port, r[4][0]))
+
+
 def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
     parsed_tracker = urlparse(udp_url)
     logger.info("%s Scraping UDP", udp_url)
@@ -436,6 +493,8 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
     _fa = [r for r in _uniq if r[0] == _uniq[0][0]] if _uniq else []
     _fb = [r for r in _uniq if _uniq and r[0] != _uniq[0][0]]
     _addrs = [r for pair in __import__("itertools").zip_longest(_fa, _fb) for r in pair if r is not None]
+    _addrs.sort(key=lambda r: _addr_rank(parsed_tracker.hostname, parsed_tracker.port, r[4][0]))  # known-good first (stable)
+    _published = {r[4][0] for r in _uniq}
     for attempt in range(max(2, min(4, len(_addrs)))):
         logger.info("%s UDP attempt %d", udp_url, attempt + 1)
 
@@ -483,6 +542,7 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
             rtt.ms = _rtt_ms
             rtt.probe = ("udp", thash, af, sa, peer_id)
             logger.info("%s response: %s", udp_url, parsed_response)
+            addr_record(parsed_tracker.hostname, parsed_tracker.port, ip, True, _published)
             return parsed_response, ip
         except ConnectionRefusedError:
             last_error = RuntimeError("UDP connection failed")
@@ -492,6 +552,7 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
             last_error = RuntimeError(f"UDP error: {err}")
         except RuntimeError as err:
             last_error = err
+        addr_record(parsed_tracker.hostname, parsed_tracker.port, ip, False, _published)
         sock.close()
 
     raise last_error
@@ -878,19 +939,36 @@ def family_probe(url):
     res = {}
     for fam, name, wild in ((socket.AF_INET, "v4", "0.0.0.0"), (socket.AF_INET6, "v6", "::")):
         try:
-            addr = socket.getaddrinfo(p.hostname, port, fam)[0][4]
+            addrs = [r[4] for r in ordered_addrs(p.hostname, port, fam, socket.SOCK_DGRAM if p.scheme == "udp" else socket.SOCK_STREAM)]
         except OSError:
+            continue
+        if not addrs:
             continue
         srcs = [None, None] + list(dict.fromkeys(_probe_srcs(fam)))
         ok = False
         for i, src in enumerate(srcs):
             try:
                 if p.scheme == "udp":
-                    s_, an = _udp_session(fam, addr, src)
-                    try:
-                        an(generate_peer_id(), 1, 0x76FF, 0, urandom(20))
-                    finally:
-                        s_.close()
+                    # from this server every published address is tried (a family is dead only if none answers, and
+                    # each address's result is noted); from the VPN exits, the best one
+                    answered = False
+                    for a_ in (addrs if src is None else addrs[:1]):
+                        try:
+                            s_, an = _udp_session(fam, a_, src)
+                            try:
+                                an(generate_peer_id(), 1, 0x76FF, 0, urandom(20))
+                            finally:
+                                s_.close()
+                            answered = True
+                        except Exception:
+                            if src is None:
+                                addr_record(p.hostname, port, a_[0], False)
+                            continue
+                        if src is None:
+                            addr_record(p.hostname, port, a_[0], True)
+                        break
+                    if not answered:
+                        raise RuntimeError("no published address answered")
                 else:
                     ss = requests.Session()
                     ad = _SrcAdapter(src or wild)
@@ -956,7 +1034,7 @@ def _tunnel_rtt(src, fam):
 def _rtt_via(url, fam, src):
     p = urlparse(url)
     port = p.port or (443 if p.scheme == "https" else 80)
-    addr = socket.getaddrinfo(p.hostname, port, fam)[0][4]
+    addr = ordered_addrs(p.hostname, port, fam, socket.SOCK_DGRAM if p.scheme == "udp" else socket.SOCK_STREAM)[0][4]
     require_public(addr)
     if p.scheme == "udp":
         s = socket.socket(fam, socket.SOCK_DGRAM)

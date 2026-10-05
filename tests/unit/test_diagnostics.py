@@ -327,3 +327,52 @@ def test_udp_tries_every_published_address(monkeypatch: pytest.MonkeyPatch) -> N
     resp, _ = scraper.announce_udp("udp://multi.example:6969/announce")
     assert resp["interval"] == 1800
     assert [a for a in dict.fromkeys(tried)] == ["2001:db8::dead", "192.0.2.66", "2001:db8::bad", "192.0.2.7"]  # alternating families
+
+
+class TestAddressHealth:
+    H, P = "multi.example", 6969
+
+    def _gai(self, monkeypatch: pytest.MonkeyPatch, ips: list[str]) -> None:
+        import socket
+        rows = [((socket.AF_INET6 if ":" in ip else socket.AF_INET), socket.SOCK_DGRAM, 17, "", (ip, self.P)) for ip in ips]
+        monkeypatch.setattr(scraper.socket, "getaddrinfo", lambda host, port, fam=0, st=0, *a: [r for r in rows if fam in (0, r[0])])
+
+    def test_known_good_first_failing_last(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._gai(monkeypatch, ["192.0.2.1", "192.0.2.2", "192.0.2.3"])
+        scraper.addr_record(self.H, self.P, "192.0.2.1", False)
+        scraper.addr_record(self.H, self.P, "192.0.2.3", True)
+        assert [r[4][0] for r in scraper.ordered_addrs(self.H, self.P)] == ["192.0.2.3", "192.0.2.2", "192.0.2.1"]
+
+    def test_forgets_addresses_no_longer_published(self) -> None:
+        scraper.addr_record(self.H, self.P, "192.0.2.1", True)
+        scraper.addr_record(self.H, self.P, "192.0.2.9", True, published={"192.0.2.9"})
+        assert list(scraper.ADDR_HEALTH["multi.example:6969"]) == ["192.0.2.9"]
+
+    def test_family_is_dead_only_if_no_address_answers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._gai(monkeypatch, ["192.0.2.66", "192.0.2.7", "2001:db8::bad"])
+        good = {"192.0.2.7"}
+
+        def session(fam, sa, src):
+            if sa[0] not in good:
+                raise TimeoutError
+            return SimpleNamespace(close=lambda: None), (lambda *a: {"interval": 1800})
+        from types import SimpleNamespace
+        monkeypatch.setattr(scraper, "_udp_session", session)
+        monkeypatch.setattr(scraper, "_probe_srcs", lambda fam, key=None: [])
+        monkeypatch.setattr(scraper, "require_public", lambda sa: None)
+        res = scraper.family_probe("udp://multi.example:6969/announce")
+        assert res == {"v4": True, "v6": False}  # IPv4 alive through its second address; IPv6's only address dead
+        h = scraper.ADDR_HEALTH["multi.example:6969"]
+        assert h["192.0.2.7"]["fails"] == 0 and h["192.0.2.66"]["fails"] >= 1
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_lists_the_dead_address(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from time import time
+        url = "udp://akl.example:1/announce"
+        import copy
+        t = copy.copy(next(x for x in ntextra._trackers() if x.url == url))
+        t.ips = ["192.0.2.1", "192.0.2.2"]
+        monkeypatch.setattr(ntextra, "_trackers", lambda: [t])
+        scraper.ADDR_HEALTH["akl.example:1"] = {"192.0.2.1": {"ok": int(time()), "fails": 0}, "192.0.2.2": {"ok": 0, "fails": 5}}
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "1 of its 2 published addresses doesn&#39;t answer" in html and "<b>192.0.2.2</b> (IPv4, last answer never seen answering)" in html

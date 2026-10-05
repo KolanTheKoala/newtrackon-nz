@@ -54,6 +54,16 @@
         &middot; <a href="/#q={{ t.host|urlencode }}">Show in the table</a> &middot; <a href="/map">Map</a>
         &middot; <a href="/feed.xml?tracker={{ t.host|urlencode }}" title="Atom feed of this tracker's status changes: add it to a feed reader"><i class="fa-solid fa-rss"></i> Follow</a>
     </p>
+    {% set nt_badaddr = addrs|selectattr("ok", "false")|list %}
+    {% if nt_badaddr and nt_badaddr|length < addrs|length %}
+    <div class="nt-problem">
+        <h5>{{ nt_badaddr|length }} of its {{ addrs|length }} published addresses {{ "doesn't" if nt_badaddr|length == 1 else "don't" }} answer</h5>
+        <p class="mb-2">{% for a in nt_badaddr %}<b>{{ a.ip }}</b> ({{ a.fam }}, last answer {{ a.since }}){% if not loop.last %}, {% endif %}{% endfor %}.
+            The tracker works on its other addresses, but every client that picks {{ "this one" if nt_badaddr|length == 1 else "these" }}
+            can't reach it. If it's an old address, remove it from the tracker's DNS records.</p>
+        <a href="/fix#dead-address" class="btn btn-sm btn-warning"><i class="fa-solid fa-wrench"></i> How to fix it</a>
+    </div>
+    {% endif %}
     {% if fix %}
     <div class="nt-problem">
         <h5>What's wrong: {{ fix_title }}</h5>
@@ -122,6 +132,7 @@
         <dt>IP addresses</dt><dd>{{ d.ips|join(', ') or '—' }}</dd>
         <dt>Network</dt><dd>{{ d.networks|join(', ') or '—' }}</dd>
         <dt>Located in</dt><dd>{{ d.countries|join(', ') or '—' }}</dd>
+        {% if addrs|length > 1 %}<dt>Addresses</dt><dd>{% for a in addrs %}{{ a.ip }} <span class="small">({{ a.fam }}{% if not a.ok %}: <span style="color:#ffb070">not answering</span>, last answer {{ a.since }}{% endif %})</span>{% if not loop.last %}<br>{% endif %}{% endfor %}</dd>{% endif %}
         <dt>IPv4 / IPv6</dt><dd>{{ d.families.v4|replace('_', ' ') }} / {{ d.families.v6|replace('_', ' ') }}{% for k, a in fam_answers.items() %}<br><span class="small">IPv{{ k[-1] }} answered {{ a[0] }} of the last {{ a[1] }} checks</span>{% endfor %}</dd>
         <dt>Peer test</dt><dd>{{ d.peer_test.latest }} (passed {{ d.peer_test.passed }} of the last {{ d.peer_test.of }})</dd>
         <dt>Checked every</dt><dd>{{ (d.check_interval_s / 60)|round|int }} min, last {{ checked_ago }} ago</dd>

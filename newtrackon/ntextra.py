@@ -95,6 +95,28 @@ def _state(t):
     return "up_good", bad
 
 
+def _addr_report(t, now=None):
+    """Each published address of a UDP tracker and whether it answers, from the checks: [{ip, fam, ok, since}], or [].
+    'not answering' = failed its last 3+ tries and nothing in the last hour."""
+    import time
+    from urllib.parse import urlparse
+    from newtrackon import scraper
+    if not t.url.startswith("udp"):
+        return []
+    p = urlparse(t.url)
+    h = scraper.ADDR_HEALTH.get(scraper._addr_key(p.hostname, p.port)) or {}
+    now = now or time.time()
+    out = []
+    for ip in sorted(t.ips or [], key=lambda x: (":" in x, x)):
+        e = h.get(ip)
+        if not e:
+            continue
+        bad = int(e.get("fails", 0)) >= 3 and now - int(e.get("ok") or 0) > 3600
+        out.append({"ip": ip, "fam": "IPv6" if ":" in ip else "IPv4", "ok": not bad,
+                    "since": (_ago(e["ok"]) + " ago") if e.get("ok") else "never seen answering"})
+    return out
+
+
 def _fam_answers(url):
     """{"v4": (answered, of), ...} over the last checks, for each published family that missed some; {} if none did."""
     out = {}
@@ -667,7 +689,7 @@ def _tracker_page(host):
         now=now, title="Is %s down? Live tracker status" % t.host,
         description=desc, ld=ld, down=down, down_for=down_for,
         fix=_fix_anchor(t), fix_title=FIX_TITLES.get(_fix_anchor(t) or ""), evidence=_evidence(t, d),
-        warn=_warning(t.url), iv_note=_interval_note(d.get("announce_interval_s")),
+        warn=_warning(t.url), iv_note=_interval_note(d.get("announce_interval_s")), addrs=_addr_report(t),
         recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
         recheck_last=_recheck_host.get(host),
     )
