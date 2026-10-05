@@ -446,6 +446,12 @@ class TestHttpAddresses:
         scraper._conn.track = False
 
 
+@pytest.fixture
+def http_paused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(T, "HTTP_PEER_TEST_TRUSTED", False)
+
+
+@pytest.mark.usefixtures("http_paused")
 class TestHttpPeerRulePaused:
     BAD = ["hands out no peers (3+ of its last 6 peer tests failed)"]
 

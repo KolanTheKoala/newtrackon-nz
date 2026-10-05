@@ -1078,9 +1078,10 @@ def _warn_set(url, msg):
     _jsave(WARNINGS, _WARN_FILE)
 
 
-# The HTTP(S) peer test is under review (2026-10-05: 10 of 27 HTTP trackers fail it vs 3 of 49 UDP). Until it's verified,
-# failing it doesn't remove or ban an HTTP(S) tracker (it still shows as Up/Bad). UDP is unaffected.
-HTTP_PEER_TEST_TRUSTED = False
+# The HTTP(S) peer test was reviewed on 2026-10-05 (10 of 27 HTTP trackers failed it vs 3 of 49 UDP): reproduced by hand,
+# every failing one was genuinely broken (records nobody, fixed counts, shares peers only within one IP, local-only
+# retrackers) and a working one passed. Set to False to stop HTTP(S) trackers being removed for it while re-checking.
+HTTP_PEER_TEST_TRUSTED = True
 
 
 def _peer_rule_applies(url):
