@@ -378,3 +378,19 @@ class TestIpBanBothFamilies:
     ])
     def test_match(self, ips: list[str], hit: bool) -> None:
         assert (T._nt_ban_ips(ips) == GONE) is hit
+
+
+@pytest.mark.usefixtures("region_db")
+class TestAlreadyListedOnTheForm:
+    def _post(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch, text: str) -> str:
+        monkeypatch.setattr(ingest, "enqueue_new_trackers", lambda t: None)
+        return flask_client.post("/", data={"new_trackers": text}).get_data(as_text=True)
+
+    def test_already_listed_says_so_and_links(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        html = self._post(flask_client, monkeypatch, "udp://akl.example:1/announce")
+        assert "<strong>akl.example</strong> is already listed as udp://akl.example:1/announce" in html
+        assert 'href="/tracker/akl.example">See its page</a>' in html and "Nothing new to check." in html and "Received" not in html
+
+    def test_mixed_counts_only_the_new_ones(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        html = self._post(flask_client, monkeypatch, "udp://akl.example:1/announce\nudp://brand-new.example:6969/announce")
+        assert "is already listed" in html and "Received: 1 to check." in html

@@ -107,13 +107,45 @@ logger.info("Server started")
 
 
 @app.route("/")
-def main(form_feedback: str | None = None, form_reason: str | None = None, banned: list | None = None) -> str:
+def main(form_feedback: str | None = None, form_reason: str | None = None, banned: list | None = None,
+         listed: list | None = None, new_count: int | None = None) -> str:
     trackers_list = db.get_all_data()
     trackers_list = format_uptime_and_downtime_time(trackers_list)
     return render_template(
         "main.jinja", form_feedback=form_feedback, form_reason=form_reason, trackers=trackers_list, active="Status",
-        banned=banned or [],
+        banned=banned or [], listed=listed or [], new_count=new_count,
     )
+
+
+def _listed_in(text: str) -> tuple[list[dict], int]:
+    """For the form, straight away: submitted trackers already listed (or waiting in the queue), and how many will
+    actually be checked. A better protocol for a listed tracker (UDP for HTTP) is checked as an upgrade."""
+    from urllib.parse import urlparse
+
+    trackers = {(t.host or "").lower(): t.url for t in db.get_all_data()}
+    with ingest.submitted_queue.mutex:
+        queued = {(urlparse(t.url).hostname or "").lower() for t in list(ingest.submitted_queue.queue)}
+    out, new, seen = [], 0, set()
+    for word in text.lower().split()[:SUBMIT_MAX_URLS]:
+        url = ingest.normalise_url(word)
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            continue
+        if not host or (host, url) in seen:
+            continue
+        seen.add((host, url))
+        if host in trackers:
+            if ingest._nt_pri(url) < ingest._nt_pri(trackers[host]):
+                out.append({"host": host, "listed": trackers[host], "upgrade": url.split("://")[0].upper()})
+                new += 1
+            else:
+                out.append({"host": host, "listed": trackers[host]})
+        elif host in queued:
+            out.append({"host": host, "queued": True})
+        else:
+            new += 1
+    return out, new
 
 
 def _banned_in(text: str) -> list[dict]:
@@ -155,7 +187,9 @@ def new_trackers():
         check_all_trackers = Thread(target=ingest.enqueue_new_trackers, args=(new_trackers,))
         check_all_trackers.daemon = True
         check_all_trackers.start()
-    return main(form_feedback="SUCCESS", banned=_banned_in(new_trackers))
+    banned = _banned_in(new_trackers)
+    listed, new = _listed_in(new_trackers)
+    return main(form_feedback="SUCCESS", banned=banned, listed=listed, new_count=max(0, new - len(banned)))
 
 
 @app.route("/api/add", methods=["POST"])

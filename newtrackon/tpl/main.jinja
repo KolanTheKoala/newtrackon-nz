@@ -210,9 +210,21 @@
                     <a class="alert-link" href="/tracker/{{ b.host|urlencode }}">See its page</a>: what happened{% if b.until %}, and how to get it back once it's fixed{% endif %}.
                 </div>
                 {% endfor %}
-                <div class="alert alert-info mt-2 mb-0" role="alert">
-                    Received, see the progress in the <strong><a class="alert-link" href="/submitted">Submitted</a></strong> section
+                {% for l in listed %}
+                <div class="alert alert-secondary mt-2 mb-0 text-start" role="alert">
+                    {% if l.queued %}<strong>{{ l.host }}</strong> is already waiting to be checked: see <a class="alert-link" href="/submitted">Submitted</a>.
+                    {% elif l.upgrade %}<strong>{{ l.host }}</strong> is listed as {{ l.listed }}: your {{ l.upgrade }} version will be checked, and replaces it if it works.
+                    {% else %}<strong>{{ l.host }}</strong> is already listed as {{ l.listed }}.
+                        <a class="alert-link" href="/tracker/{{ l.host|urlencode }}">See its page</a>.{% endif %}
                 </div>
+                {% endfor %}
+                {% if new_count is none or new_count > 0 %}
+                <div class="alert alert-info mt-2 mb-0" role="alert">
+                    Received{% if new_count %}: {{ new_count }} to check{% endif %}. See the progress in the <strong><a class="alert-link" href="/submitted">Submitted</a></strong> section
+                </div>
+                {% else %}
+                <div class="alert alert-info mt-2 mb-0" role="alert">Nothing new to check.</div>
+                {% endif %}
             {% elif form_feedback == "LIMIT" %}
                 <div class="alert alert-warning mt-2 mb-0" role="alert">
                     <i class="fas fa-exclamation-triangle" aria-hidden="true"></i>
