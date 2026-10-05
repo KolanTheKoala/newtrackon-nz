@@ -2020,3 +2020,43 @@ def _attach_extras(trackers):
     except Exception:
         pass
     return r
+
+
+# ---- a tracker's own records follow the tracker, not its URL: when a better protocol replaces it (UDP for HTTP),
+# everything stored under the old URL moves to the new one ----
+_URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_FILE"), ("FAKE_HIST", "_FAKE_HIST_FILE"),
+               ("FAM_FAILS", "_FAM_FAILS_FILE"), ("FAMS", "_FAMS_FILE"), ("DOWN_WHY", "_DOWN_WHY_FILE"),
+               ("FAM_HIST", "_FAM_HIST_FILE"), ("PEER_HIST", "_PEER_HIST_FILE"), ("PEER_LAST", "_PEER_LAST_FILE"),
+               ("ANN_IV", "_ANN_IV_FILE"), ("REGION_LAT", "_REGION_FILE"), ("WARNINGS", "_WARN_FILE"),
+               ("CLOSED", "_CLOSED_FILE"), ("REGION_SAMPLES", "_REGION_TS_FILE"), ("LAT_HIST", "_LAT_HIST_FILE"),
+               ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"))
+_URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
+
+
+def _nt_migrate_url(old, new):
+    """Move everything stored under the old URL to the new one (latency history, daily summary, peer/address/fake-peer
+    history, state and its clocks, interval, warnings...). Returns the stores that had something."""
+    if not old or not new or old == new:
+        return []
+    g = globals()
+    moved = []
+    for name, file_var in _URL_STORES:
+        d = g.get(name)
+        if not isinstance(d, dict) or old not in d:
+            continue
+        v = d.pop(old)
+        if name == "DAILY" and new in d:  # keep both, one row per day (the new URL's rows win a clash)
+            days = {r[0]: r for r in v}
+            days.update({r[0]: r for r in d[new]})
+            v = [days[k] for k in sorted(days)]
+        d[new] = v
+        _jsave(d, g[file_var])
+        moved.append(name)
+    for name in _URL_MEMORY:
+        d = g.get(name)
+        if isinstance(d, dict) and old in d:
+            d[new] = d.pop(old)
+            moved.append(name)
+    _probe_save()
+    logger.info("Moved %s's records to %s: %s", old, new, ", ".join(moved) or "nothing")
+    return moved

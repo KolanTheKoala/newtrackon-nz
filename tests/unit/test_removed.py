@@ -426,3 +426,21 @@ class TestProtocolUpgrade:
             assert self._run(monkeypatch, "udp://up.example:8080/announce") == ["udp://up.example:8080/announce", "http://up.example:8080/announce"]
         finally:
             persistence.submitted_data.clear()
+
+
+def test_records_follow_the_tracker_to_its_new_url() -> None:
+    old, new = "http://mv.example:8080/announce", "udp://mv.example:8080/announce"
+    T.LAT_HIST[old] = {"Oceania": [[1, 40]]}
+    T.DAILY[old] = [["2026-10-01", 100.0, 48, {}]]
+    T.DAILY[new] = [["2026-10-02", 99.0, 48, {}]]
+    T.LAST_STATE[old] = {"st": "up_good", "since": 5}
+    T.PEER_HIST[old] = [1, 1, 1]
+    T.ANN_IV[old] = 1800
+    T.PEER_OK[old] = True
+    moved = T._nt_migrate_url(old, new)
+    assert {"LAT_HIST", "DAILY", "LAST_STATE", "PEER_HIST", "ANN_IV", "PEER_OK"} <= set(moved)
+    assert old not in T.LAT_HIST and T.LAT_HIST[new] == {"Oceania": [[1, 40]]}
+    assert [r[0] for r in T.DAILY[new]] == ["2026-10-01", "2026-10-02"]  # both kept, in order
+    assert T.LAST_STATE[new]["since"] == 5 and T.PEER_OK[new] is True
+    assert T._jload("data/lat_hist.json")[new] and T._jload("data/last_state.json")[new]  # saved
+    assert T._nt_migrate_url(new, new) == []

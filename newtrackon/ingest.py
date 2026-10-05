@@ -474,6 +474,9 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         logger.info("Tracker %s replaced by %s (preferred protocol)", old.url, tracker_candidate.url)
     db.insert_new_tracker(tracker_candidate)
     logger.info("New tracker %s added to newTrackon", tracker_candidate.url)
+    if old is not None:  # same tracker, better protocol: its records follow it
+        from newtrackon import tracker as _t
+        _t._nt_migrate_url(old.url, tracker_candidate.url)
     host = (cand_host or "").lower()
     if _reinstating(host):
         REINSTATE.pop(host, None)
