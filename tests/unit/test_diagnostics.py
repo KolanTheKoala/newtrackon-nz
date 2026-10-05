@@ -376,3 +376,71 @@ class TestAddressHealth:
         scraper.ADDR_HEALTH["akl.example:1"] = {"192.0.2.1": {"ok": int(time()), "fails": 0}, "192.0.2.2": {"ok": 0, "fails": 5}}
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "1 of its 2 published addresses doesn&#39;t answer" in html and "<b>192.0.2.2</b> (IPv4, last answer never seen answering)" in html
+
+
+class TestHttpAddresses:
+    H, P = "web.example", 8080
+
+    def _setup(self, monkeypatch: pytest.MonkeyPatch, outcomes: dict[str, object]) -> list[str]:
+        import socket
+        rows = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, self.P)) for ip in outcomes]
+        monkeypatch.setattr(scraper.socket, "getaddrinfo", lambda *a, **k: rows)
+        monkeypatch.setattr(scraper, "ip_is_public", lambda ip: True)
+        used: list[str] = []
+
+        def once(url):
+            ip = scraper._conn.pin or next(iter(outcomes))  # unpinned: DNS order, the first
+            scraper._conn.last = (self.H, self.P, ip)
+            used.append(ip)
+            out = outcomes[ip]
+            if isinstance(out, Exception):
+                raise out
+            return out
+        monkeypatch.setattr(scraper, "_announce_http_once", once)
+        return used
+
+    def test_a_wrong_server_answer_is_retried_on_the_next_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        used = self._setup(monkeypatch, {"192.0.2.10": RuntimeError("HTTP 404 status code returned"),
+                                         "192.0.2.11": {"interval": 1800, "peers": []}})
+        assert scraper.announce_http("http://web.example:8080/announce")["interval"] == 1800
+        assert used == ["192.0.2.10", "192.0.2.11"]
+        h = scraper.ADDR_HEALTH["web.example:8080"]
+        assert h["192.0.2.10"]["fails"] == 1 and h["192.0.2.11"]["fails"] == 0 and h["192.0.2.11"]["ok"]
+        assert scraper._conn.pin is None and scraper._conn.track is False  # cleaned up
+
+    def test_the_trackers_own_error_is_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        used = self._setup(monkeypatch, {"192.0.2.10": RuntimeError("Tracker error message: torrent not registered"),
+                                         "192.0.2.11": {"interval": 1800, "peers": []}})
+        with pytest.raises(RuntimeError, match="torrent not registered"):
+            scraper.announce_http("http://web.example:8080/announce")
+        assert used == ["192.0.2.10"]
+
+    def test_all_addresses_wrong_raises_the_first_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._setup(monkeypatch, {"192.0.2.10": RuntimeError("HTTP 502 status code returned"),
+                                  "192.0.2.11": RuntimeError("HTTP 502 status code returned")})
+        with pytest.raises(RuntimeError, match="HTTP 502"):
+            scraper.announce_http("http://web.example:8080/announce")
+
+    def test_connect_tries_known_good_first_and_records_only_tracker_checks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import socket
+        rows = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.20", 80)), (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.21", 80))]
+        monkeypatch.setattr(scraper.socket, "getaddrinfo", lambda *a, **k: rows)
+        monkeypatch.setattr(scraper, "ip_is_public", lambda ip: True)
+        tried: list[str] = []
+
+        def connect(addr, *a, **k):
+            tried.append(addr[0])
+            if addr[0] == "192.0.2.21":
+                raise OSError("refused")
+            return "sock"
+        monkeypatch.setattr(scraper, "_u3c_create_connection", connect)
+        scraper.addr_record("x.example", 80, "192.0.2.20", True)
+        scraper._conn.track = False
+        assert scraper._public_create_connection(("x.example", 80)) == "sock" and tried == ["192.0.2.20"]
+        scraper.ADDR_HEALTH.clear()
+        scraper.addr_record("x.example", 80, "192.0.2.21", True)  # now .21 looks best, but it refuses
+        scraper._conn.track = True
+        tried.clear()
+        assert scraper._public_create_connection(("x.example", 80)) == "sock" and tried == ["192.0.2.21", "192.0.2.20"]
+        assert scraper.ADDR_HEALTH["x.example:80"]["192.0.2.21"]["fails"] == 1
+        scraper._conn.track = False

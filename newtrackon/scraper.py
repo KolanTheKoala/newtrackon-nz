@@ -94,19 +94,40 @@ def require_public(sa: object) -> None:
 _u3c_create_connection = _u3c.create_connection
 
 
+_conn = threading.local()  # per thread: .track (record per-address results), .pin (use only this address), .last (connected to)
+
+
 def _public_create_connection(address, *args, **kwargs):  # type: ignore[no-untyped-def]
-    """urllib3 connect: resolve, keep public addresses only, connect by address (TLS still checks the hostname)."""
+    """urllib3 connect: resolve, keep public addresses only, connect by address (TLS still checks the hostname).
+    Every public address is tried in turn, known-good first; during a tracker check each result is recorded."""
     host, port = address
     infos = socket.getaddrinfo(host, port, _u3c.allowed_gai_family(), socket.SOCK_STREAM)
-    public = [i for i in infos if ip_is_public(i[4][0])]
+    public = []
+    for i in infos:
+        if ip_is_public(i[4][0]) and all(i[4][0] != p[4][0] for p in public):
+            public.append(i)
     if not public:
         raise OSError(f"refusing to connect to {host}: no public address")
+    track = getattr(_conn, "track", False)
+    pin = getattr(_conn, "pin", None)
+    if pin:
+        public = [i for i in public if i[4][0] == pin] or public[:0]
+        if not public:
+            raise OSError(f"{pin} is no longer published for {host}")
+    public.sort(key=lambda i: _addr_rank(host, port, i[4][0]))
+    published = {i[4][0] for i in infos}
     err: OSError | None = None
     for info in public:
+        ip = info[4][0]
         try:
-            return _u3c_create_connection((info[4][0], port), *args, **kwargs)
+            sock = _u3c_create_connection((ip, port), *args, **kwargs)
         except OSError as e:
             err = e
+            if track:
+                addr_record(host, port, ip, False, published)
+            continue
+        _conn.last = (host, port, ip)
+        return sock
     assert err is not None
     raise err
 
@@ -357,7 +378,7 @@ def decode_binary_peers_list(buf: bytes, offset: int, ip_family: int) -> list[Pe
     return peers
 
 
-def announce_http(url: str) -> HTTPAnnounceResponse:
+def _announce_http_once(url: str) -> HTTPAnnounceResponse:
     logger.info("%s Scraping HTTP(S)", url)
     thash = urandom(20)
 
@@ -404,6 +425,50 @@ def announce_http(url: str) -> HTTPAnnounceResponse:
     rtt.probe = ("http", thash, url.split("?", 1)[0], None, _pid)
     logger.info("%s response: %s", url, tracker_response)
     return tracker_response
+
+
+# An answer that looks like a different server (an old address still in DNS: 404, 5xx, empty or non-tracker reply, or
+# no reply after connecting) is retried on the tracker's other addresses. The tracker's own error message never is.
+_HTTP_WRONG_SERVER = ("HTTP 404 ", "HTTP 500 ", "HTTP 502 ", "HTTP 503 ", "HTTP 504 ", "HTTP 521 ", "HTTP 522 ", "HTTP 523 ",
+                      "Got empty HTTP response", "Failed bdecoding", "HTTP timeout")
+
+
+def announce_http(url: str) -> HTTPAnnounceResponse:
+    _conn.track, _conn.pin, _conn.last = True, None, None
+    try:
+        try:
+            r = _announce_http_once(url)
+        except RuntimeError as e:
+            last = getattr(_conn, "last", None)
+            if not last or not str(e).startswith(_HTTP_WRONG_SERVER):
+                raise
+            host, port, bad = last
+            try:
+                others = [i[4][0] for i in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)]
+            except OSError:
+                raise e
+            others = [ip for ip in dict.fromkeys(others) if ip != bad and ip_is_public(ip)]
+            if not others:
+                raise
+            addr_record(host, port, bad, False, set(others) | {bad})
+            others.sort(key=lambda ip: _addr_rank(host, port, ip))
+            for ip in others[:3]:
+                logger.info("%s %s from %s: trying %s", url, e, bad, ip)
+                _conn.pin, _conn.last = ip, None
+                try:
+                    r = _announce_http_once(url)
+                except RuntimeError:
+                    addr_record(host, port, ip, False)
+                    continue
+                break
+            else:
+                raise e
+        last = getattr(_conn, "last", None)
+        if last:
+            addr_record(last[0], last[1], last[2], True)
+        return r
+    finally:
+        _conn.track, _conn.pin = False, None
 
 
 def check_peer_count(response: Mapping[str, object]) -> None:

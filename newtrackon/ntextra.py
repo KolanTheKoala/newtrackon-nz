@@ -96,15 +96,14 @@ def _state(t):
 
 
 def _addr_report(t, now=None):
-    """Each published address of a UDP tracker and whether it answers, from the checks: [{ip, fam, ok, since}], or [].
+    """Each published address of a tracker and whether it answers, from the checks: [{ip, fam, ok, since}], or [].
     'not answering' = failed its last 3+ tries and nothing in the last hour."""
     import time
     from urllib.parse import urlparse
     from newtrackon import scraper
-    if not t.url.startswith("udp"):
-        return []
     p = urlparse(t.url)
-    h = scraper.ADDR_HEALTH.get(scraper._addr_key(p.hostname, p.port)) or {}
+    port = p.port or (443 if p.scheme == "https" else 80)
+    h = scraper.ADDR_HEALTH.get(scraper._addr_key(p.hostname, port)) or {}
     now = now or time.time()
     out = []
     for ip in sorted(t.ips or [], key=lambda x: (":" in x, x)):
