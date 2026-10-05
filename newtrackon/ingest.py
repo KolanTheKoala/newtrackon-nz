@@ -243,6 +243,16 @@ def confirming(now: float | None = None) -> list[dict[str, object]]:
             for u, e in sorted(CONFIRM.items(), key=lambda x: -x[1]["t"]) if not e.get("queued")]
 
 
+def _mark_not_upgraded(url: str, want: str, listed: str) -> None:
+    """The submitted page's row for an upgrade that didn't happen: grey, not a failure (the tracker is fine)."""
+    if submitted_data and submitted_data[0].get("url") == url:
+        row = submitted_data[0]
+        info = row.get("info")
+        first = info[0] if isinstance(info, list) and info else info if isinstance(info, str) else ""
+        row.update({"status": 0, "noupgrade": True,
+                    "info": [f"Not upgraded: {want} isn't answering on this port. It stays listed as {listed}.", first]})
+
+
 def _mark_confirm_row(url: str) -> None:
     """The submitted page's row for a first answer: pending, not accepted yet."""
     if submitted_data and submitted_data[0].get("url") == url:
@@ -443,7 +453,8 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         # submitted as a better protocol (UDP for a listed HTTP tracker), but only the listed one answered: the checks
         # fall back from UDP to HTTP(S) on the same port. It isn't an upgrade, so the listed tracker is left alone.
         want = urlparse(submitted_url).scheme.upper()
-        log_wrong_interval_denial(f"{want} not answering: it stays listed as {old.url}")
+        _mark_not_upgraded(tracker_candidate.url, want, old.url)
+        logger.info("Tracker %s not upgraded: %s not answering, stays listed as %s", submitted_url, want, old.url)
         return
     closed = _closed_on_submit(tracker_candidate.url)
     if closed:

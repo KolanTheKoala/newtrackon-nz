@@ -106,7 +106,8 @@
                         </tr>
                     {% endfor %}
                     {% for response in data %}
-                        <tr{% if response.get("refused") or response.get("confirm") %} class="nt-pending"{% endif %}>
+                        {% set nt_noup = response.get("noupgrade") or "not answering: it stays listed as" in ((response['info'] or [])|join(' ')) %}
+                        <tr{% if response.get("refused") or response.get("confirm") or nt_noup %} class="nt-pending"{% endif %}>
                             <td class="t">
                                 <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
@@ -115,6 +116,10 @@
                             {% if response["status"] == 1 %}
                                 <td class="up">
                                     <b>Accepted</b>
+                                </td>
+                            {% elif nt_noup %}
+                                <td class="pending" title="The listed tracker is fine and unchanged: only the better protocol didn't answer">
+                                    <b>Not upgraded</b>
                                 </td>
                             {% elif response.get("confirm") %}
                                 <td class="pending" title="Answered once: listed only if it answers again 30 minutes later">

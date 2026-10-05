@@ -416,7 +416,8 @@ class TestProtocolUpgrade:
         try:
             assert self._run(monkeypatch, "http://up.example:8080/announce") == []  # UDP failed, HTTP answered
             row = persistence.submitted_data[0]
-            assert row["status"] == 0 and "UDP not answering: it stays listed as http://up.example:8080/announce" in row["info"][1]
+            assert row["status"] == 0 and row["noupgrade"]
+            assert row["info"][0] == "Not upgraded: UDP isn't answering on this port. It stays listed as http://up.example:8080/announce."
         finally:
             persistence.submitted_data.clear()
 
