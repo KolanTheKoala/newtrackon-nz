@@ -564,3 +564,27 @@ class TestPeerTestPerFamily:
         assert scraper.peer_probe_family(self.U, "v6") == (socket.AF_INET6, None)
         assert calls and calls[0][2] == 0x76FD  # client A registered on IPv6 with the probe's port
         assert scraper.rtt.probe[1] == b"main" and scraper.rtt.probe_extra == {"fam": "v4"}
+
+
+class TestDualStackNeedsEvidence:
+    BAD = ["hands out no peers (3+ of its last 6 peer tests failed)"]
+
+    def _check(self, t, monkeypatch: pytest.MonkeyPatch, fam_hist: dict) -> None:
+        from collections import deque
+        from time import time
+        t.url = "udp://tracker.example.com:6969/announce"
+        T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 6 * 86400),
+                               "bad_since": int(time() - 6 * 86400), "useless_since": int(time() - 6 * 86400)}
+        monkeypatch.setitem(T.PEER_FAILS, t.url, 6)
+        monkeypatch.setitem(T.FAMS, t.url, {"v4": True, "v6": True})
+        T.PEER_HIST_FAM[t.url] = fam_hist
+        t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 48, maxlen=1440)
+        t.update_uptime()
+
+    def test_like_farted_not_removed_on_pre_split_history(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, monkeypatch, {"?": [0] * 6, "v6": [0], "v4": [1]})
+        assert sample_tracker.to_be_deleted is False
+
+    def test_removed_once_both_families_fail_with_evidence(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._check(sample_tracker, monkeypatch, {"v4": [0, 0, 0], "v6": [0, 0, 0]})
+        assert sample_tracker.to_be_deleted is True

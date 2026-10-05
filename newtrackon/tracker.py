@@ -1137,8 +1137,15 @@ PEER_TEST_PER_FAMILY = True  # results are kept per family since 2026-10-06 (_pe
 def _peer_rule_applies(url):
     if not (HTTP_PEER_TEST_TRUSTED or str(url).startswith("udp")):
         return False
-    if not PEER_TEST_PER_FAMILY and len(FAMS.get(url) or {}) >= 2:
-        return False
+    alive = [f for f, ok in (FAMS.get(url) or {}).items() if ok]
+    if len(alive) >= 2:
+        if not PEER_TEST_PER_FAMILY:
+            return False
+        # answering on both families: no removal for the peer test until each family has its own evidence (tracker.farted.net
+        # was removed on its pre-split history 20 minutes after per-family testing started, though IPv4 passed)
+        h = PEER_HIST_FAM.get(url) or {}
+        if not all(len(h.get(f, [])) >= PEER_WINDOW // 2 for f in alive):
+            return False
     return True
 
 
