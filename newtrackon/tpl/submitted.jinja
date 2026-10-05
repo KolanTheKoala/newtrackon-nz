@@ -110,7 +110,7 @@
                             <td class="t">
                                 <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
-                            <td class="u">{{ response['url'] }}{% if response["status"] == 1 %}{% set h = nt_host(response['url']) %}{% if h %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Tracker page: uptime and latency history"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% endif %}</td>
+                            <td class="u">{{ response['url'] }}{% if response.get("refused") and (response['info'] or [''])[0].startswith("Banned") %}{% set h = nt_host(response['url']) %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Why it was removed, and how to get it back"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% if response["status"] == 1 %}{% set h = nt_host(response['url']) %}{% if h %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Tracker page: uptime and latency history"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% endif %}</td>
                             <td class="c-ip">{{ response.get('ip', '') }}</td>
                             {% if response["status"] == 1 %}
                                 <td class="up">
@@ -143,7 +143,7 @@
     {% endif %}
     <div class="container mt-4" id="banned">
         <h4>Banned trackers</h4>
-        <p>Removed trackers (no answer or Up/Bad for 5 days, Up/Junk for 30, too unreliable, private or whitelist-only) can't be submitted again for 30 days: 90 days the second time, never after the third.</p>
+        <p>Removed trackers (no answer or Up/Bad for 5 days, Up/Junk or Up/Broken for 30, too unreliable, private or whitelist-only) can't be submitted again for 30 days: 90 days the second time, never after the third.</p>
         {% if bans %}
         <div class="table-responsive">
             <table class="table table-sm nt-sub" style="margin-left:0">

@@ -269,3 +269,22 @@ class TestSecondCheck:
         ingest.CONFIRM["udp://w.example:1/announce"] = {"t": NOW, "queued": False}
         ingest.add_one_tracker_to_submitted_queue("udp://w.example:1/announce")
         assert "already waiting for its second check" in caplog.text
+
+
+@pytest.mark.usefixtures("region_db")
+class TestBannedSubmission:
+    def test_form_says_so_and_links_to_its_page(self, flask_client: FlaskClient, removed: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ingest, "enqueue_new_trackers", lambda text: None)
+        html = flask_client.post("/", data={"new_trackers": "udp://gone.example:6969/announce\nudp://private.example:1/announce"}).get_data(as_text=True)
+        assert "<strong>gone.example</strong> was removed from the list on" in html and 'href="/tracker/gone.example">See its page</a>' in html
+        assert "private.example" not in html.split("Received, see")[0]  # manual denylist entries stay silent
+
+    def test_refused_row_links_to_its_page(self, flask_client: FlaskClient, removed: None, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger="newtrackon")
+        persistence.submitted_data.clear()
+        try:
+            ingest.add_one_tracker_to_submitted_queue("udp://gone.example:6969/announce")
+            html = flask_client.get("/submitted").get_data(as_text=True)
+            assert '<a href="/tracker/gone.example" class="nt-tlink" title="Why it was removed' in html
+        finally:
+            persistence.submitted_data.clear()

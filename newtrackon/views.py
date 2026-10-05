@@ -107,12 +107,37 @@ logger.info("Server started")
 
 
 @app.route("/")
-def main(form_feedback: str | None = None, form_reason: str | None = None) -> str:
+def main(form_feedback: str | None = None, form_reason: str | None = None, banned: list | None = None) -> str:
     trackers_list = db.get_all_data()
     trackers_list = format_uptime_and_downtime_time(trackers_list)
     return render_template(
-        "main.jinja", form_feedback=form_feedback, form_reason=form_reason, trackers=trackers_list, active="Status"
+        "main.jinja", form_feedback=form_feedback, form_reason=form_reason, trackers=trackers_list, active="Status",
+        banned=banned or [],
     )
+
+
+def _banned_in(text: str) -> list[dict]:
+    """Submitted trackers that this site removed and that are banned now, so the form can say so straight away and link
+    to their page. Manual denylist entries are never mentioned (ntextra._ban only knows hosts this site removed)."""
+    from urllib.parse import urlparse
+
+    from newtrackon import ntextra
+
+    out, seen = [], set()
+    for word in text.lower().split()[:SUBMIT_MAX_URLS]:
+        try:
+            host = (urlparse(word).hostname or "").lower()
+        except ValueError:
+            continue
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        b = ntextra._ban(host)
+        if b and b["active"]:
+            r = ntextra.T.REMOVED.get(host) or {}
+            out.append({"host": host, "removed": ntextra._date(r.get("t", 0)), "reason": r.get("reason") or "",
+                        "until": ntextra._date(b["until"]) if b["until"] else None})
+    return out
 
 
 @app.route("/", methods=["POST"])
@@ -130,7 +155,7 @@ def new_trackers():
         check_all_trackers = Thread(target=ingest.enqueue_new_trackers, args=(new_trackers,))
         check_all_trackers.daemon = True
         check_all_trackers.start()
-    return main(form_feedback="SUCCESS")
+    return main(form_feedback="SUCCESS", banned=_banned_in(new_trackers))
 
 
 @app.route("/api/add", methods=["POST"])

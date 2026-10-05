@@ -202,6 +202,14 @@
                     No trackers were submitted
                 </div>
             {% elif form_feedback == "SUCCESS" %}
+                {% for b in banned %}
+                <div class="alert alert-warning mt-2 mb-0 text-start" role="alert">
+                    <i class="fas fa-exclamation-triangle" aria-hidden="true"></i>
+                    <strong>{{ b.host }}</strong> was removed from the list on {{ b.removed }}{% if b.reason %} ({{ b.reason }}){% endif %},
+                    and is banned {% if b.until %}until {{ b.until }}{% else %}for good{% endif %}, so it won't be checked.
+                    <a class="alert-link" href="/tracker/{{ b.host|urlencode }}">See its page</a>: what happened{% if b.until %}, and how to get it back once it's fixed{% endif %}.
+                </div>
+                {% endfor %}
                 <div class="alert alert-info mt-2 mb-0" role="alert">
                     Received, see the progress in the <strong><a class="alert-link" href="/submitted">Submitted</a></strong> section
                 </div>
