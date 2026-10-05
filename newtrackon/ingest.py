@@ -163,9 +163,32 @@ def restore_saved_queue() -> None:
     logger.info("Restored saved submissions: %d of %d back in the queue", submitted_queue.qsize(), len(urls))
 
 
+def normalise_url(url: str) -> str:
+    """One spelling per host, so bans and duplicate checks can't be dodged: 'tracker.example.' (trailing dot) is
+    'tracker.example', and a Unicode name is written in punycode ('bücher.example' -> 'xn--bcher-kva.example')."""
+    try:
+        p = urlparse(url)
+        host = p.hostname or ""
+    except ValueError:
+        return url
+    new = host.rstrip(".")
+    if not new.isascii():
+        try:
+            new = new.encode("idna").decode("ascii")
+        except UnicodeError:
+            return url  # not a valid name: it won't resolve anyway
+    if new == host:
+        return url
+    netloc = p.netloc
+    i = netloc.lower().rfind(host)
+    if i < 0:
+        return url
+    return p._replace(netloc=netloc[:i] + new + netloc[i + len(host):]).geturl()
+
+
 def enqueue_new_trackers(input_string: str) -> None:
     input_string = input_string.lower()
-    new_trackers_list = sorted(dict.fromkeys(input_string.split()), key=_nt_pri)
+    new_trackers_list = sorted(dict.fromkeys(normalise_url(u) for u in input_string.split()), key=_nt_pri)
     for url in new_trackers_list:
         logger.info("Tracker %s submitted to the queue", url)
         add_one_tracker_to_submitted_queue(url)
@@ -265,6 +288,7 @@ def _denylist_hosts() -> set[str]:
 
 
 def add_one_tracker_to_submitted_queue(url: str) -> None:
+    url = normalise_url(url)
     host = urlparse(url).hostname
     if host and host.lower() in _denylist_hosts() and not _reinstating(host):
         logger.info("Tracker %s denied, host denylisted", url)
@@ -307,6 +331,13 @@ def add_one_tracker_to_submitted_queue(url: str) -> None:
         return
     if tracker_candidate.ips and trackers_in_db and log_ip_conflicts(tracker_candidate, trackers_in_db):
         return
+    if tracker_candidate.ips:  # a new name for a banned tracker's server is still that tracker
+        from newtrackon.tracker import _nt_ban_ips
+        listed = {ip for t in (trackers_in_db or []) for ip in (t.ips or [])}
+        hit = _nt_ban_ips(tracker_candidate.ips, skip_host=(host or "").lower() if _reinstating(host or "") else None, listed_ips=listed)
+        if hit:
+            logger.info("Tracker %s denied, same server as banned %s", url, hit)
+            return
     try:
         submitted_queue.put_nowait(tracker_candidate)
     except Full:
@@ -512,7 +543,7 @@ class _NtRejectRows(_nt_logging.Filter):
     def filter(self, record):
         try:
             m, a = str(record.msg), (record.args or ())
-            why = ip = None
+            why = ip = ban_host = None
             if m.startswith("Tracker %s denied, %s IP overlap with %s"):
                 ips = [str(x) for x in (a[3] if isinstance(a[3], (list, tuple, set)) else [a[3]])]
                 ip = next((x for x in ips if ":" not in x), ips[0] if ips else "")
@@ -533,11 +564,19 @@ class _NtRejectRows(_nt_logging.Filter):
                 why = "The queue is full, please try again later"
             elif m.startswith("Tracker %s denied, host denylisted"):
                 why = _ban_reason(str(a[0]))
+                ban_host = (urlparse(str(a[0])).hostname or "").lower()
+            elif m.startswith("Tracker %s denied, same server as banned %s"):
+                b = _ban_reason("udp://%s:1/" % a[1])
+                why = "Same server as the banned tracker %s. %s" % (a[1], b) if b else None
+                ban_host = str(a[1])
             if why:
                 url, now = str(a[0]), int(_nt_time())
                 dup = any(r.get("url") == url and why in (r.get("info") or []) and now - int(r.get("time") or 0) < 86400 for r in list(submitted_data))
                 if not dup:
-                    submitted_data.appendleft({"url": url, "time": now, "ip": ip or "", "info": [why], "status": 0, "refused": True})
+                    row = {"url": url, "time": now, "ip": ip or "", "info": [why], "status": 0, "refused": True}
+                    if ban_host:
+                        row["ban_host"] = ban_host  # the banned tracker's page explains it
+                    submitted_data.appendleft(row)
         except Exception:
             pass
         return True

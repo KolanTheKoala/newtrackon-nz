@@ -422,6 +422,10 @@ class Tracker:
                 return
             r = REMOVED.get(host)
             prior = int(r.get("count", 1)) if r else 0  # removals before this one
+            # earlier removals of other names on the same server count too, so a new name doesn't start the ladder again
+            mine = set(getattr(self, "ips", None) or []) | set((getattr(self, "recent_ips", None) or {}).keys())
+            prior += sum(int(o.get("count", 1)) for h, o in REMOVED.items()
+                         if h != host and mine & set(o.get("ips") or []) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS))
             days = BAN_STEPS[min(prior, len(BAN_STEPS) - 1)]
             with open(_DENY_FILE, "a", encoding="utf-8") as fh:
                 fh.write(f"{host}\n" if days is None else (f"{host} {int(time())}\n" if days == 30 else f"{host} {int(time())} {days}\n"))
@@ -1613,8 +1617,57 @@ def _removed_add(t, reason, now=None):
     REMOVED[host] = {"url": t.url, "t": int(now or time()), "reason": reason, "added": int(t.added or 0),
                      "country": (t.countries or [""])[0], "network": (t.networks or [""])[0],
                      "count": (int(prev.get("count", 1)) if prev else 0) + 1,  # removals so far, for longer bans
+                     "ips": sorted(set(getattr(t, "ips", None) or []) | set((getattr(t, "recent_ips", None) or {}).keys())),
                      "hist": hist}  # its last week of uptime, restored if it's reinstated
     _jsave(REMOVED, _REMOVED_FILE)
+
+
+_CDN_WORDS = ("cloudflare", "akamai", "fastly", "cloudfront", "amazon.com", "google", "microsoft", "incapsula", "imperva", "sucuri")
+
+
+def _nt_ban_ips(ips, skip_host=None, listed_ips=()):
+    """The banned tracker (removed by this site, ban still running) that shares one of these addresses, or None.
+    Addresses of CDNs and shared front ends are never treated as banned (thousands of unrelated sites share them), nor
+    addresses a listed tracker still uses."""
+    from newtrackon import ntextra
+    ips = {str(x) for x in (ips or [])} - {str(x) for x in (listed_ips or ())}
+    if not ips:
+        return None
+    for host, r in REMOVED.items():
+        if host == skip_host or not r.get("ips"):
+            continue
+        if any(w in str(r.get("network") or "").lower() for w in _CDN_WORDS):
+            continue
+        if ips & set(r["ips"]):
+            b = ntextra._ban(host)
+            if b and b["active"]:
+                return host
+    return None
+
+
+def _removed_ips_seed():
+    """Bans from before addresses were saved: look the banned names up once (a handful of DNS lookups) and keep the
+    public addresses. Run once from the check loop."""
+    from newtrackon import ntextra
+    n = 0
+    for host, r in REMOVED.items():
+        if "ips" in r:
+            continue
+        b = ntextra._ban(host)
+        if not (b and b["active"]):
+            continue
+        found = set()
+        try:
+            for res in socket.getaddrinfo(host, None):
+                ip = str(res[4][0])
+                if scraper.ip_is_public(ip):
+                    found.add(ip)
+        except OSError:
+            pass
+        r["ips"] = sorted(found)
+        n += 1
+    if n:
+        _jsave(REMOVED, _REMOVED_FILE)
 
 
 def _removed_seed():

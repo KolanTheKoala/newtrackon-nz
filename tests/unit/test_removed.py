@@ -288,3 +288,74 @@ class TestBannedSubmission:
             assert '<a href="/tracker/gone.example" class="nt-tlink" title="Why it was removed' in html
         finally:
             persistence.submitted_data.clear()
+
+
+@pytest.mark.parametrize("url", ["udp://gone.example:6969/announce", "http://gone.example:80/announce", "https://gone.example:443/announce",
+                                 "udp://GONE.example:1337/announce", "http://gone.example.:6969/announce", "udp://gone.example.:1/announce",
+                                 "wss://gone.example/announce", "http://user@gone.example.:80/announce"])
+def test_a_ban_holds_whatever_the_protocol_port_or_spelling(url: str, removed: None, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    caplog.set_level(logging.INFO, logger="newtrackon")
+    monkeypatch.setattr(ingest.db, "get_all_data", lambda: [])
+    monkeypatch.setattr(T.Tracker, "from_url", staticmethod(lambda u: (_ for _ in ()).throw(ValueError("got past the ban"))))
+    ingest.enqueue_new_trackers(url)
+    assert "host denylisted" in caplog.text and "got past the ban" not in caplog.text
+
+
+class TestIpBan:
+    @pytest.fixture(autouse=True)
+    def _setup(self, removed: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger="newtrackon")
+        T.REMOVED[GONE]["ips"] = ["203.0.113.5", "2001:db8::5"]
+        monkeypatch.setattr(ingest.db, "get_all_data", lambda: [])
+        monkeypatch.setattr(ingest, "log_ip_conflicts", lambda t, ts: False)
+        persistence.submitted_data.clear()
+        self.queued: list[str] = []
+        monkeypatch.setattr(ingest.submitted_queue, "put_nowait", lambda t: self.queued.append(t.url))
+        monkeypatch.setattr(ingest, "save_queue", lambda: None)
+
+    def _submit(self, monkeypatch: pytest.MonkeyPatch, url: str, ips: list[str]) -> None:
+        monkeypatch.setattr(T.Tracker, "from_url", staticmethod(lambda u: SimpleNamespace(url=u, ips=ips, host=u.split("/")[2].split(":")[0])))
+        ingest.add_one_tracker_to_submitted_queue(url)
+
+    def test_a_new_name_on_the_banned_server_is_refused(self, monkeypatch: pytest.MonkeyPatch, flask_client: FlaskClient) -> None:
+        self._submit(monkeypatch, "udp://alias.example:6969/announce", ["203.0.113.5"])
+        assert self.queued == []
+        row = persistence.submitted_data[0]
+        assert row["info"][0].startswith("Same server as the banned tracker gone.example. Banned until") and row["ban_host"] == GONE
+
+    def test_another_server_is_fine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._submit(monkeypatch, "udp://other.example:6969/announce", ["198.51.100.7"])
+        assert self.queued == ["udp://other.example:6969/announce"]
+
+    def test_cdn_addresses_are_never_banned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        T.REMOVED[GONE]["network"] = "Cloudflare, Inc."
+        self._submit(monkeypatch, "https://behind-cf.example:443/announce", ["203.0.113.5"])
+        assert self.queued == ["https://behind-cf.example:443/announce"]
+
+    def test_expired_ban_frees_the_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _deny("%s %d" % (GONE, NOW - 40 * 86400))
+        self._submit(monkeypatch, "udp://alias.example:6969/announce", ["203.0.113.5"])
+        assert self.queued == ["udp://alias.example:6969/announce"]
+
+    def test_removal_saves_the_addresses(self) -> None:
+        t = SimpleNamespace(host="x.example", url="udp://x.example:1/announce", added=0, countries=[], networks=[],
+                            ips=["192.0.2.1"], recent_ips={"192.0.2.9": 0}, historic=[])
+        T._removed_add(t, "x")
+        assert T.REMOVED["x.example"]["ips"] == ["192.0.2.1", "192.0.2.9"]
+
+
+@pytest.mark.parametrize(("url", "want"), [
+    ("http://bücher.example:80/announce", "http://xn--bcher-kva.example:80/announce"),
+    ("http://BÜCHER.example.:80/announce", "http://xn--bcher-kva.example:80/announce"),
+    ("udp://user@banned.example.:1/announce", "udp://user@banned.example:1/announce"),
+    ("udp://plain.example:1/announce", "udp://plain.example:1/announce")])
+def test_one_spelling_per_host(url: str, want: str) -> None:
+    assert ingest.normalise_url(url.lower()) == want.lower()
+
+
+def test_repeat_ban_counts_other_names_on_the_same_server(sample_tracker) -> None:
+    sample_tracker.ips = ["203.0.113.9"]
+    T.REMOVED["old-name.example"] = {"url": "udp://old-name.example:1/announce", "t": 0, "reason": "x", "count": 1, "ips": ["203.0.113.9"]}
+    open("data/denylist.txt", "w").close()
+    sample_tracker._nt_ban()
+    assert open("data/denylist.txt").read().split()[2] == "90"  # its second removal on that server: 90 days, not 30

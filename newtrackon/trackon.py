@@ -46,8 +46,9 @@ def update_outdated_trackers() -> NoReturn:
         if not _USELESS_SEEDED:
             try:
                 _T._useless_seed(trackers_all, now)
+                _T._removed_ips_seed()
             except Exception:
-                logger.exception("useless-stretch seeding failed")
+                logger.exception("seeding failed")
             _USELESS_SEEDED.append(True)
         try:
             ingest.confirm_due(now)

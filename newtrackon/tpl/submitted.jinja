@@ -110,7 +110,7 @@
                             <td class="t">
                                 <span data-nt-ago="{{ response['time'] }}"></span>
                             </td>
-                            <td class="u">{{ response['url'] }}{% if response.get("refused") and (response['info'] or [''])[0].startswith("Banned") %}{% set h = nt_host(response['url']) %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Why it was removed, and how to get it back"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% if response["status"] == 1 %}{% set h = nt_host(response['url']) %}{% if h %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Tracker page: uptime and latency history"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% endif %}</td>
+                            <td class="u">{{ response['url'] }}{% if response.get("refused") and (response.get("ban_host") or ((response['info'] or [''])[0]).startswith("Banned")) %}{% set h = response.get("ban_host") or nt_host(response['url']) %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Why it was removed, and how to get it back"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% if response["status"] == 1 %}{% set h = nt_host(response['url']) %}{% if h %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Tracker page: uptime and latency history"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% endif %}</td>
                             <td class="c-ip">{{ response.get('ip', '') }}</td>
                             {% if response["status"] == 1 %}
                                 <td class="up">

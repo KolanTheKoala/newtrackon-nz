@@ -126,7 +126,7 @@ def _banned_in(text: str) -> list[dict]:
     out, seen = [], set()
     for word in text.lower().split()[:SUBMIT_MAX_URLS]:
         try:
-            host = (urlparse(word).hostname or "").lower()
+            host = (urlparse(ingest.normalise_url(word)).hostname or "").lower()
         except ValueError:
             continue
         if not host or host in seen:
