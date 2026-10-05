@@ -394,3 +394,35 @@ class TestAlreadyListedOnTheForm:
     def test_mixed_counts_only_the_new_ones(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
         html = self._post(flask_client, monkeypatch, "udp://akl.example:1/announce\nudp://brand-new.example:6969/announce")
         assert "is already listed" in html and "Received: 1 to check." in html
+
+
+class TestProtocolUpgrade:
+    def _run(self, monkeypatch: pytest.MonkeyPatch, answered_url: str) -> list[str]:
+        listed = SimpleNamespace(url="http://up.example:8080/announce", host="up.example", ips=None,
+                                 historic=[1], added=1, last_downtime=0, last_uptime=0, recent_ips={})
+        inserted, deleted = [], []
+        monkeypatch.setattr(ingest.db, "get_all_data", lambda: [listed])
+        monkeypatch.setattr(ingest.db, "insert_new_tracker", lambda t: inserted.append(t.url))
+        monkeypatch.setattr(ingest.db, "delete_tracker", lambda t: deleted.append(t.url))
+        monkeypatch.setattr(ingest, "attempt_submitted", lambda u: (1800, answered_url, 50))
+        persistence.submitted_data.clear()
+        persistence.submitted_data.appendleft({"url": answered_url, "time": NOW, "ip": "", "status": 1, "info": ["{'interval': 1800}"]})
+        cand = SimpleNamespace(url="udp://up.example:8080/announce", host="up.example", ips=None, interval=0, latency=0,
+                               last_downtime=0, last_checked=0, update_ipapi_data=lambda: None, is_up=lambda: None, update_uptime=lambda: None)
+        ingest.process_new_tracker(cand)
+        return inserted + deleted
+
+    def test_udp_not_answering_leaves_the_listed_tracker_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        try:
+            assert self._run(monkeypatch, "http://up.example:8080/announce") == []  # UDP failed, HTTP answered
+            row = persistence.submitted_data[0]
+            assert row["status"] == 0 and "UDP not answering: it stays listed as http://up.example:8080/announce" in row["info"][1]
+        finally:
+            persistence.submitted_data.clear()
+
+    def test_udp_answering_replaces_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        try:
+            # the UDP version is inserted and the listed HTTP one deleted (its history carried over)
+            assert self._run(monkeypatch, "udp://up.example:8080/announce") == ["udp://up.example:8080/announce", "http://up.example:8080/announce"]
+        finally:
+            persistence.submitted_data.clear()

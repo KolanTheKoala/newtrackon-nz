@@ -439,6 +439,12 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
     if not tracker_candidate.interval:
         log_wrong_interval_denial("missing interval field")
         return
+    if old is not None and _nt_pri(tracker_candidate.url) >= _nt_pri(old.url):
+        # submitted as a better protocol (UDP for a listed HTTP tracker), but only the listed one answered: the checks
+        # fall back from UDP to HTTP(S) on the same port. It isn't an upgrade, so the listed tracker is left alone.
+        want = urlparse(submitted_url).scheme.upper()
+        log_wrong_interval_denial(f"{want} not answering: it stays listed as {old.url}")
+        return
     closed = _closed_on_submit(tracker_candidate.url)
     if closed:
         log_wrong_interval_denial(closed)
