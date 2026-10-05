@@ -385,9 +385,13 @@ class Tracker:
             return
         # Up/Junk for JUNK_DAYS and still Junk now (the same score the status rule uses: after latency, before interval points)
         jd = _nt_junk_days(self.url, now_ts)
-        if jd is not None and jd >= JUNK_DAYS and float(self.uptime or 0) - _nt_lat_penalty(_nt_region_avg(self.url)) < 50:
-            _NT_DEL_REASON[self.url] = "too unreliable: Up/Junk (score under 50) for %d days" % int(jd)
-            logger.info("Evicting %s (Up/Junk for %.1f days)", self.url, jd)
+        dead_fam = (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT
+        junk_now = float(self.uptime or 0) - _nt_lat_penalty(_nt_region_avg(self.url)) < 50
+        if jd is not None and jd >= JUNK_DAYS and (junk_now or dead_fam):
+            fam = str((FAM_FAILS.get(self.url) or {}).get("fam", "?"))[-1]
+            _NT_DEL_REASON[self.url] = ("its IPv%s address dead or its score under 50 (Up/Broken, Up/Junk) for %d days" % (fam, int(jd))
+                                        if dead_fam else "too unreliable: Up/Junk (score under 50) for %d days" % int(jd))
+            logger.info("Evicting %s (Up/Junk or Up/Broken for %.1f days)", self.url, jd)
             self.to_be_deleted = True
             self._nt_ban()
             return
@@ -1159,14 +1163,24 @@ def _useless_seed(trackers, now=None):
         _jsave(LAST_STATE, _LAST_STATE_FILE)
 
 
-JUNK_DAYS = 30  # Up/Junk (score under 50) this long and it's removed: long enough for any overload to pass
-JUNK_BRIDGE = 24 * 3600  # spells above Junk shorter than this don't restart that count
+JUNK_DAYS = 30  # Up/Junk or Up/Broken this long and it's removed: long enough for overload to pass or an address to be fixed
+JUNK_BRIDGE = 24 * 3600  # spells out of it shorter than this don't restart that count
+
+
+def _broken(st, bad):
+    """Up/Broken: its only fault is a dead IPv4 or IPv6 address (the feed ladder calls this up_bad)."""
+    return st == "up_bad" and bool(bad) and all("address is dead" in b for b in bad)
+
+
+def _poor(st, bad):
+    """Up/Junk or Up/Broken: one 30-day clock for both, so flipping between them doesn't restart it."""
+    return st == "up_junk" or _broken(st, bad)
 
 
 def _nt_junk_days(url, now=None):
-    """Days it's been Up/Junk (spells above it under JUNK_BRIDGE don't count as a break), or None if it isn't Up/Junk."""
+    """Days it's been Up/Junk or Up/Broken in one stretch (spells out of it under JUNK_BRIDGE don't break it), or None."""
     s = LAST_STATE.get(url) or {}
-    if s.get("st") != "up_junk":
+    if not _poor(s.get("st"), s.get("bad")):
         return None
     now = now or time()
     start = s.get("junk_since", s.get("since"))
@@ -1196,7 +1210,7 @@ def _bad_track(prev, st, now, bad=None):
     stopped being Up/Bad, kept while a return within BAD_BRIDGE would continue the stretch) and bad_log (its closed
     Up/Bad spells over the last BAD_SHARE_DAYS)."""
     d = _bad_stretch(prev, st, now)
-    d.update(_stretch(prev, st, now, "up_junk", "junk", JUNK_BRIDGE))
+    d.update(_stretch(prev, st, now, _poor, "junk", JUNK_BRIDGE, bad))
     d.update(_stretch(prev, st, now, _useless, "useless", BAD_BRIDGE, bad))
     prev = prev or {}
     log = [x for x in (prev.get("bad_log") or []) if now - x[1] <= BAD_SHARE_DAYS * 86400]

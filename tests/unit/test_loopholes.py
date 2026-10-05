@@ -165,7 +165,7 @@ class TestJunkClock:
             self._state(URL, 27)
             assert ntextra._dying(t) is None
             self._state(URL, 28.5)
-            assert ntextra._dying(t) == "Up/Junk for 28+ days: removed and banned after 30 unless it improves"
+            assert ntextra._dying(t) == "Up/Junk or Up/Broken for 28+ days: removed and banned after 30 unless fixed"
 
 
 class TestUselessClock:
@@ -199,3 +199,34 @@ class TestUselessClock:
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
         assert t.to_be_deleted is True and T._NT_DEL_REASON[t.url].startswith("not working for 5 days")
+
+
+
+class TestBrokenOnTheJunkClock:
+    DEAD = ["its published IPv6 address is dead"]
+
+    def test_flipping_between_junk_and_broken_is_one_stretch(self) -> None:
+        s = {"st": "up_junk", "bad": [], "since": 0, **T._bad_track(None, "up_junk", 0, [])}
+        s = {"st": "up_bad", "bad": self.DEAD, "since": 5 * DAY, **T._bad_track(s, "up_bad", 5 * DAY, self.DEAD)}
+        s = {"st": "up_junk", "bad": [], "since": 9 * DAY, **T._bad_track(s, "up_junk", 9 * DAY, [])}
+        assert s["junk_since"] == 0
+
+    def test_no_peers_is_not_broken(self) -> None:
+        assert T._poor("up_bad", self.DEAD) and not T._poor("up_bad", ["hands out no peers (3+ of its last 6 peer tests failed)"])
+
+    def test_broken_for_30_days_is_removed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        t = sample_tracker
+        now = int(time())
+        T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.DEAD, "dead": ["v6"], "since": now - 31 * DAY, "junk_since": now - 31 * DAY}
+        monkeypatch.setitem(T.FAM_FAILS, t.url, {"n": 40, "fam": "v6"})
+        t.added, t.last_uptime, t.status, t.historic = now - 60 * DAY, now, 1, deque([1] * 1440, maxlen=1440)
+        t.update_uptime()
+        assert t.to_be_deleted is True and "IPv6 address dead" in T._NT_DEL_REASON[t.url]
+
+    def test_fixed_address_is_kept(self, sample_tracker) -> None:
+        t = sample_tracker
+        now = int(time())
+        T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.DEAD, "dead": ["v6"], "since": now - 31 * DAY, "junk_since": now - 31 * DAY}
+        t.added, t.last_uptime, t.status, t.historic = now - 60 * DAY, now, 1, deque([1] * 1440, maxlen=1440)
+        t.update_uptime()  # no dead family any more and a good score: not removed
+        assert t.to_be_deleted is False

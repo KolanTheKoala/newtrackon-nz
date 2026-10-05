@@ -137,6 +137,7 @@ try:
 except OSError as e:
     print(addr[0], "no answer:", e)
 EOF</pre>
+    <p>A tracker that stays Up/Broken (or Up/Junk) for <b>30 days</b> is removed: deleting the dead record takes a minute.</p>
     <p><b>Fix:</b> make the tracker listen on both families (for example bind <code>::</code> as well as <code>0.0.0.0</code>) and open the
         port for both in the firewall (<code>ip6tables</code>/<code>nft</code> rules are separate from IPv4 ones), or remove the record for
         the family you don't serve. It clears once that address answers.</p>
@@ -424,7 +425,8 @@ bantime  = 1h</pre>
         <li>it stays <b>Up/Bad</b> (no peers or fake peers) for <b>5 days</b> (briefly passing for under 12 hours doesn't reset
             that count), or is Up/Bad for 80% of a week;</li>
         <li>it answers so rarely that it's no use (under 15% once dropouts are counted), or stays <b>Up/Junk</b> (score under 50)
-            for <b>30 days</b> (a day or so above 50 doesn't reset that count);</li>
+            or <b>Up/Broken</b> (a dead IPv4 or IPv6 address) for <b>30 days</b>, either or both (a day or so out of them doesn't
+            reset that count);</li>
         <li>its own answers say, 3 checks in a row, that it's <b>private</b> (asks for a passkey) or only serves <b>its own
             torrents</b> (a whitelist).</li>
     </ul>
