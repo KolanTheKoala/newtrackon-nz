@@ -296,7 +296,8 @@ class TestIntervalPenalty:
         T.ANN_IV[AKL] = 120
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "Around 30 minutes" in html and "&minus;5.0 (every 2 min" in html
-        assert html.count('href="/fix#interval"') == 2
+        assert html.count('href="/fix#interval"') == 3  # the interval note, its link, and the What's wrong box's How to fix
+        assert "What's wrong" in html
 
 
 def test_udp_tries_every_published_address(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1075,3 +1076,5 @@ def test_interval_icon(flask_client: FlaskClient, iv, shown, words) -> None:
     assert ('class="nt-peerwarn nt-iv"' in row) is shown
     if words:
         assert words in row and 'href="/fix#interval"' in row
+        assert 'class="nt-fixlink" href="/fix#interval"' in row  # the spanner, when the interval is the only fault
+        assert "fa-stopwatch" in row

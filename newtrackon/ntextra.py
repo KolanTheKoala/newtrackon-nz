@@ -376,6 +376,8 @@ def _fix_anchor(t):
         return "unreliable"
     if st == "up_slow":
         return "slow"
+    if _iv_flag(t):
+        return "interval"  # nothing worse wrong: its announce interval is the one thing to fix
     return None
 
 
