@@ -531,7 +531,7 @@ def _recheck(host):
         from newtrackon import ingest
         Thread(target=ingest.reinstate, args=(host, removed["url"]), daemon=True).start()
         return redirect("/tracker/%s?recheck=queued" % host, 303)
-    T.FORCE_CHECK.add(t.url)
+    T.force_check_add(t.url)
     return redirect("/tracker/%s?recheck=queued" % host, 303)
 
 

@@ -52,6 +52,7 @@ def update_outdated_trackers() -> NoReturn:
             _USELESS_SEEDED.append(True)
         try:
             ingest.confirm_due(now)
+            ingest.retry_due(now)
         except Exception:
             logger.exception("second checks failed")
         trackers_outdated: list[Tracker] = []
@@ -63,7 +64,8 @@ def update_outdated_trackers() -> NoReturn:
                 trackers_outdated.insert(0, tracker)
             elif (now - tracker.last_checked) > iv:
                 trackers_outdated.append(tracker)
-        _T.FORCE_CHECK.difference_update(forced)
+        if forced:
+            _T.force_check_taken(forced)
         for tracker in trackers_outdated:
             logger.info("Updating %s", tracker.url)
             tracker.update_status()

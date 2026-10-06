@@ -242,6 +242,60 @@ def _confirm_save() -> None:
         logger.exception("could not save the confirmation list")
 
 
+# A submitted tracker that doesn't answer on any protocol gets one more try RETRY_DELAY later (a tracker that answers
+# 70% of the time would otherwise fail its two checks about half the time). {url: {"t": due, "second": confirm entry or
+# None, "done": bool}}, saved; done entries are kept RETRY_KEEP so a second failure isn't retried again.
+RETRY_DELAY = 600
+RETRY_KEEP = 3 * 3600
+RETRY_FILE = "data/submit_retry.json"
+try:
+    with open(RETRY_FILE) as _rf:
+        RETRY: dict[str, dict] = json.load(_rf)
+except Exception:
+    RETRY = {}
+
+
+def _retry_save() -> None:
+    try:
+        tmp = RETRY_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(RETRY, f)
+        os.replace(tmp, RETRY_FILE)
+    except OSError:
+        logger.exception("could not save the retry list")
+
+
+def _retry_later(url: str, second: dict | None) -> bool:
+    """Schedule the one retry for a check that got no answer. False if it already had its retry."""
+    e = RETRY.get(url)
+    if e and e.get("done"):
+        return False
+    RETRY[url] = {"t": int(time()) + RETRY_DELAY, "second": second, "done": False}
+    _retry_save()
+    return True
+
+
+def retry_due(now: float | None = None) -> None:
+    """From the check loop: run each retry that's due (once), and forget old ones."""
+    now = now or time()
+    changed = False
+    for url, e in list(RETRY.items()):
+        if e.get("done"):
+            if now - e["t"] > RETRY_KEEP:
+                RETRY.pop(url, None)
+                changed = True
+            continue
+        if now >= e["t"]:
+            e["done"] = True
+            changed = True
+            if e.get("second"):  # it was the second check: the retry counts as that one
+                CONFIRM[url] = e["second"]
+                _confirm_save()
+            __import__("threading").Thread(target=add_one_tracker_to_submitted_queue, args=(url,), daemon=True).start()
+    if changed:
+        _retry_save()
+
+
 def confirm_due(now: float | None = None) -> None:
     """From the check loop: queue each tracker whose second check is due. Entries whose second check never ran are dropped."""
     now = now or time()
@@ -469,7 +523,11 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
             tracker_candidate.url,
             tracker_candidate.latency,
         ) = attempt_submitted(tracker_candidate.url)
-    except RuntimeError, ValueError:
+    except RuntimeError:  # no answer on any protocol
+        if _retry_later(submitted_url, second):
+            logger.info("Tracker %s didn't answer: one more try in %d min", submitted_url, RETRY_DELAY // 60)
+        return
+    except ValueError:
         return
     if not tracker_candidate.interval:
         log_wrong_interval_denial("missing interval field")

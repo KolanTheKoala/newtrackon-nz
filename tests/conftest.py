@@ -75,6 +75,7 @@ def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[N
     from newtrackon import ingest as _ingest
     monkeypatch.setattr(_ingest, "CONFIRM_DELAY", 0)  # one answer lists a tracker here; tests of the second check turn it on
     monkeypatch.setattr(_ingest, "CONFIRM", {})
+    monkeypatch.setattr(_ingest, "RETRY", {})
     from newtrackon import scraper as _scraper
     monkeypatch.setattr(_scraper, "ADDR_HEALTH", {})
     monkeypatch.setattr(T, "_nt_public_ips", lambda host: set())
@@ -84,6 +85,7 @@ def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[N
         if isinstance(getattr(T, name, None), dict):
             monkeypatch.setattr(T, name, {})
     monkeypatch.setattr(T, "EVENTS", [])
+    monkeypatch.setattr(T, "FORCE_CHECK", set())
     monkeypatch.setattr(T, "_ONLINE", [0.0, True])
     monkeypatch.setattr(T, "_FAILSTREAK", [0])
     yield

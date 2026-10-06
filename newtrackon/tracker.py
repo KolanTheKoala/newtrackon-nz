@@ -873,7 +873,20 @@ def _nt_down_label(raw):
 # Sections of /fix, by problem. One rule for the table, the tracker page and the Telegram messages.
 FIX_DOWN = {"DNS": "down-dns", "Timeout": "down-timeout", "Refused": "down-refused", "TLS": "down-tls", "HTTP error": "down-http",
             "Rejected": "down-rejected"}
-FORCE_CHECK: set = set()  # URLs a visitor asked to check again now (rate-limited in ntextra); the check loop takes them next
+_FORCE_FILE = "data/force_check.json"
+# URLs a visitor asked to check again now (rate-limited in ntextra); the check loop takes them next. Saved, so a restart
+# (a deploy) doesn't lose them.
+FORCE_CHECK: set = set(_jload(_FORCE_FILE) or [])
+
+
+def force_check_add(url):
+    FORCE_CHECK.add(url)
+    _jsave(sorted(FORCE_CHECK), _FORCE_FILE)
+
+
+def force_check_taken(urls):
+    FORCE_CHECK.difference_update(urls)
+    _jsave(sorted(FORCE_CHECK), _FORCE_FILE)
 
 
 def _nt_fix_for_event(ev):

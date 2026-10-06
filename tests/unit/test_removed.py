@@ -467,3 +467,51 @@ def test_reinstate_pass_survives_a_restart(monkeypatch) -> None:
     with open("data/reinstate.json", "w") as f:
         f.write('{"old.example": 1}')  # long expired
     assert ingest._reinstate_load() == {}
+
+
+def test_check_again_now_survives_a_restart() -> None:
+    from newtrackon import tracker as T
+    T.force_check_add("udp://a.example:1/announce")
+    assert T._jload("data/force_check.json") == ["udp://a.example:1/announce"]
+    T.force_check_taken({"udp://a.example:1/announce"})
+    assert T._jload("data/force_check.json") == [] and not T.FORCE_CHECK
+
+
+class TestOneRetry:
+    """A submission that gets no answer on any protocol is tried once more 10 minutes later (tracker.filemail.com answers
+    about 70% of the time and failed its first reinstatement check on luck); a second failure is final."""
+
+    URL = "udp://flaky.example:6969/announce"
+
+    def test_first_failure_is_retried_once(self, monkeypatch) -> None:
+        from newtrackon import ingest
+        queued = []
+        monkeypatch.setattr(ingest, "add_one_tracker_to_submitted_queue", lambda u: queued.append(u))
+        monkeypatch.setattr(__import__("threading"), "Thread", lambda target, args, daemon: type("Th", (), {"start": lambda self: target(*args)})())
+        assert ingest._retry_later(self.URL, None) is True
+        ingest.retry_due(ingest.RETRY[self.URL]["t"] - 1)
+        assert queued == []  # not yet
+        ingest.retry_due(ingest.RETRY[self.URL]["t"])
+        assert queued == [self.URL] and ingest.RETRY[self.URL]["done"]
+        assert ingest._retry_later(self.URL, None) is False  # the retry failed too: no more
+        ingest.retry_due(ingest.RETRY[self.URL]["t"] + ingest.RETRY_KEEP + 1)
+        assert self.URL not in ingest.RETRY
+
+    def test_second_check_retry_counts_as_the_second_check(self, monkeypatch) -> None:
+        from newtrackon import ingest
+        monkeypatch.setattr(ingest, "add_one_tracker_to_submitted_queue", lambda u: None)
+        monkeypatch.setattr(__import__("threading"), "Thread", lambda target, args, daemon: type("Th", (), {"start": lambda self: target(*args)})())
+        second = {"t": 1000, "queued": True}
+        ingest._retry_later(self.URL, second)
+        ingest.retry_due(ingest.RETRY[self.URL]["t"])
+        assert ingest.CONFIRM[self.URL] == second  # process_new_tracker pops it: the retry is judged as the second check
+
+    @pytest.mark.usefixtures("mock_db_connection")
+    def test_process_schedules_the_retry(self, monkeypatch) -> None:
+        from newtrackon import ingest
+        from newtrackon.tracker import Tracker
+        monkeypatch.setattr(ingest, "attempt_submitted", lambda url: (_ for _ in ()).throw(RuntimeError()))
+        t = Tracker(host="flaky.example", url=self.URL, ips=["93.184.216.40"], latency=0, last_checked=0, interval=1800, status=0,
+                    uptime=0, countries=[], country_codes=[], networks=[], added=0, historic=[], last_downtime=0, last_uptime=0)
+        ingest.process_new_tracker(t)
+        assert self.URL in ingest.RETRY and not ingest.RETRY[self.URL]["done"]
