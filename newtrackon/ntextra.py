@@ -155,7 +155,9 @@ def _detail(t):
         "country_codes": list(dict.fromkeys(c.lower() for c in (t.country_codes or []) if c)),
         "families": _fams(t),
         "peer_test": {"latest": {True: "pass", False: "fail", None: "n/a"}[T.PEER_OK.get(t.url)] if up else "n/a",
-                      "passed": sum(ph), "of": len(ph)},
+                      "passed": sum(ph), "of": len(ph),
+                      # per family, once tested on that family: {"v4": {"passed", "of"}, ...}
+                      "by_family": {k: {"passed": sum(v), "of": len(v)} for k, v in sorted((T.PEER_HIST_FAM.get(t.url) or {}).items()) if k != "?" and v}},
         "fake_peers": {"latest": T.FAKE_N.get(t.url), "streak": T.FAKE_FAILS.get(t.url, 0)},
         "stale_peers": bool(T.STALE.get(t.url)),
         "spoof_proof": True if t.url.startswith("http") else T.CID_OK.get(t.url),
@@ -464,7 +466,7 @@ def _evidence(t, d):
     jd = T._nt_junk_days(t.url) if fix in ("unreliable", "dead-address") else None
     if jd is not None:
         left = T.JUNK_DAYS - jd
-        out.append("Up/Junk or Up/Broken for %s. Trackers that stay Up/Junk (score under 50) or Up/Broken (a dead address) for %d days are removed and banned: %s."
+        out.append("Up/Junk or Up/Broken for %s. Trackers that stay Up/Junk (score under 50) or Up/Broken (IPv4 or IPv6 broken) for %d days are removed and banned: %s."
                    % ("under a day" if jd < 1 else "%d day%s" % (int(jd), "" if int(jd) == 1 else "s"), T.JUNK_DAYS,
                       "it's due now" if left <= 0 else "about %d day%s left to fix it" % (max(1, int(left)), "" if int(left) == 1 else "s")))
     if fix == "unreliable":

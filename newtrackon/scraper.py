@@ -872,20 +872,10 @@ def peer_probe(only_family: int | None = None) -> bool | None:
                         sb.close()
                     sb = None
                     sleep(0.5)
-            if ok is None:  # VPN exit ignored/rate-limited: fall back to a VPS client; only a PASS counts
-                s2 = None
-                try:
-                    s2, an2 = _udp_session(a, b, None)
-                    r2 = an2(pid_b, 1, want + 1, 2, thash)
-                    if _two_distinct(r2) and _probe_eval(r2, want, extra):
-                        if sb:
-                            sb.close()
-                        ok, sb, annb, s2, fb = True, s2, an2, None, True
-                except Exception:
-                    pass
-                finally:
-                    if s2:
-                        s2.close()
+            if ok is None:
+                # No VPN exit got an answer: no verdict. (A second client from this server's own IP proves nothing: a
+                # tracker that only shares peers within one IP passes that, though real users never meet.)
+                extra["exit_blocked"] = True
             sa_, anna = _udp_session(a, b, None)
             try:
                 if ok:
@@ -972,15 +962,14 @@ def peer_probe(only_family: int | None = None) -> bool | None:
             break
         except Exception:
             sleep(0.5)
-    if ok is None:  # VPN exit ignored/rate-limited: fall back to a VPS client; only a PASS counts
+    if ok is None:
+        # No VPN exit got an answer: no verdict (a same-IP second client would pass a tracker that only shares peers within
+        # one IP, see the UDP branch)
+        extra["exit_blocked"] = True
         try:
-            sv = hsess("0.0.0.0" if fam == socket.AF_INET else "::")
-            r2 = hann(sv, pid_b, 1, want + 1, "started")
-            if _two_distinct(r2) and _probe_eval(r2, want, extra):
-                ok, sb_s, fb = True, sv, True
+            hann(sa_s, pid_a, 0, want, "stopped")
         except Exception:
             pass
-    if ok is None:
         return None
     try:
         if ok:

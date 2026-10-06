@@ -207,7 +207,9 @@ class Tracker:
                 _peer_hist_add(self.url, True, _ex.get("fam"))
             elif self.peer_ok is False:
                 _peer_hist_add(self.url, False, _ex.get("fam"))
-            _peer_conclusive(self.url, self.peer_ok)
+            # a test that couldn't run because the VPN exits got no answer is a limit of the test, not the tracker's fault:
+            # it doesn't count towards the 7-day "never conclusive" rule
+            _peer_conclusive(self.url, "exit_blocked" if (self.peer_ok is None and _ex.get("exit_blocked")) else self.peer_ok)
             # the other published family gets its own peer test, so one family's result can't stand for both
             _main = _ex.get("fam")
             _other = {"v4": "v6", "v6": "v4"}.get(_main)
@@ -344,6 +346,8 @@ class Tracker:
         self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
         if (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:  # dead published family N times in a row
             self.uptime = min(self.uptime, 50)  # still works on its other family
+        elif PEER_FAILS.get(self.url, 0) < PEER_FAIL_LIMIT and _peer_fam_bad(self.url):  # one family shares no peers
+            self.uptime = min(self.uptime, 50)  # Up/Broken like a dead address: same cap
         if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers in N of its last PEER_WINDOW checks
             self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
         if PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # failed the peer test N times in a row
@@ -1677,6 +1681,7 @@ LAST_STATE: dict = _jload(_LAST_STATE_FILE)
 
 # ---- removed trackers, kept for good so their page can say what happened: {host: {url, t, reason, added, country, network}} ----
 _REMOVED_FILE = "data/removed.json"
+_REMOVED_EXISTED = _os.path.exists(_REMOVED_FILE)  # the event-history migration only runs before the file first exists
 _rm = _jload(_REMOVED_FILE)
 REMOVED: dict = _rm if isinstance(_rm, dict) else {}
 
@@ -1767,7 +1772,9 @@ def _removed_ips_seed():
 def _removed_seed():
     """Removals from before this record existed, from the event history (which keeps only the last 500 events)."""
     n = 0
-    for e in EVENTS:
+    # once removed.json exists it's the record: re-running this would recreate records deliberately deleted (trackers
+    # reinstated because our own checks were at fault) from their old "removed" events
+    for e in (EVENTS if not _REMOVED_EXISTED else []):
         h = str(e.get("host") or "").lower()
         if e.get("type") == "removed" and h and int(e.get("t") or 0) > int((REMOVED.get(h) or {}).get("t") or 0):
             txt = str(e.get("text") or "")

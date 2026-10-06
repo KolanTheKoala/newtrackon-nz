@@ -36,7 +36,8 @@ class TestRecords:
         assert T.REMOVED[GONE]["url"] == URL and T.REMOVED[GONE]["country"] == "Germany"
         assert T._jload("data/removed.json") == T.REMOVED
 
-    def test_seeded_from_the_event_history(self) -> None:
+    def test_seeded_from_the_event_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(T, "_REMOVED_EXISTED", False)  # a fresh install
         T.EVENTS[:] = [{"t": NOW - 500, "url": "udp://old.example:1/announce", "host": "old.example", "type": "removed",
                         "text": "removed from the list (its hostname no longer points to a public IP address)"},
                        {"t": NOW - 400, "url": "udp://x.example:1/announce", "host": "x.example", "type": "down", "text": "went Down"}]
@@ -445,3 +446,11 @@ def test_records_follow_the_tracker_to_its_new_url() -> None:
     assert T.LAST_STATE[new]["since"] == 5 and T.PEER_OK[new] is True
     assert T._jload("data/lat_hist.json")[new] and T._jload("data/last_state.json")[new]  # saved
     assert T._nt_migrate_url(new, new) == []
+
+
+
+def test_deleted_records_are_not_recreated_from_old_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(T, "_REMOVED_EXISTED", True)  # removed.json exists: it's the record
+    T.EVENTS[:] = [{"t": NOW - 500, "url": "udp://back.example:1/announce", "host": "back.example", "type": "removed", "text": "removed from the list (x)"}]
+    T._removed_seed()
+    assert "back.example" not in T.REMOVED

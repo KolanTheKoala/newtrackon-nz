@@ -588,3 +588,54 @@ class TestDualStackNeedsEvidence:
     def test_removed_once_both_families_fail_with_evidence(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
         self._check(sample_tracker, monkeypatch, {"v4": [0, 0, 0], "v6": [0, 0, 0]})
         assert sample_tracker.to_be_deleted is True
+
+
+def test_peer_test_without_an_exit_answer_has_no_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IP-partitioned trackers (tracker.dler.org) would pass a same-IP second client, so there is no such fallback."""
+    import socket
+    sessions = []
+
+    def session(fam, sa, src):
+        sessions.append(src)
+        if src:  # every VPN exit: no answer
+            raise TimeoutError
+        return type("S", (), {"close": lambda self: None, "settimeout": lambda self, t: None, "sendall": lambda self, b: None,
+                              "recv": lambda self, n: (_ for _ in ()).throw(TimeoutError)})(), (lambda *a: {"peers": [{"IP": "x", "port": 0x76FD}]})
+    monkeypatch.setattr(scraper, "_udp_session", session)
+    monkeypatch.setattr(scraper, "_probe_srcs", lambda fam, key=None: ["10.0.0.1", "10.0.0.2"])
+    scraper.rtt.probe = ("udp", b"h" * 20, socket.AF_INET, ("192.0.2.1", 6969), b"p" * 20)
+    assert scraper.peer_probe() is None
+    assert scraper.rtt.probe_extra.get("exit_blocked") is True
+    assert sessions[:2] == ["10.0.0.1", "10.0.0.2"]  # both exits tried; no verdict from this server's own IP
+
+
+def test_exit_blocked_does_not_start_the_never_conclusive_clock() -> None:
+    from time import time
+    u = "udp://eb.example:1/announce"
+    T._peer_conclusive(u, "exit_blocked", time())
+    T.PEER_LAST[u] = int(time() - 8 * 86400)
+    T._PEER_ANY[0] = time()
+    T._peer_conclusive(u, "exit_blocked", time())
+    assert T.PEER_FAILS.get(u, 0) == 0 and T.PEER_LAST[u] > time() - 60  # counted as a reading, not a failure
+
+
+def test_one_family_not_sharing_peers_caps_the_score_like_a_dead_address(sample_tracker) -> None:
+    from collections import deque
+    from time import time
+    t = sample_tracker
+    t.url = "udp://cap.example:1/announce"
+    t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 1440, maxlen=1440)
+    for _ in range(3):
+        T._peer_hist_add(t.url, True, "v4")
+        T._peer_hist_add(t.url, False, "v6")
+    t.update_uptime()
+    assert t.uptime <= 50 and ntextra._state(t)[0] == "up_broken"
+
+
+@pytest.mark.usefixtures("region_db")
+def test_tracker_page_shows_the_peer_test_per_family(flask_client: FlaskClient) -> None:
+    url = "udp://akl.example:1/announce"
+    T.PEER_HIST_FAM[url] = {"v4": [1, 1, 1], "v6": [0, 0, 0]}
+    html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+    assert "IPv4: pass (passed 3 of 3) &middot; IPv6: fail (passed 0 of 3)" in html
+    assert flask_client.get("/api/tracker/akl.example").get_json()["peer_test"]["by_family"] == {"v4": {"passed": 3, "of": 3}, "v6": {"passed": 0, "of": 3}}
