@@ -166,3 +166,18 @@ def test_feed_is_a_page_for_browsers_and_atom_for_readers(flask_client: FlaskCli
         assert r.mimetype == "text/html" and '<a href="/tracker/akl.example">akl.example</a>' in r.get_data(as_text=True)
     else:
         assert r.mimetype == "application/atom+xml"
+
+
+@pytest.mark.usefixtures("region_db")
+def test_status_line_at_the_bottom_with_the_version(flask_client: FlaskClient, tmp_path, monkeypatch) -> None:
+    import os
+    from newtrackon import ntextra
+    html = flask_client.get("/").get_data(as_text=True)
+    line = html[html.index('class="nt-statusline"'):]
+    assert html.index('class="nt-statusline"') > html.index('id="trackon_table"')  # below the table, one line
+    assert 'id="nt-upd"' in line[:400] and 'class="nt-health"' in line[:600] and "version dev" in line[:2000]
+    vf = tmp_path / "VERSION"
+    vf.write_text("7e4233b 2026-10-07\n")
+    monkeypatch.setattr(ntextra, "VERSION_FILE", str(vf))
+    html = flask_client.get("/").get_data(as_text=True)
+    assert 'commit/7e4233b"' in html and "2026.10.07 &middot; 7e4233b" in html

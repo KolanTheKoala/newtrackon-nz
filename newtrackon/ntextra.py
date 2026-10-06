@@ -367,6 +367,20 @@ FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peer
               "split-swarm": "Separate servers that don't share swarms (Up/Broken)"}
 
 
+VERSION_FILE = __import__("os").path.join(__import__("os").path.dirname(__file__), "VERSION")
+
+
+def _version():
+    """{'sha', 'date'} of the commit this build is from: deploy-app.sh writes newtrackon/VERSION ('<sha> <yyyy-mm-dd>')
+    into the export it builds; None in a checkout (CI, local runs)."""
+    try:
+        with open(VERSION_FILE) as f:
+            sha, date = f.read().split()[:2]
+        return {"sha": sha, "date": date.replace("-", ".")}
+    except (OSError, ValueError):
+        return None
+
+
 def _broken_why(t):
     """Tooltip for an Up/Broken status that isn't a dead address (the template words that one itself)."""
     if T._split(t.url):
@@ -852,6 +866,7 @@ def register(app):
     app.jinja_env.globals["nt_fix_titles"] = FIX_TITLES
     app.jinja_env.globals["nt_tags"] = _filter_tags
     app.jinja_env.globals["nt_broken_why"] = _broken_why
+    app.jinja_env.globals["nt_version"] = _version
     app.jinja_env.globals["nt_fam_nopeers"] = lambda t: T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
     app.jinja_env.globals["nt_events"] = lambda n=10, days=None: list(reversed(
