@@ -367,6 +367,19 @@ FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peer
               "split-swarm": "Separate servers that don't share swarms (Up/Broken)"}
 
 
+def _broken_why(t):
+    """Tooltip for an Up/Broken status that isn't a dead address (the template words that one itself)."""
+    if T._split(t.url):
+        return ("Runs separate servers that don't share swarms: clients only meet peers that reach the same server. "
+                "Works for some, so it stays listed. Score capped at 50.")
+    f = T._peer_fam_bad(t.url)
+    if f:
+        o = "6" if f == "v4" else "4"
+        return ("Its IPv%s side doesn't share peers (3+ of its last 6 IPv%s peer tests failed), so clients on IPv%s get no "
+                "usable peers. Still works over IPv%s. Score capped at 50." % (f[-1], f[-1], f[-1], o))
+    return "Works for some clients only. Score capped at 50."
+
+
 def _fix_anchor(t):
     """The /fix section for this tracker's current problem, or None if it's healthy."""
     try:
@@ -833,6 +846,8 @@ def register(app):
     app.jinja_env.globals["nt_fix"] = _fix_anchor
     app.jinja_env.globals["nt_fix_titles"] = FIX_TITLES
     app.jinja_env.globals["nt_tags"] = _filter_tags
+    app.jinja_env.globals["nt_broken_why"] = _broken_why
+    app.jinja_env.globals["nt_fam_nopeers"] = lambda t: T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
     app.jinja_env.globals["nt_events"] = lambda n=10, days=None: list(reversed(
         [e for e in T.EVENTS if days is None or e.get("t", 0) >= __import__("time").time() - days * 86400][-n:]))

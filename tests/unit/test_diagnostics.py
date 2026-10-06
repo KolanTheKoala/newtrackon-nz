@@ -866,3 +866,34 @@ class TestAMustComeBackAsItself:
         T._nat_seen_set(url, "v4", "104.21.83.32")
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "104.21.83.32, an address that isn" in html and "Cloudflare" in html
+
+
+@pytest.mark.usefixtures("region_db")
+class TestMainTableUsesTheSharedRule:
+    """The main table's status cell had its own copy of the rule, which only knew no peers, fake peers and a dead address:
+    tracker.farted.net (IPv6 doesn't share peers) showed Up/Junk there while its page and the API said Up/Broken."""
+
+    URL = "udp://akl.example:1/announce"
+
+    def _cell(self, flask_client: FlaskClient) -> str:
+        import re
+        html = flask_client.get("/").get_data(as_text=True)
+        row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>.*?</tr>', html, re.S).group(0)
+        return row
+
+    def test_one_family_not_sharing_is_up_broken_with_orange_family(self, flask_client: FlaskClient) -> None:
+        T.FAMS[self.URL] = {"v4": True, "v6": True}
+        for _ in range(3):
+            T._peer_hist_add(self.URL, True, "v4")
+            T._peer_hist_add(self.URL, False, "v6")
+        row = self._cell(flask_client)
+        assert 'data-nt-state="up_broken"' in row and ">Up/Broken<" in row and "Up/Junk" not in row
+        assert "Its IPv6 side doesn&#39;t share peers" in row or "Its IPv6 side doesn't share peers" in row
+        assert "#ffa500\">IPv6" in row.replace("'", '"') or "color:#ffa500\">IPv6" in row
+
+    def test_split_swarm_is_up_broken(self, flask_client: FlaskClient) -> None:
+        for ok, sp in ((0, 1), (0, 1), (1, 0)):
+            T._split_add(self.URL, sp)
+            T._peer_hist_add(self.URL, bool(ok), "v4")
+        row = self._cell(flask_client)
+        assert ">Up/Broken<" in row and "separate servers" in row
