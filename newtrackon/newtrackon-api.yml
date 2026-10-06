@@ -131,30 +131,71 @@ paths:
                 items:
                   type: object
                   properties:
-                      url: {}
-                      host: {}
-                      status: {}
-                      problems: {}
-                      score: {}
-                      latency_ms: {}
-                      latency_by_region_ms: {}
-                      regions: {}
-                      families: {}
-                      peer_test: {}
-                      fake_peers: {}
-                      stale_peers: {}
-                      spoof_proof: {}
-                      announce_interval_s: {}
-                      check_interval_s: {}
-                      stats: {}
-                      down_reason: {}
-                      down_cause: {}
-                      same_operator_as: {}
-                      ips: {}
-                      countries: {}
-                      networks: {}
-                      added: {}
-                      last_checked: {}
+                      url: {type: string, description: "The announce URL listed."}
+                      host: {type: string}
+                      status:
+                        type: string
+                        enum: [up_good, up_new, up_slow, up_unreliable, up_junk, up_broken, up_bad, down]
+                        description: >-
+                          up_good: passes everything, score 90+. up_new: healthy, under 7 days old. up_slow: reliable
+                          but 300 ms+ on average. up_unreliable: under 90 from dropouts. up_junk: score under 50.
+                          up_broken: works for some clients only (see problems). up_bad: answers but hands out no usable
+                          peers, or fake ones. down: not answering.
+                      problems:
+                        type: array
+                        items: {type: string}
+                        description: >-
+                          Why it's up_bad or up_broken (empty otherwise). no_peers: 3+ of its last 6 peer tests failed
+                          (including handing out an address nobody can connect to). fake_peers: peers on a random
+                          torrent only we know, 3+ of its last 6 checks. dead_ipv4 / dead_ipv6: that published address
+                          family hasn't answered in 3+ checks in a row. nopeers_ipv4 / nopeers_ipv6: that family
+                          answers but fails the peer test while the other passes. split_swarm: separate servers that
+                          don't share swarms; clients only meet peers on the same server (1 in 3+ tests pass). up_bad
+                          has no_peers or fake_peers; up_broken has only the others.
+                      score: {type: number, description: "0-100: availability x stability, minus latency and interval penalties."}
+                      latency_ms: {type: [integer, "null"], description: "From this server (Wellington)."}
+                      latency_by_region_ms: {type: object, description: "Typical announce round trip from Oceania, Asia, Europe and North America."}
+                      regions: {type: array, items: {type: string}}
+                      families:
+                        type: object
+                        description: >-
+                          Per address family, v4 and v6: ok (answers), dead (3+ failed checks in a row) or
+                          not_published. Whether it answers, not whether it shares peers: see peer_test.by_family.
+                      peer_test:
+                        type: object
+                        description: >-
+                          The peer test: our first client announces a random torrent, a second client from another
+                          country (a VPN exit) must then be handed the first one, with its real address. latest:
+                          pass, fail or n/a. passed / of: the last 6 results. by_family: {v4|v6: {passed, of}}, the
+                          last 6 on each family. last_seen: {v4|v6: what the second client was handed in the last test
+                          on that family}: a (ok = our first client with its real address, private = under a private
+                          address, other = under an address that isn't ours, i.e. a proxy or CDN's, null = not at all),
+                          a_ip (that wrong address), self (handed back only itself), foreign (peers that can't exist),
+                          seeds / leech (the counts it reported), ok (the verdict), t (Unix time); or swarm_empty:
+                          true when the VPN exits got no answer and a second client from this server found nobody
+                          counted. The VPN exits' own addresses are never included.
+                      unusable_address:
+                        type: object
+                        description: >-
+                          {v4|v6: address} it hands out instead of clients' real ones on that family (172.17.0.1 =
+                          Docker's port proxy; 10.x / 127.0.0.1 = NAT or a local reverse proxy; a public address = a
+                          proxy or CDN). Empty when none.
+                      fake_peers: {type: object, description: "latest: fake peers in the last check; streak: of the last 6."}
+                      stale_peers: {description: "Keeps handing out a peer after it sent 'stopped' (flag only)."}
+                      spoof_proof: {description: "UDP: enforces the BEP 15 connection ID. HTTP(S) always true."}
+                      announce_interval_s: {type: [integer, "null"], description: "The interval it asks clients for. Outside 15 min - 3 h costs up to 5 points."}
+                      check_interval_s: {type: integer, description: "How often this site checks it."}
+                      stats: {type: object}
+                      down_reason: {type: [string, "null"]}
+                      down_cause: {type: [string, "null"]}
+                      same_operator_as: {type: array, items: {type: string}, description: "Other listed hosts on the same server."}
+                      ips: {type: array, items: {type: string}}
+                      countries: {type: array, items: {type: string}}
+                      country_codes: {type: array, items: {type: string}, description: "ISO 3166 alpha-2, lower case."}
+                      warning_message: {type: [string, "null"], description: "The tracker's own 'warning message' from its last reply, if any."}
+                      networks: {type: array, items: {type: string}}
+                      added: {type: integer, description: "When it was listed (Unix time)."}
+                      last_checked: {type: integer}
   /tracker/{host}:
     get:
       summary: Full state of one tracker as JSON (NZ fork)
@@ -188,9 +229,11 @@ paths:
     get:
       summary: Trackers removed and still banned (NZ fork)
       description: >-
-        Trackers this site removed (no answer or Up/Bad for 5 days, too unreliable, private or whitelist-only) whose
-        30-day ban hasn't ended. Each has host, url, removed (Unix time), reason and banned_until (Unix time, or null if
-        permanent). Their /tracker/{host} pages stay up.
+        Trackers this site removed whose ban hasn't ended: no answer for 5 days, or under 15% once dropouts count;
+        Up/Bad (no or fake peers) for 5 days or 80% of the last 7; Up/Junk or Up/Broken for 30 days; private or
+        whitelist-only. Bans: 30 days for the first removal, 90 for the second, for good after that. Each has host, url,
+        removed (Unix time), reason and banned_until (Unix time, or null if permanent). Their /tracker/{host} pages stay
+        up, with a "Check again now" button that relists a fixed tracker and lifts its ban.
       responses:
         "200":
           description: A list, soonest ban end first.
