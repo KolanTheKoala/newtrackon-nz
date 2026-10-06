@@ -82,10 +82,11 @@
   table tbody tr:not(#_nt) .nt-st :is(.nt-junk, .nt-fakes, .nt-degraded):not(#_nt) { color:#ffa500 !important; }
 </style>
 <style id="nt-status-grid">
-  /* status cell as fixed slots: word | duration | peer | how-to-fix | shield | infl | stale | interval | families */
+  /* status cell as fixed slots: word | duration | peer | how-to-fix | shield | interval | infl | stale | families.
+     infl and stale are rare: they take no room when absent, so nothing leaves a gap after the shield */
   td:not(#_nt):has(> b > .nt-st) > b { display:grid; align-items:center; white-space:nowrap; column-gap:.3em;
-    grid-template-columns: 5.4em 4.8em 1.1em 1.1em 1.1em 1em 1em 1.1em 4.9em;
-    grid-template-areas: "st dur peer fix shield infl stale iv fams"; }
+    grid-template-columns: 5.4em 4.8em 1.1em 1.1em 1.1em 1.1em auto auto 4.9em;
+    grid-template-areas: "st dur peer fix shield iv infl stale fams"; }
   td:not(#_nt) > b > .nt-st { grid-area:st; justify-self:start; }
   td:not(#_nt) > b > .nt-dur { grid-area:dur; justify-self:end; }
   td:not(#_nt) > b > .nt-peerwarn { grid-area:peer; justify-self:center; margin:0 !important; }
