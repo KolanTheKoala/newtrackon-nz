@@ -520,6 +520,11 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         _lift_ban(host)
         _keep_upbad_clock(host, tracker_candidate.url)
         logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
+        from newtrackon import tracker as _t
+        if (_t.REMOVED.get(host) or {}).get("fault"):  # removed by a fault in our checks (scripts/nt_admin.py reinstate)
+            _t.REMOVED.pop(host, None)  # so it doesn't count towards a longer ban next time
+            _t._jsave(_t.REMOVED, _t._REMOVED_FILE)
+            logger.info("Tracker %s: removal was our fault, its removal record is deleted", tracker_candidate.url)
 
 
 def _restore_history(t: Tracker, host: str) -> None:

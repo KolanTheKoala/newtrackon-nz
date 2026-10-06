@@ -2236,7 +2236,8 @@ _URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_F
                ("FAM_HIST", "_FAM_HIST_FILE"), ("PEER_HIST", "_PEER_HIST_FILE"), ("PEER_LAST", "_PEER_LAST_FILE"),
                ("ANN_IV", "_ANN_IV_FILE"), ("REGION_LAT", "_REGION_FILE"), ("WARNINGS", "_WARN_FILE"),
                ("CLOSED", "_CLOSED_FILE"), ("REGION_SAMPLES", "_REGION_TS_FILE"), ("LAT_HIST", "_LAT_HIST_FILE"),
-               ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"))
+               ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"), ("PEER_HIST_FAM", "_PEER_HIST_FAM_FILE"),
+               ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"))
 _URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
 
 
