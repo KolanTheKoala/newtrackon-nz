@@ -82,15 +82,16 @@
   table tbody tr:not(#_nt) .nt-st :is(.nt-junk, .nt-fakes, .nt-degraded):not(#_nt) { color:#ffa500 !important; }
 </style>
 <style id="nt-status-grid">
-  /* status cell as fixed slots: word | duration | peer | how-to-fix | shield | infl | stale | families */
+  /* status cell as fixed slots: word | duration | peer | how-to-fix | shield | infl | stale | interval | families */
   td:not(#_nt):has(> b > .nt-st) > b { display:grid; align-items:center; white-space:nowrap; column-gap:.3em;
-    grid-template-columns: 5.4em 4.8em 1.1em 1.1em 1.1em 1em 1em 4.9em;
-    grid-template-areas: "st dur peer fix shield infl stale fams"; }
+    grid-template-columns: 5.4em 4.8em 1.1em 1.1em 1.1em 1em 1em 1.1em 4.9em;
+    grid-template-areas: "st dur peer fix shield infl stale iv fams"; }
   td:not(#_nt) > b > .nt-st { grid-area:st; justify-self:start; }
   td:not(#_nt) > b > .nt-dur { grid-area:dur; justify-self:end; }
   td:not(#_nt) > b > .nt-peerwarn { grid-area:peer; justify-self:center; margin:0 !important; }
   td:not(#_nt) > b > .nt-peerwarn.nt-infl { grid-area:infl; }
   td:not(#_nt) > b > .nt-peerwarn.nt-stale { grid-area:stale; }
+  td:not(#_nt) > b > .nt-peerwarn.nt-iv { grid-area:iv; color:#ffa500; text-decoration:none; }
   td:not(#_nt) > b > .nt-fams { grid-area:fams; justify-self:start; margin:0 !important; }
   td:not(#_nt) > b > .nt-shield { grid-area:shield; justify-self:center; margin:0 !important; }
   td:not(#_nt) > b > .nt-fixlink { grid-area:fix; justify-self:center; margin:0 !important; }

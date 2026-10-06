@@ -1063,3 +1063,15 @@ def test_up_bad_families_are_orange_not_green(flask_client: FlaskClient) -> None
         T._peer_hist_add(url, False, "v6")
     row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>.*?</tr>', flask_client.get("/").get_data(as_text=True), re.S).group(0)
     assert 'color:#ffa500">IPv4' in row and 'color:#ffa500">IPv6' in row and 'color:#28a745">IPv' not in row
+
+
+@pytest.mark.usefixtures("region_db")
+@pytest.mark.parametrize(("iv", "shown", "words"), [(120, True, "every 2 min, far too often"), (86400, True, "every 24 h, too rarely"),
+                                                    (1800, False, None), (7236, False, None)])
+def test_interval_icon(flask_client: FlaskClient, iv, shown, words) -> None:
+    import re
+    T.ANN_IV["udp://akl.example:1/announce"] = iv
+    row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>.*?</tr>', flask_client.get("/").get_data(as_text=True), re.S).group(0)
+    assert ('class="nt-peerwarn nt-iv"' in row) is shown
+    if words:
+        assert words in row and 'href="/fix#interval"' in row

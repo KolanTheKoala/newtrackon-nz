@@ -540,6 +540,16 @@ def _fix_page():
     return render_template("static/fix.jinja", active="Fix", titles=FIX_TITLES)
 
 
+def _iv_flag(t):
+    """{'every', 'short', 'pen'} when an up tracker's announce interval costs points (outside 15 min - 3 h), else None."""
+    iv = T.ANN_IV.get(t.url)
+    pen = T._nt_iv_penalty(t.url)
+    if t.status != 1 or not isinstance(iv, int) or not pen:
+        return None
+    every = "%d s" % iv if iv < 60 else ("%d min" % round(iv / 60) if iv < 5400 else "%g h" % round(iv / 3600, 1))
+    return {"every": every, "short": iv < T.IV_OK[0], "pen": pen}
+
+
 def _seen_text(s):
     """One plain sentence for what client B was handed in a peer test (PEER_SEEN entry)."""
     if s.get("swarm_empty"):
@@ -861,6 +871,7 @@ def register(app):
     app.jinja_env.globals["nt_broken_why"] = _broken_why
     app.jinja_env.globals["nt_version"] = _version
     app.jinja_env.globals["nt_seen_text"] = _seen_text
+    app.jinja_env.globals["nt_iv_flag"] = _iv_flag
     app.jinja_env.globals["nt_ago_of"] = _ago
     app.jinja_env.globals["nt_fam_nopeers"] = lambda t: T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
