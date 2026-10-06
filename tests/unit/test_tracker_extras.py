@@ -172,6 +172,7 @@ def test_feed_is_a_page_for_browsers_and_atom_for_readers(flask_client: FlaskCli
 def test_status_line_at_the_bottom_with_the_version(flask_client: FlaskClient, tmp_path, monkeypatch) -> None:
     import os
     from newtrackon import ntextra
+    monkeypatch.setattr(ntextra, "VERSION_FILE", str(tmp_path / "none"))  # a checkout (the deployed image has one)
     html = flask_client.get("/").get_data(as_text=True)
     line = html[html.index('class="nt-statusline"'):]
     assert html.index('class="nt-statusline"') > html.index('id="trackon_table"')  # below the table, one line

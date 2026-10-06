@@ -268,7 +268,11 @@ def _filter_tags(t):
     """Space-separated tags for the main table's filter bar (data attributes on each row)."""
     lat = T.REGION_LAT.get(t.url) or {}
     fast = [k for k in FAST_FROM if all(isinstance(lat.get(p), (int, float)) and lat[p] < DEFAULT_FAST_FROM_MS[k] for p in MEASURED_FROM[k])]
-    fams = [k for k, v in _fams(t).items() if v == "ok"]
+    # "IPv4/IPv6 works" = usable on that family: it answers there and hands out real peers there (farted.net's IPv6
+    # answers but hands out a Docker address). Up/Bad (no or fake peers) works on neither.
+    nopeers = T.PEER_FAILS.get(t.url, 0) >= T.PEER_FAIL_LIMIT or T.FAKE_FAILS.get(t.url, 0) >= T.PEER_FAIL_LIMIT
+    badfam = T._peer_fam_bad(t.url) if not nopeers else None
+    fams = [] if nopeers else [k for k, v in _fams(t).items() if v == "ok" and k != badfam]
     peer = {True: "pass", False: "fail"}.get(T.PEER_OK.get(t.url), "na")
     proto = "udp" if t.url.startswith("udp:") else "http"
     return {"proto": proto, "fam": " ".join(fams), "peer": peer,

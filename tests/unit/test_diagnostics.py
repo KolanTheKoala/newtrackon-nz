@@ -996,3 +996,20 @@ class TestSplitNeedsAFairPassRate:
         self._feed([0, 0, 1, 0, 0, 0])
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "clients rarely reach the same one" in html and "Up/Bad" in html
+
+
+@pytest.mark.usefixtures("region_db")
+def test_ipv6_works_filter_excludes_a_family_without_peers(flask_client: FlaskClient) -> None:
+    """tracker.farted.net answers on IPv6 but hands out a Docker address there: not 'IPv6 works'."""
+    import re
+    url = "udp://akl.example:1/announce"
+    T.FAMS[url] = {"v4": True, "v6": True}
+    for _ in range(3):
+        T._peer_hist_add(url, True, "v4")
+        T._peer_hist_add(url, False, "v6")
+    row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>', flask_client.get("/").get_data(as_text=True)).group(0)
+    assert 'data-nt-fam="v4"' in row
+    for _ in range(3):
+        T._peer_hist_add(url, False, "v4")  # now no peers anywhere: Up/Bad
+    row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>', flask_client.get("/").get_data(as_text=True)).group(0)
+    assert 'data-nt-fam=""' in row
