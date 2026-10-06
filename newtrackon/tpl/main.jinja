@@ -247,6 +247,7 @@ fmt();setInterval(fmt,1000)})();</script>
             <span class="fw-bold me-1">Show only:</span>
             <input type="checkbox" class="btn-check" id="ntf-up" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-up">Up now</label>
             <input type="checkbox" class="btn-check" id="ntf-good" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-good">Up/Good</label>
+            <input type="checkbox" class="btn-check" id="ntf-new" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-new" title="New trackers, still building their first week of history">Up/New</label>
             <input type="checkbox" class="btn-check" id="ntf-udp" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-udp">UDP</label>
             <input type="checkbox" class="btn-check" id="ntf-http" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-http">HTTP(S)</label>
             <input type="checkbox" class="btn-check" id="ntf-v4" autocomplete="off"><label class="btn btn-sm btn-outline-secondary" for="ntf-v4">IPv4 works</label>
@@ -279,7 +280,7 @@ fmt();setInterval(fmt,1000)})();</script>
         <script>
         // Filter bar: DataTables search hook, so paging, the entry count and the auto-refresh keep working.
         $(function () {
-            var KEY = 'nt-filters', BOXES = ['up', 'good', 'udp', 'http', 'v4', 'v6', 'peer'];
+            var KEY = 'nt-filters', BOXES = ['up', 'good', 'new', 'udp', 'http', 'v4', 'v6', 'peer'];
             var dt = $('#trackon_table').DataTable();
             var mine = ntGuessRegion();
             if (mine) { var o = $('#ntf-fast option[value="' + mine + '"]'); o.text(o.text() + ' (you)'); }
@@ -294,7 +295,8 @@ fmt();setInterval(fmt,1000)})();</script>
                 var tr = dt.row(idx).node(); if (!tr) { return true; }
                 var s = state(), d = tr.dataset, st = d.ntState || '';
                 if (s.up && st === 'down') { return false; }
-                if (s.good && st !== 'up_good' && st !== 'up_new') { return false; }
+                var want = (s.good ? ['up_good', 'up_new'] : []).concat(s['new'] ? ['up_new'] : []);  // status buttons: either
+                if (want.length && want.indexOf(st) < 0) { return false; }
                 if (s.udp !== s.http && d.ntProto !== (s.udp ? 'udp' : 'http')) { return false; }
                 if (s.v4 && !has(d.ntFam, 'v4')) { return false; }
                 if (s.v6 && !has(d.ntFam, 'v6')) { return false; }

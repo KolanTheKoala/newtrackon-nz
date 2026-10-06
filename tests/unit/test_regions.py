@@ -211,7 +211,7 @@ class TestMainTableFilters:
 
     def test_filter_bar_present(self, flask_client: FlaskClient) -> None:
         html = flask_client.get("/").get_data(as_text=True)
-        for el in ("ntf-up", "ntf-good", "ntf-udp", "ntf-http", "ntf-v4", "ntf-v6", "ntf-peer", "ntf-region", "ntf-fast", "ntf-reset"):
+        for el in ("ntf-up", "ntf-good", "ntf-new", "ntf-udp", "ntf-http", "ntf-v4", "ntf-v6", "ntf-peer", "ntf-region", "ntf-fast", "ntf-reset"):
             assert f'id="{el}"' in html, el
         assert "/static/js/region-guess.js" in html
 
