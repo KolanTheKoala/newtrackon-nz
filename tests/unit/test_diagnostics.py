@@ -832,3 +832,37 @@ class TestSplitSwarm:
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "It runs separate servers that don&#39;t share their swarms" in html or "It runs separate servers that don't share their swarms" in html
         assert "/fix#split-swarm" in html
+
+
+class TestAMustComeBackAsItself:
+    """Client A must come back with this server's own address, not just any public one: a tracker behind Cloudflare that
+    ignores CF-Connecting-IP hands out Cloudflare's address, which nobody can connect to (tracker.fansub.id hands out its
+    proxy's 10.22.125.126)."""
+
+    @pytest.fixture(autouse=True)
+    def _ours(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "my_ipv4", "160.30.240.158")
+        monkeypatch.setattr(scraper, "my_ipv6", "2401:c060:1010:4007::")
+
+    @pytest.mark.parametrize(("ip", "ok"), [("160.30.240.158", True), ("::ffff:160.30.240.158", True), ("2401:c060:1010:4007::", True),
+                                            ("2401:c060:1010:4007::5", True), ("104.21.83.32", False), ("2606:4700::6812:1", False),
+                                            ("10.22.125.126", False), ("8.8.8.8", False)])
+    def test_rule(self, ip: str, ok: bool) -> None:
+        extra: dict = {}
+        assert scraper._probe_eval({"peers": [{"IP": ip, "port": 6881}]}, 6881, extra) is ok
+        assert extra["nat_ip"] == (None if ok else ip)
+
+    def test_unknown_own_addresses_fall_back_to_public(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "my_ipv4", None)
+        monkeypatch.setattr(scraper, "my_ipv6", None)
+        assert scraper._probe_eval({"peers": [{"IP": "8.8.8.8", "port": 6881}]}, 6881, {}) is True
+        assert scraper._probe_eval({"peers": [{"IP": "10.0.0.1", "port": 6881}]}, 6881, {}) is False
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_names_a_cdn(self, flask_client: FlaskClient) -> None:
+        url = "udp://akl.example:1/announce"
+        for _ in range(3):
+            T._peer_hist_add(url, False, "v4")
+        T._nat_seen_set(url, "v4", "104.21.83.32")
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "104.21.83.32, an address that isn" in html and "Cloudflare" in html

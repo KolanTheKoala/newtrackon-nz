@@ -454,3 +454,16 @@ def test_deleted_records_are_not_recreated_from_old_events(monkeypatch: pytest.M
     T.EVENTS[:] = [{"t": NOW - 500, "url": "udp://back.example:1/announce", "host": "back.example", "type": "removed", "text": "removed from the list (x)"}]
     T._removed_seed()
     assert "back.example" not in T.REMOVED
+
+
+def test_reinstate_pass_survives_a_restart(monkeypatch) -> None:
+    from newtrackon import ingest
+    monkeypatch.setattr(ingest, "add_one_tracker_to_submitted_queue", lambda url: None)
+    ingest.REINSTATE.clear()
+    ingest.reinstate("Gone.Example", "udp://gone.example:1/announce")
+    ingest.REINSTATE.clear()  # the restart
+    ingest.REINSTATE.update(ingest._reinstate_load())
+    assert ingest._reinstating("gone.example")
+    with open("data/reinstate.json", "w") as f:
+        f.write('{"old.example": 1}')  # long expired
+    assert ingest._reinstate_load() == {}

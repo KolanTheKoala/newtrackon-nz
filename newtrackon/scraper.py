@@ -770,6 +770,28 @@ def _peer_ip(x):
     return ip.decode("ascii", "replace") if isinstance(ip, bytes) else str(ip)
 
 
+def _is_ours(ip: str) -> bool | None:
+    """Is ip this server's own address (IPv4 exactly, IPv6 within its /64)? None if our addresses aren't known."""
+    import ipaddress as _ia
+    if not (my_ipv4 or my_ipv6):
+        return None
+    try:
+        a = _ia.ip_address(str(ip).split("%")[0])
+        if a.version == 6 and a.ipv4_mapped:
+            a = a.ipv4_mapped
+        if a.version == 4:
+            return bool(my_ipv4) and a == _ia.ip_address(my_ipv4)
+        return bool(my_ipv6) and a in _ia.ip_network(my_ipv6 + "/64", strict=False)
+    except ValueError:
+        return False
+
+
+def _a_ok(ip: str) -> bool:
+    """Client A came back with an address peers could reach it on: ours (or, if ours aren't known, any public one)."""
+    ours = _is_ours(ip)
+    return ip_is_public(ip) if ours is None else ours
+
+
 def _probe_eval(resp, want, extra):
     peers = _probe_peers(resp)
     # Only our own probe clients can know this random hash: anything else is fake by the tracker.
@@ -778,14 +800,14 @@ def _probe_eval(resp, want, extra):
     leech = resp.get("leechers", resp.get("incomplete"))
     extra["inflated"] = (seeds, leech) if isinstance(seeds, int) and isinstance(leech, int) and (seeds > 2 or leech > 2) else None
     a_entries = [x for x in peers if x.get("port") == want]
-    # client A must come back with a real (public) address: a private one (172.17.0.1, 10.x...) means something in front of
-    # the tracker hides clients' addresses (NAT, Docker's userland proxy), and nobody could connect to that peer
-    hidden = [_peer_ip(x) for x in a_entries if not ip_is_public(_peer_ip(x))]
+    # client A must come back with its own address: a private one (172.17.0.1, 10.x...) or someone else's public one (a CDN
+    # or proxy in front, Cloudflare) means the tracker never sees clients' real addresses, and nobody could connect to that peer
+    hidden = [_peer_ip(x) for x in a_entries if not _a_ok(_peer_ip(x))]
     extra["nat_ip"] = hidden[0] if hidden and len(hidden) == len(a_entries) else None
     # B handed back only itself, never A: A's announce went to a different server than B's (separate tracker instances
     # behind one name or load balancer, not sharing swarms)
     extra["split"] = not a_entries and any(x.get("port") == want + 1 for x in peers)
-    return any(ip_is_public(_peer_ip(x)) for x in a_entries)
+    return any(_a_ok(_peer_ip(x)) for x in a_entries)
 
 
 def _probe_src(family):

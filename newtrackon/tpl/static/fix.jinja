@@ -115,6 +115,11 @@ curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000002&amp;port=6882&amp;uplo
         Fix: give the container real IPv6 (in <code>/etc/docker/daemon.json</code> set <code>"ipv6": true</code>,
         <code>"ip6tables": true</code> and an IPv6 subnet, or run it with <code>network_mode: host</code>), or set the
         tracker to trust the real client address from whatever sits in front of it.</p>
+    <p><b>Hands out a proxy's or CDN's address.</b> The same fault behind a reverse proxy or a CDN such as Cloudflare: the
+        tracker sees the proxy's address for everyone. Make the tracker take the client's address from the header the proxy
+        adds (<code>CF-Connecting-IP</code> or <code>X-Forwarded-For</code>; in opentracker, Chihaya and most others it's a
+        setting, often called "real IP header"), and only from your proxy's addresses. Cloudflare doesn't carry UDP, so a UDP
+        tracker behind it can't work at all.</p>
     <p><b>Most likely causes, and what to do:</b></p>
     <ul>
         <li><b>An old or wrong address is still in your domain's settings</b> (the DNS records). In your domain or hosting control panel,

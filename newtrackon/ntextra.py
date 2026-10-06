@@ -445,9 +445,16 @@ def _evidence(t, d):
                    % (d["fake_peers"]["latest"] if d["fake_peers"]["latest"] is not None else "unknown", d["fake_peers"]["streak"]))
     for fam, x in sorted((T.NAT_SEEN.get(t.url) or {}).items()):
         if fix in ("no-peers", "dead-address"):
-            out.append("Over IPv%s it sees every client as %s, a private address, and hands that out instead of their real "
-                       "address, so nobody can connect to those peers. Something in front of it hides clients' addresses: "
-                       "usually Docker's port proxy (no real IPv6 in the container) or NAT." % (fam[-1], x["ip"]))
+            from newtrackon import scraper
+            if scraper.ip_is_public(x["ip"]):
+                out.append("Over IPv%s it sees every client as %s, an address that isn't theirs, and hands that out instead of "
+                           "their real one, so nobody can connect to those peers. A proxy or CDN in front of it (such as Cloudflare) "
+                           "hides clients' addresses, and the tracker doesn't read the real one from the header it passes on."
+                           % (fam[-1], x["ip"]))
+            else:
+                out.append("Over IPv%s it sees every client as %s, a private address, and hands that out instead of their real "
+                           "address, so nobody can connect to those peers. Something in front of it hides clients' addresses: "
+                           "usually Docker's port proxy (no real IPv6 in the container), NAT, or a reverse proxy." % (fam[-1], x["ip"]))
     sp = T._split(t.url) if fix in ("split-swarm", "dead-address") else None
     if sp:
         out.append("It runs separate servers that don't share their swarms: in %d of its last %d peer tests our second test "

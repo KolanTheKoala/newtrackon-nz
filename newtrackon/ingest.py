@@ -194,8 +194,32 @@ def enqueue_new_trackers(input_string: str) -> None:
         add_one_tracker_to_submitted_queue(url)
 
 
-REINSTATE: dict[str, float] = {}  # host -> when its operator asked: one pass past its ban (covers both checks)
 REINSTATE_TTL = 3 * 3600
+_REINSTATE_FILE = "data/reinstate.json"
+
+
+def _reinstate_load() -> dict[str, float]:
+    try:
+        with open(_REINSTATE_FILE) as f:
+            d = json.load(f)
+        return {str(k): float(v) for k, v in d.items() if time() - float(v) < REINSTATE_TTL}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _reinstate_save() -> None:
+    try:
+        tmp = _REINSTATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(REINSTATE, f)
+        os.replace(tmp, _REINSTATE_FILE)
+    except OSError:
+        logger.exception("could not save %s", _REINSTATE_FILE)
+
+
+# host -> when its operator asked: one pass past its ban (covers both checks). Saved, so a restart between the two
+# checks doesn't turn the second one into a 'banned' refusal.
+REINSTATE: dict[str, float] = _reinstate_load()
 
 # A new tracker must answer twice, CONFIRM_DELAY apart, before it's listed: one answer from a machine that then goes
 # away for good (a home PC on a dynamic address) no longer gets it listed. {submitted url: {"t": first answer, "queued": bool}}
@@ -272,6 +296,7 @@ def reinstate(host: str, url: str) -> None:
     """A removed tracker's operator pressed 'Check again now': check it like a new submission, past its ban.
     If it's accepted it's listed again and the ban is lifted; if not, nothing changes."""
     REINSTATE[host.lower()] = time()
+    _reinstate_save()
     add_one_tracker_to_submitted_queue(url)
 
 
@@ -491,6 +516,7 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
     host = (cand_host or "").lower()
     if _reinstating(host):
         REINSTATE.pop(host, None)
+        _reinstate_save()
         _lift_ban(host)
         _keep_upbad_clock(host, tracker_candidate.url)
         logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
