@@ -405,7 +405,7 @@ def _interval_note(iv):
     if iv < 900:
         return ("too short: every client checks in every %s, which loads the tracker for no benefit. Around 30 minutes "
                 "(1800 s, with a min interval of about 15 minutes) is usual" % ("%d s" % iv if iv < 60 else "%d min" % round(iv / 60)))
-    if iv > 7200:
+    if iv > 10800:
         return ("too long: clients check in only every %s, so they rarely get new peers from it. Around 30 minutes to "
                 "an hour is usual" % ("%d h" % round(iv / 3600)))
     return None

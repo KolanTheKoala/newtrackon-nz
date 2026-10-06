@@ -396,10 +396,11 @@ bantime  = 1h</pre>
     <p><b>Why it matters:</b></p>
     <ul>
         <li><b>Too short (under 15 minutes):</b> every client announces far more than it needs to. That multiplies the tracker's
-            load for no benefit, and makes overload and dropouts more likely. <b>&minus;5 points</b> under 15 minutes,
-            <b>&minus;10</b> under 5.</li>
-        <li><b>Too long (over 2 hours):</b> clients rarely come back, so they seldom get new peers from it, and a peer that's gone
-            stays on its lists for hours. <b>&minus;5 points</b> over 2 hours, <b>&minus;10</b> over 6.</li>
+            load for no benefit, and makes overload and dropouts more likely.</li>
+        <li><b>Too long (over 3 hours):</b> clients rarely come back, so they seldom get new peers from it, and a peer that's gone
+            stays on its lists for hours.</li>
+        <li><b>Points:</b> nothing from 15 minutes to 3 hours. Outside that, a little at first, rising smoothly to <b>&minus;5</b>
+            at 2 minutes or less, or 24 hours or more (5 minutes costs about 2.7).</li>
     </ul>
     <p><b>What to do:</b> set it to about <b>30 minutes</b> (1800 seconds), with a <b>min interval</b> of about 15 minutes. That's
         what almost every public tracker uses. The points only affect the score and ranking: they don't change the status, and the

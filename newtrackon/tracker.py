@@ -1618,7 +1618,7 @@ def _stats(t):
         _ivp = _nt_iv_penalty(t.url)
         st["lat_ms"] = _ms
         st["lat_penalty"] = round(_pen, 1)
-        st["iv_penalty"] = int(_ivp)
+        st["iv_penalty"] = _ivp
         st["iv"] = ANN_IV.get(t.url)
         if min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0) > 1.0:
             st["capped"] = True  # a quality-test cap (fake peers, dead IP family, failed peer test) is holding the score down
@@ -1847,22 +1847,27 @@ def _nt_region_avg(url):
     return round(sum(v) / len(v)) if len(v) >= 2 else None
 
 
+IV_OK = (900, 10800)  # announce intervals from 15 minutes to 3 hours cost nothing
+IV_WORST = (120, 86400)  # at 2 minutes or less, or 24 hours or more, the full IV_MAX_PENALTY
+IV_MAX_PENALTY = 5.0
+
+
 def _nt_iv_penalty(url):
-    """Points off the score for an announce interval far from the usual 30-60 minutes (it asks clients to announce):
-    under 5 min -10, under 15 min -5, over 2 h -5, over 6 h -10. Like the latency penalty it lowers the score, but the
-    status ladders add it back, so it never makes a tracker look Unreliable."""
+    """Points off the score for an announce interval outside 15 min - 3 h, on a smooth (logarithmic) scale up to 5 at
+    2 min or 24 h, so a few seconds either side of a limit doesn't matter. Like the latency penalty it lowers the score,
+    but the status ladders add it back, so it never makes a tracker look Unreliable."""
+    import math
     iv = ANN_IV.get(url)
     if not isinstance(iv, int) or iv <= 0:
         return 0.0
-    if iv < 300:
-        return 10.0
-    if iv < 900:
-        return 5.0
-    if iv > 21600:
-        return 10.0
-    if iv > 7200:
-        return 5.0
-    return 0.0
+    lo, hi = IV_OK
+    if iv < lo:
+        frac = math.log(lo / iv) / math.log(lo / IV_WORST[0])
+    elif iv > hi:
+        frac = math.log(iv / hi) / math.log(IV_WORST[1] / hi)
+    else:
+        return 0.0
+    return round(IV_MAX_PENALTY * min(1.0, frac), 1)
 
 
 def _nt_lat_penalty(ms):

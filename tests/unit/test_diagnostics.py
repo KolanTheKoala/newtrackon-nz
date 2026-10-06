@@ -52,7 +52,7 @@ def test_warning_meaning(msg: str, fixable: bool, word: str | None) -> None:
     assert w[0] == msg and w[2] is fixable and (word in w[1] if word else w[1] is None)
 
 
-@pytest.mark.parametrize(("iv", "note"), [(120, "every 2 min"), (30, "every 30 s"), (86400, "every 24 h"), (1800, None), (None, None)])
+@pytest.mark.parametrize(("iv", "note"), [(120, "every 2 min"), (30, "every 30 s"), (86400, "every 24 h"), (1800, None), (7236, None), (None, None)])
 def test_interval_note(iv: int | None, note: str | None) -> None:
     n = ntextra._interval_note(iv)
     assert (note in n) if note else n is None
@@ -258,7 +258,8 @@ class TestProbation:
 
 
 class TestIntervalPenalty:
-    @pytest.mark.parametrize(("iv", "pen"), [(120, 10), (299, 10), (300, 5), (899, 5), (900, 0), (1800, 0), (7200, 0), (7201, 5), (21600, 5), (21601, 10), (86400, 10), (None, 0)])
+    @pytest.mark.parametrize(("iv", "pen"), [(60, 5.0), (120, 5.0), (300, 2.7), (307, 2.7), (899, 0.0), (900, 0.0), (1800, 0.0),
+                                             (7236, 0.0), (10800, 0.0), (21600, 1.7), (86400, 5.0), (200000, 5.0), (None, 0.0)])
     def test_bands(self, iv: int | None, pen: float) -> None:
         if iv is None:
             T.ANN_IV.pop(AKL, None)
@@ -277,14 +278,14 @@ class TestIntervalPenalty:
         good = t.uptime
         T.ANN_IV[t.url] = 120
         t.update_uptime()
-        assert round(good - t.uptime) == 10 and t.uptime < 91
+        assert round(good - t.uptime) == 5 and t.uptime < 96
         assert ntextra._state(t)[0] == "up_good" and ntextra._rowcls(t) == "green"  # still Up/Good: points are for ranking
 
     @pytest.mark.usefixtures("region_db")
     def test_page_shows_the_penalty_and_advice(self, flask_client: FlaskClient) -> None:
         T.ANN_IV[AKL] = 120
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
-        assert "Around 30 minutes" in html and "&minus;10 (every 2 min" in html
+        assert "Around 30 minutes" in html and "&minus;5.0 (every 2 min" in html
         assert html.count('href="/fix#interval"') == 2
 
 
