@@ -526,38 +526,8 @@ class Tracker:
         """Compare this tracker's state with last time and log any change to the event feed."""
         try:
             url, now = self.url, int(time())
-            if self.status == 1:
-                bad = []
-                if PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
-                    bad.append("hands out no peers (3+ of its last 6 peer tests failed)")
-                if FAKE_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
-                    bad.append("returns fake peers (3+ of its last 6 checks)")
-                df = FAM_FAILS.get(url) or {}
-                if df.get("n", 0) >= PEER_FAIL_LIMIT:
-                    bad.append(f"its published IPv{str(df.get('fam', '?'))[-1]} address is dead")
-                pfb = _peer_fam_bad(url) if PEER_FAILS.get(url, 0) < PEER_FAIL_LIMIT else None
-                if pfb:
-                    bad.append(f"its IPv{pfb[-1]} side doesn't share peers (3+ of its last 6 IPv{pfb[-1]} peer tests failed)")
-                if PEER_FAILS.get(url, 0) < PEER_FAIL_LIMIT and _split(url):
-                    bad.append("runs separate servers that don't share swarms (clients only meet peers on the same server)")
-                if bad:
-                    st = "up_bad"
-                else:  # same ladder as the page/API, with a little hysteresis so borderline trackers don't flap
-                    sc = round(float(self.uptime or 0) + _nt_iv_penalty(url))  # the interval penalty is only for ranking
-                    ms = _nt_region_avg(url) or self.latency or 0
-                    pst = (LAST_STATE.get(url) or {}).get("st")
-                    if sc < (52 if pst == "up_junk" else 50):
-                        st = "up_junk"
-                    elif _nt_region_avg(url) is None and _nt_is_new(self, sc, 0):  # just added: no real latency yet
-                        st = "up_good"
-                    elif ms >= (290 if pst == "up_slow" else 300) and _nt_reliable(self, pst):
-                        st = "up_slow"
-                    elif sc < (91 if pst == "up_unreliable" else 90):
-                        st = "up_good" if _nt_is_new(self, sc, ms) else ("up_slow" if (_nt_region_avg(self.url) or 0) >= 200 and round(float(self.uptime or 0) + _nt_iv_penalty(self.url) + _nt_lat_penalty(_nt_region_avg(self.url))) >= (91 if pst == "up_unreliable" else 90) else "up_unreliable")  # slow = under 90 from latency alone;  # new = held back only by the age ceiling
-                    else:
-                        st = "up_good"
-            else:
-                bad, st = [], "down"
+            # the single status rule, with the feed's hysteresis (its previous state) and its storage form
+            st, bad = feed_state(self, (LAST_STATE.get(url) or {}).get("st"))
             df = FAM_FAILS.get(url) or {}
             dead = [df["fam"]] if st != "down" and df.get("n", 0) >= PEER_FAIL_LIMIT and df.get("fam") else []
             prev = LAST_STATE.get(url)
@@ -1967,13 +1937,79 @@ def _nt_uu(self, *a, **k):
 Tracker.update_uptime = _nt_uu
 
 
-def _nt_reliable(t, pst=None):
-    # reliability score (availability x stability, before the latency penalty) is 90 or more
+# The status rule: the single source for the tracker page, the API, the main table and the event feed.
+BAD_TEXT = {"no_peers": "hands out no peers (3+ of its last 6 peer tests failed)",
+            "fake_peers": "returns fake peers (3+ of its last 6 checks)",
+            "split_swarm": "runs separate servers that don't share swarms (clients only meet peers on the same server)"}
+PARTIAL = ("dead_ipv", "nopeers_ipv", "split_swarm")  # faults that leave it useful to some clients: Up/Broken
+
+
+def _bad_text(code):
+    if code.startswith("dead_ipv"):
+        return f"its published IPv{code[-1]} address is dead"
+    if code.startswith("nopeers_ipv"):
+        return f"its IPv{code[-1]} side doesn't share peers (3+ of its last 6 IPv{code[-1]} peer tests failed)"
+    return BAD_TEXT[code]
+
+
+def _reliable_score(t, ms, margin=0):
+    """Reliability (availability x stability, before the latency penalty) of 90 or more (90 - margin)."""
     try:
         a, s = _nt_avail_stab(t.historic)
-        return round(a * s * 100) >= (89 if pst == "up_slow" else 90)
+        return round(a * s * 100) >= 90 - margin
     except Exception:
-        return True
+        return round(float(t.uptime or 0) + _nt_lat_penalty(ms)) >= 90 - margin
+
+
+def status_rule(t, pst=None):
+    """(state, problem codes) for a tracker: down, up_bad, up_broken, up_junk, up_new, up_slow, up_unreliable or up_good.
+    pst is the state it had before (the event feed passes it): borderline thresholds then lean towards staying put, so
+    the feed doesn't flap. Without it this is the page's view; with it, the feed's. The tracker page, the API, the main
+    table and the event feed all use this: there's no other copy of the rule."""
+    if t.status != 1:
+        return "down", []
+    url = t.url
+    bad = []
+    peer_fail = PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT
+    if peer_fail:
+        bad.append("no_peers")
+    if FAKE_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
+        bad.append("fake_peers")
+    df = FAM_FAILS.get(url) or {}
+    if df.get("n", 0) >= PEER_FAIL_LIMIT:
+        bad.append("dead_ipv" + str(df.get("fam", "?"))[-1])
+    pfb = _peer_fam_bad(url) if not peer_fail else None
+    if pfb:
+        bad.append("nopeers_ipv" + pfb[-1])  # one family doesn't share peers, the other does
+    if not peer_fail and _split(url):
+        bad.append("split_swarm")  # separate servers not sharing swarms: works for clients on the same one
+    if bad:
+        return ("up_broken" if all(x.startswith(PARTIAL) for x in bad) else "up_bad"), bad
+    sc = round(float(t.uptime or 0) + _nt_iv_penalty(url))  # the interval penalty is only for ranking, not the status
+    avg = _nt_region_avg(url)
+    if sc < (52 if pst == "up_junk" else 50):
+        return "up_junk", bad
+    if avg is None and _nt_is_new(t, sc, 0):  # just added: no real latency yet
+        return "up_new", bad
+    ms = avg or t.latency or 0
+    if ms >= (290 if pst == "up_slow" else 300) and _reliable_score(t, ms, 1 if pst == "up_slow" else 0):
+        return "up_slow", bad  # slow only if otherwise reliable; if not, it falls through to Up/Unreliable
+    hi = 91 if pst == "up_unreliable" else 90
+    if sc < hi:
+        if _nt_is_new(t, sc, ms):
+            return "up_new", bad
+        # under 90 only because of the latency penalty (reliability 90+): latency is the reason, not missed checks
+        if (avg or 0) >= 200 and round(float(t.uptime or 0) + _nt_iv_penalty(url) + _nt_lat_penalty(avg)) >= hi:
+            return "up_slow", bad
+        return "up_unreliable", bad
+    return "up_good", bad
+
+
+def feed_state(t, pst=None):
+    """The rule as the event feed and LAST_STATE store it: Up/Broken is filed under 'up_bad' with its problem texts
+    (_nt_bad_lbl and _broken() tell them apart) and Up/New under 'up_good'."""
+    st, codes = status_rule(t, pst)
+    return {"up_broken": "up_bad", "up_new": "up_good"}.get(st, st), [_bad_text(c) for c in codes]
 
 
 def _nt_bad_lbl(bad):

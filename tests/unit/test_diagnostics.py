@@ -930,9 +930,9 @@ def _scenario(url, name):
 @pytest.mark.parametrize(("name", "want"), [("ok", None), ("no_peers", "Up/Bad"), ("fake", "Up/Bad"), ("dead_v6", "Up/Broken"),
                                             ("nopeers_ipv6", "Up/Broken"), ("split", "Up/Broken"), ("dead_v6_and_no_peers", "Up/Bad")])
 def test_all_three_copies_of_the_status_rule_agree(name, want, sample_tracker, flask_client: FlaskClient) -> None:
-    """The status rule lives in three places: ntextra._state (page, API), the feed ladder in Tracker._emit_events, and the
-    main table's status cell. A cause known to one but not the others showed a different label in the table (farted.net,
-    Up/Junk vs Up/Broken). Every problem combination must give the same label in all three."""
+    """The page/API, the event feed and the main table's status cell all take the status from tracker.status_rule (they
+    used to have their own copies, and a cause known to one but not the others showed a different label in the table:
+    farted.net, Up/Junk vs Up/Broken). Every problem combination must still give the same label in all three."""
     import re
     from collections import deque
     from time import time

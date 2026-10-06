@@ -10,15 +10,6 @@ def _trackers():
     return T.format_uptime_and_downtime_time(db.get_all_data())
 
 
-def _reliable(t, ms):
-    # reliability score (availability x stability, before the latency penalty) is 90 or more
-    try:
-        a, s = T._nt_avail_stab(t.historic)
-        return round(a * s * 100) >= 90
-    except Exception:
-        return round(float(t.uptime or 0) + T._nt_lat_penalty(ms)) >= 90
-
-
 def _statekey(t):
     try:
         return _state(t)[0]
@@ -66,41 +57,8 @@ def _rowcls(t):
 
 
 def _state(t):
-    if t.status != 1:
-        return "down", []
-    bad = []
-    if T.PEER_FAILS.get(t.url, 0) >= T.PEER_FAIL_LIMIT:
-        bad.append("no_peers")
-    if T.FAKE_FAILS.get(t.url, 0) >= T.PEER_FAIL_LIMIT:
-        bad.append("fake_peers")
-    df = T.FAM_FAILS.get(t.url) or {}
-    if df.get("n", 0) >= T.PEER_FAIL_LIMIT:
-        bad.append("dead_ipv" + str(df.get("fam", "?"))[-1])
-    pfb = T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
-    if pfb:
-        bad.append("nopeers_ipv" + pfb[-1])  # one family doesn't share peers, the other does
-    if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT and T._split(t.url):
-        bad.append("split_swarm")  # separate servers not sharing swarms: works for clients on the same one
-    if bad:
-        # only partial faults (a dead address, one family not sharing, a split swarm): still useful, so "broken", not "bad"
-        return ("up_broken" if all(x.startswith(("dead_ipv", "nopeers_ipv", "split_swarm")) for x in bad) else "up_bad"), bad
-    sc = round(float(t.uptime or 0) + T._nt_iv_penalty(t.url))  # the interval penalty is only for ranking, not the status
-    if sc < 50:
-        return "up_junk", bad
-    if T._nt_region_avg(t.url) is None and T._nt_is_new(t, sc, 0):  # just added: no real latency yet
-        return "up_new", bad
-    ms = T._nt_region_avg(t.url) or t.latency or 0
-    if ms >= 300 and _reliable(t, ms):  # slow only if otherwise reliable; if not, it falls through to Up/Unreliable
-        return "up_slow", bad
-    if sc < 90:
-        if T._nt_is_new(t, sc, ms):
-            return "up_new", bad
-        # under 90 only because of the latency penalty (reliability score is 90+): latency is the reason, not missed checks
-        if (T._nt_region_avg(t.url) or 0) >= 200 and round(float(t.uptime or 0) + T._nt_iv_penalty(t.url) + T._nt_lat_penalty(T._nt_region_avg(t.url))) >= 90:  # 200 ms = where latency turns orange
-            return "up_slow", bad
-        return "up_unreliable", bad
-    return "up_good", bad
-
+    """(state, problem codes): the single status rule, tracker.status_rule."""
+    return T.status_rule(t)
 
 def _addr_report(t, now=None):
     """Each published address of a tracker and whether it answers, from the checks: [{ip, fam, ok, since}], or [].
