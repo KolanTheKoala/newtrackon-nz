@@ -468,6 +468,11 @@ def _evidence(t, d):
                 out.append("Over IPv%s it sees every client as %s, a private address, and hands that out instead of their real "
                            "address, so nobody can connect to those peers. Something in front of it hides clients' addresses: "
                            "usually Docker's port proxy (no real IPv6 in the container), NAT, or a reverse proxy." % (fam[-1], x["ip"]))
+    rare = T._split_info(t.url) if fix == "no-peers" and not T._split(t.url) else None
+    if rare:
+        out.append("It runs separate servers that don't share their swarms, and clients rarely reach the same one: in %d of its "
+                   "last %d peer tests our second test client was handed back only itself, and only %d of %d tests passed. "
+                   "The fix is under 'Separate servers that don't share swarms' on How to fix." % (rare["split"], rare["of"], rare["passed"], rare["tests"]))
     sp = T._split(t.url) if fix in ("split-swarm", "dead-address") else None
     if sp:
         out.append("It runs separate servers that don't share their swarms: in %d of its last %d peer tests our second test "

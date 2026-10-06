@@ -179,18 +179,28 @@ class TestBadStretch:
     H = 3600
     BAD = "is Up/Bad: hands out no peers (3+ of its last 6 peer tests failed)"
 
+    NP = ["hands out no peers (3+ of its last 6 peer tests failed)"]
+
     def test_short_recovery_does_not_reset(self) -> None:
-        s = {"st": "up_bad", "since": 0, **T._bad_track(None, "up_bad", 0)}
-        s = {"st": "up_good", "since": 10 * self.H, **T._bad_track(s, "up_good", 10 * self.H)}  # passes for an hour
-        s = {"st": "up_bad", "since": 11 * self.H, **T._bad_track(s, "up_bad", 11 * self.H)}
+        s = {"st": "up_bad", "bad": self.NP, "since": 0, **T._bad_track(None, "up_bad", 0, self.NP)}
+        s = {"st": "up_good", "bad": [], "since": 10 * self.H, **T._bad_track(s, "up_good", 10 * self.H, [])}  # passes for an hour
+        s = {"st": "up_bad", "bad": self.NP, "since": 11 * self.H, **T._bad_track(s, "up_bad", 11 * self.H, self.NP)}
         assert s["bad_since"] == 0
 
     def test_long_recovery_resets(self) -> None:
-        s = {"st": "up_bad", "since": 0, **T._bad_track(None, "up_bad", 0)}
-        s = {"st": "up_good", "since": 10 * self.H, **T._bad_track(s, "up_good", 10 * self.H)}
-        s = {"st": "up_good", "since": 10 * self.H, **T._bad_track(s, "up_good", 23 * self.H)}  # still good 13 h later
+        s = {"st": "up_bad", "bad": self.NP, "since": 0, **T._bad_track(None, "up_bad", 0, self.NP)}
+        s = {"st": "up_good", "bad": [], "since": 10 * self.H, **T._bad_track(s, "up_good", 10 * self.H, [])}
+        s = {"st": "up_good", "bad": [], "since": 10 * self.H, **T._bad_track(s, "up_good", 23 * self.H, [])}  # still good 13 h later
         assert "bad_since" not in s
-        assert T._bad_track(s, "up_bad", 31 * self.H) == {"bad_since": 31 * self.H}
+        assert T._bad_track(s, "up_bad", 31 * self.H, self.NP)["bad_since"] == 31 * self.H
+
+    def test_up_broken_does_not_run_the_up_bad_clock(self) -> None:
+        """ibksturm.synology.me: Up/Broken (a dead IPv4) for 2.7 days, then failing the peer test: its 5 days start then."""
+        dead = ["its published IPv4 address is dead"]
+        s = {"st": "up_bad", "bad": dead, "since": 0, **T._bad_track(None, "up_bad", 0, dead)}
+        assert "bad_since" not in s  # filed as up_bad by the feed ladder, but it's Up/Broken
+        s = {"st": "up_bad", "bad": dead + self.NP, "since": 65 * self.H, **T._bad_track(s, "up_bad", 65 * self.H, dead + self.NP)}
+        assert s["bad_since"] == 65 * self.H
 
     def test_seeded_from_events_like_corpscorp(self) -> None:
         url, now = "udp://cc.example:80/announce", 200 * self.H
@@ -949,3 +959,40 @@ def test_all_three_copies_of_the_status_rule_agree(name, want, sample_tracker, f
         assert page not in ("Up/Bad", "Up/Broken", "Up/Junk") and feed is None and table == "Up/Good"
     else:
         assert (page, feed, table) == (want, want, want)
+
+
+class TestSplitNeedsAFairPassRate:
+    """tracker.dler.org: B handed back only itself 9 times in 10, one lucky pass. That's no peers (Up/Bad), not a split
+    swarm that partly works; corpscorp (about half pass) is Up/Broken."""
+
+    URL = "udp://rare.example:6969/announce"
+
+    def _feed(self, results):
+        for ok in results:
+            T._split_add(self.URL, not ok)
+            T._peer_hist_add(self.URL, bool(ok), "v4")
+
+    def test_rare_meetings_are_no_peers(self, sample_tracker) -> None:
+        self._feed([0, 0, 1, 0, 0, 0])
+        assert T._split_info(self.URL) and T._split(self.URL) is None
+        assert T.PEER_FAILS.get(self.URL, 0) >= T.PEER_FAIL_LIMIT
+        t = sample_tracker
+        t.url, t.status = self.URL, 1
+        assert ntextra._state(t)[0] == "up_bad"
+        ev = ntextra._evidence(t, ntextra._tracker_api(t)) if hasattr(ntextra, "_tracker_api") else None
+        if ev is not None:
+            assert any("rarely reach the same one" in e for e in ev)
+
+    def test_a_third_passing_is_up_broken(self, sample_tracker) -> None:
+        self._feed([0, 1, 0, 0, 1, 0])
+        assert T._split(self.URL) and T.PEER_FAILS.get(self.URL, 0) == 0
+        t = sample_tracker
+        t.url, t.status = self.URL, 1
+        assert ntextra._state(t) == ("up_broken", ["split_swarm"])
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_explains_rare_meetings(self, flask_client: FlaskClient) -> None:
+        self.URL = "udp://akl.example:1/announce"
+        self._feed([0, 0, 1, 0, 0, 0])
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "clients rarely reach the same one" in html and "Up/Bad" in html

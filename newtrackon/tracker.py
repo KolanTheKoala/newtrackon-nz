@@ -1016,6 +1016,7 @@ def _peer_fam_bad(url):
 _SPLIT_FILE = "data/split_hist.json"
 SPLIT_HIST: dict = _jload(_SPLIT_FILE)  # url -> last PEER_WINDOW peer tests: 1 = B was handed back only itself, without A
 SPLIT_MIN = 2  # that many of the last PEER_WINDOW tests, while some tests pass: separate servers not sharing swarms
+SPLIT_MIN_RATE = 1 / 3  # and at least this share of its peer tests pass, or clients rarely meet: that's no peers (Up/Bad)
 
 
 def _split_add(url, flag):
@@ -1025,10 +1026,9 @@ def _split_add(url, flag):
         _jsave(SPLIT_HIST, _SPLIT_FILE)
 
 
-def _split(url):
+def _split_info(url):
     """{'split', 'of', 'passed', 'tests'} when the tracker splits its swarms across separate servers: in SPLIT_MIN+ of its
-    last peer tests client B got only itself back (the server it reached had never seen A), while other tests passed. It
-    works for clients that land on the same server, so it's Up/Broken, never Up/Bad, and no IP family is blamed."""
+    last peer tests client B got only itself back (the server it reached had never seen A), while other tests passed."""
     h = SPLIT_HIST.get(url) or []
     if h.count(1) < SPLIT_MIN:
         return None
@@ -1037,6 +1037,14 @@ def _split(url):
     if not passed:
         return None  # never shares anything: that's no peers, not a split
     return {"split": h.count(1), "of": len(h), "passed": passed, "tests": tests}
+
+
+def _split(url):
+    """A split swarm that still works for a fair share of clients (SPLIT_MIN_RATE of the tests pass, corpscorp: about half):
+    Up/Broken, never Up/Bad, and no IP family is blamed. Splits where clients rarely meet (tracker.dler.org: 1 in 10)
+    are no peers: Up/Bad, with the split explained on its page."""
+    i = _split_info(url)
+    return i if i and i["passed"] >= SPLIT_MIN_RATE * i["tests"] else None
 
 
 _NAT_FILE = "data/nat_seen.json"
@@ -1351,7 +1359,7 @@ def _bad_track(prev, st, now, bad=None):
     """The bad-stretch fields for a tracker's new state: bad_since (start of the stretch), bad_left (when it last
     stopped being Up/Bad, kept while a return within BAD_BRIDGE would continue the stretch) and bad_log (its closed
     Up/Bad spells over the last BAD_SHARE_DAYS)."""
-    d = _bad_stretch(prev, st, now)
+    d = _bad_stretch(prev, st, now, bad)
     d.update(_stretch(prev, st, now, _poor, "junk", JUNK_BRIDGE, bad))
     d.update(_stretch(prev, st, now, _useless, "useless", BAD_BRIDGE, bad))
     prev = prev or {}
@@ -1363,8 +1371,11 @@ def _bad_track(prev, st, now, bad=None):
     return d
 
 
-def _bad_stretch(prev, st, now):
-    return _stretch(prev, st, now, "up_bad", "bad", BAD_BRIDGE)
+def _bad_stretch(prev, st, now, bad=None):
+    """The Up/Bad clock: only real no-peers or fake-peers spells (_peer_bad). The feed ladder also files Up/Broken under
+    'up_bad', and counting that let a tracker that was Up/Broken for days be removed for 'no peers for 5 days' as soon
+    as it failed the peer test."""
+    return _stretch(prev, st, now, _peer_bad, "bad", BAD_BRIDGE, bad)
 
 
 def _stretch(prev, st, now, state, key, bridge, bad=None):
