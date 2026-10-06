@@ -1,5 +1,6 @@
 // Tracker map: Mercator world map, neighbouring countries in different colours (communist states red),
-// one small flag per tracker on its country, tooltip on hover, click to open the tracker in the main table.
+// one small flag per tracker over its country's capital (grids nudged apart where they'd overlap, with a line back to
+// the capital), tooltip on hover, click to open the tracker page.
 (function () {
     // fixed colours: communist states in distinct reds, Russia dark red, Greenland white, Brazil green
     var FIXED = {
@@ -46,7 +47,7 @@
     var tip = document.getElementById('nt-map-tip');
     var width = box.clientWidth, height = Math.round(width * 0.75);   // set from the projection once the map loads
     var svg = d3.select(box).append('svg').attr('width', '100%');
-    var world = svg.append('g'), flagsLayer = svg.append('g');
+    var world = svg.append('g'), leadLayer = svg.append('g'), flagsLayer = svg.append('g');
 
     function host(u) { try { return new URL(u).hostname; } catch (e) { return u; } }
     function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]; }); }
@@ -67,9 +68,10 @@
     Promise.all([
         d3.json('/static/data/countries-110m.json'),
         d3.json('/static/data/iso-numeric.json'),
-        d3.json('/api/details')
+        d3.json('/api/details'),
+        d3.json('/static/data/capitals.json')
     ]).then(function (r) {
-        var topo = r[0], iso = r[1], trackers = r[2];
+        var topo = r[0], iso = r[1], trackers = r[2], capitals = r[3] || {};
         var geoms = topo.objects.countries.geometries;
         geoms.forEach(function (g, i) { if (!g.id) { g.id = 'x' + i; } });   // Kosovo, Somaliland, N. Cyprus have no ISO number
         var countries = topojson.feature(topo, topo.objects.countries).features;
@@ -112,7 +114,7 @@
             .attr('stroke', '#0b1030').attr('stroke-width', 0.5)
             .append('title').text(function (f) { return f.properties.name; });
 
-        // one flag per tracker, gridded around its country's centre
+        // one flag per tracker, gridded around its country's capital (its centre if no capital is known)
         var byCountry = {}, placed = 0;
         trackers.forEach(function (t) {
             var cc = (t.country_codes || [])[0];
@@ -121,20 +123,48 @@
         });
         var featById = {};
         countries.forEach(function (f) { featById[f.id] = f; });
-        var flags = [];
+        var flags = [], groups = [];
         Object.keys(byCountry).forEach(function (cc) {
             var f = featById[iso[cc]];
             var ts = byCountry[cc].sort(function (a, b) { return b.score - a.score; });
-            var lonlat = f ? mainCentroid(f) : SMALL[cc];
+            var lonlat = capitals[cc] || (f ? mainCentroid(f) : SMALL[cc]);
             var center = lonlat && projection(lonlat);
             if (!center) { return; }
             var cols = Math.ceil(Math.sqrt(ts.length)), rows = Math.ceil(ts.length / cols);
+            var g = {cc: cc, cx: center[0], cy: center[1], w: cols * (FLAG_W + GAP), h: rows * (FLAG_H + GAP), ox: 0, oy: 0};
+            groups.push(g);
             ts.forEach(function (t, k) {
-                flags.push({t: t, cc: cc, cx: center[0], cy: center[1],
+                flags.push({t: t, cc: cc, g: g, cx: center[0], cy: center[1],
                     dx: (k % cols - (cols - 1) / 2) * (FLAG_W + GAP), dy: (Math.floor(k / cols) - (rows - 1) / 2) * (FLAG_H + GAP)});
                 placed++;
             });
         });
+        // capitals close together (Washington and Ottawa, Western Europe): push overlapping grids apart in screen space,
+        // recomputed at every zoom so they settle back over their capitals as the map spreads out
+        function separate(transform) {
+            groups.forEach(function (g) { var p = transform.apply([g.cx, g.cy]); g.px = p[0]; g.py = p[1]; g.ox = 0; g.oy = 0; });
+            for (var it = 0; it < 120; it++) {
+                var moved = false;
+                for (var i = 0; i < groups.length; i++) {
+                    for (var j = i + 1; j < groups.length; j++) {
+                        var a = groups[i], b = groups[j];
+                        var ddx = (b.px + b.ox) - (a.px + a.ox), ddy = (b.py + b.oy) - (a.py + a.oy);
+                        var overX = (a.w + b.w) / 2 + GAP - Math.abs(ddx), overY = (a.h + b.h) / 2 + GAP - Math.abs(ddy);
+                        if (overX <= 0 || overY <= 0) { continue; }
+                        moved = true;
+                        if (overX < overY) {   // the smaller overlap is the cheaper way out; half each
+                            var sx = (ddx >= 0 ? 1 : -1) * (overX / 2 + 0.5); a.ox -= sx; b.ox += sx;
+                        } else {
+                            var sy = (ddy >= 0 ? 1 : -1) * (overY / 2 + 0.5); a.oy -= sy; b.oy += sy;
+                        }
+                    }
+                }
+                if (!moved) { break; }
+            }
+        }
+        // a dot on each capital, and a thin line to its flags when they had to move away from it
+        var leads = leadLayer.selectAll('line').data(groups).join('line').attr('stroke', '#e8eaf6').attr('stroke-width', 1).attr('opacity', 0.8);
+        var dots = leadLayer.selectAll('circle').data(groups).join('circle').attr('r', 2.2).attr('fill', '#e8eaf6').attr('stroke', '#0b1030').attr('stroke-width', 0.8);
         var flagSel = flagsLayer.selectAll('g').data(flags).join('g').attr('class', 'nt-flag').style('cursor', 'pointer');
         flagSel.append('rect').attr('x', -1.5).attr('y', -1.5).attr('width', FLAG_W + 3).attr('height', FLAG_H + 3).attr('rx', 2)
             .attr('fill', function (d) { return STATUS_COLOR[d.t.status] || '#ff9100'; });
@@ -142,10 +172,15 @@
             .attr('width', FLAG_W).attr('height', FLAG_H).attr('preserveAspectRatio', 'none');
 
         function position(transform) {
+            separate(transform);
             flagSel.attr('transform', function (d) {
-                var p = transform.apply([d.cx, d.cy]);
-                return 'translate(' + (p[0] + d.dx - FLAG_W / 2) + ',' + (p[1] + d.dy - FLAG_H / 2) + ')';
+                return 'translate(' + (d.g.px + d.g.ox + d.dx - FLAG_W / 2) + ',' + (d.g.py + d.g.oy + d.dy - FLAG_H / 2) + ')';
             });
+            dots.attr('cx', function (g) { return g.px; }).attr('cy', function (g) { return g.py; })
+                .style('display', function (g) { return Math.abs(g.ox) + Math.abs(g.oy) > 2 ? null : 'none'; });
+            leads.attr('x1', function (g) { return g.px; }).attr('y1', function (g) { return g.py; })
+                .attr('x2', function (g) { return g.px + g.ox; }).attr('y2', function (g) { return g.py + g.oy; })
+                .style('display', function (g) { return Math.abs(g.ox) + Math.abs(g.oy) > 2 ? null : 'none'; });
         }
         position(d3.zoomIdentity);
         svg.call(d3.zoom().scaleExtent([1, 12]).translateExtent([[0, 0], [width, height]]).on('zoom', function (e) {

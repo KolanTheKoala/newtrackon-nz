@@ -284,6 +284,9 @@ class TestMap:
             assert flask_client.get(f).status_code == 200, f
         iso = flask_client.get("/static/data/iso-numeric.json").get_json()
         assert iso["nz"] == "554" and iso["cn"] == "156" and all(c in iso for c in LIVE_CODES)
+        caps = flask_client.get("/static/data/capitals.json").get_json()  # flags sit over the capital
+        assert set(iso) <= set(caps) and caps["nz"] == [174.78, -41.29] and caps["us"] == [-77.04, 38.91]
+        assert all(-180 <= lon <= 180 and -90 <= lat <= 90 for lon, lat in caps.values())
 
     def test_details_country_codes(self, flask_client: FlaskClient) -> None:
         d = {t["url"]: t for t in flask_client.get("/api/details").get_json()}
