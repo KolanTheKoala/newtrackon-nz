@@ -1065,7 +1065,8 @@ _PEER_ANY = [0.0]  # last conclusive peer test for any tracker: the test itself 
 def _peer_conclusive(url, ok, now=None):
     now = now or time()
     if ok is not None:
-        _PEER_ANY[0] = now
+        if ok != "exit_blocked":  # only a real verdict shows the test itself works
+            _PEER_ANY[0] = now
         if now - PEER_LAST.get(url, 0) < 3600:
             return  # saved at most hourly
         PEER_LAST[url] = int(now)

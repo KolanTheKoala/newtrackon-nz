@@ -851,6 +851,15 @@ def _two_distinct(r):
     return isinstance(s, int) and isinstance(l, int) and s >= 1 and l >= 1
 
 
+def _swarm_empty(resp, want):
+    """A same-IP second client's reply: True when the tracker isn't tracking the swarm at all (no peers, and nobody counted,
+    right after our seed announced). That can only be a failure; anything else from a same-IP client proves nothing."""
+    if any(x.get("port") == want for x in _probe_peers(resp)):
+        return False
+    counts = [resp.get(k) for k in ("seeds", "leechers", "complete", "incomplete")]
+    return not _probe_peers(resp) and not any(isinstance(c, int) and c > 0 for c in counts)
+
+
 def peer_probe(only_family: int | None = None) -> bool | None:
     """Authenticity tests on the random hash the check just announced from the VPS (as seeder A).
     The second client B announces from a DIFFERENT IP (the AirVPN exit), so trackers that merge
@@ -887,9 +896,16 @@ def peer_probe(only_family: int | None = None) -> bool | None:
                     sb = None
                     sleep(0.5)
             if ok is None:
-                # No VPN exit got an answer: no verdict. (A second client from this server's own IP proves nothing: a
-                # tracker that only shares peers within one IP passes that, though real users never meet.)
+                # No VPN exit got an answer: no verdict. (A second client from this server's own IP can't prove a pass: a
+                # tracker that only shares peers within one IP passes that, though real users never meet. It can prove a
+                # failure: a tracker that counts nobody right after our seed announced isn't tracking anything.)
                 extra["exit_blocked"] = True
+                try:
+                    sb, annb = _udp_session(a, b, None)
+                    if _swarm_empty(annb(pid_b, 1, want + 1, 2, thash), want):
+                        ok, extra["same_ip_fail"] = False, True
+                except Exception:
+                    pass
             sa_, anna = _udp_session(a, b, None)
             try:
                 if ok:
@@ -977,14 +993,20 @@ def peer_probe(only_family: int | None = None) -> bool | None:
         except Exception:
             sleep(0.5)
     if ok is None:
-        # No VPN exit got an answer: no verdict (a same-IP second client would pass a tracker that only shares peers within
-        # one IP, see the UDP branch)
+        # No VPN exit got an answer: no verdict, unless a same-IP second client shows it tracks nobody (see the UDP branch)
         extra["exit_blocked"] = True
+        try:
+            sb_s = hsess("0.0.0.0" if fam == socket.AF_INET else "::")
+            if _swarm_empty(hann(sb_s, pid_b, 1, want + 1, "started"), want):
+                ok, extra["same_ip_fail"] = False, True
+            hann(sb_s, pid_b, 1, want + 1, "stopped")
+        except Exception:
+            pass
         try:
             hann(sa_s, pid_a, 0, want, "stopped")
         except Exception:
             pass
-        return None
+        return ok
     try:
         if ok:
             hann(sa_s, pid_a, 0, want, "stopped")

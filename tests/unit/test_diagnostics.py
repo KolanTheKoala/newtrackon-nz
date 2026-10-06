@@ -674,3 +674,60 @@ class TestNatHiddenAddresses:
         T._nat_seen_set(url, "v6", "172.17.0.1")
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
         assert "Over IPv6 it sees every client as 172.17.0.1, a private address" in html and "Docker" in html
+
+
+class TestSameIpCanOnlyFail:
+    """Exits blocked (parked domains' servers ignore VPN addresses): a same-IP client can fail a tracker that tracks nobody."""
+
+    def test_swarm_empty_rule(self) -> None:
+        assert scraper._swarm_empty({"interval": 86400, "peers": []}, 6881) is True  # Team Internet parking reply
+        assert scraper._swarm_empty({"peers": [], "complete": 0, "incomplete": 0}, 6881) is True
+        assert scraper._swarm_empty({"peers": [], "complete": 1, "incomplete": 0}, 6881) is False  # counted our seed
+        assert scraper._swarm_empty({"peers": [{"IP": "8.8.8.8", "port": 6881}]}, 6881) is False
+        assert scraper._swarm_empty({"peers": [{"IP": "8.8.8.8", "port": 9}]}, 6881) is False  # fake peers: judged elsewhere
+
+    def _udp(self, monkeypatch, reply):
+        import socket
+
+        def session(fam, sa, src):
+            if src:
+                raise TimeoutError
+            return type("S", (), {"close": lambda self: None, "settimeout": lambda self, t: None, "sendall": lambda self, b: None,
+                                  "recv": lambda self, n: (_ for _ in ()).throw(TimeoutError)})(), (lambda *a: reply)
+        monkeypatch.setattr(scraper, "_udp_session", session)
+        monkeypatch.setattr(scraper, "_probe_srcs", lambda fam, key=None: ["10.0.0.1"])
+        scraper.rtt.probe = ("udp", b"h" * 20, socket.AF_INET, ("192.0.2.1", 6969), b"p" * 20)
+        return scraper.peer_probe()
+
+    def test_udp_empty_swarm_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._udp(monkeypatch, {"peers": [], "seeds": 0, "leechers": 0}) is False
+        assert scraper.rtt.probe_extra["same_ip_fail"] is True
+
+    def test_udp_counted_but_not_shared_is_no_verdict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._udp(monkeypatch, {"peers": [], "seeds": 1, "leechers": 1}) is None
+
+    def test_http_parking_reply_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class R:
+            status_code, content = 200, b"d8:intervali86400e5:peers0:e"
+
+        class Sess:
+            def __init__(self, src): self.src = src
+            def mount(self, *a): pass
+            def get(self, url, **k):
+                if self.src not in ("0.0.0.0", "::"):
+                    raise TimeoutError
+                return R()
+        monkeypatch.setattr(scraper, "_SrcAdapter", lambda src: src)
+        monkeypatch.setattr(scraper.requests, "Session", lambda: type("X", (), {"_src": None, "mount": lambda self, p, ad: setattr(self, "_src", ad),
+                                                                                 "get": lambda self, url, **k: Sess(self._src).get(url)})())
+        monkeypatch.setattr(scraper, "_probe_src", lambda f: "10.0.0.1")
+        monkeypatch.setattr(scraper, "_probe_srcs", lambda fam, key=None: ["10.0.0.1"])
+        monkeypatch.setattr(scraper.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("192.0.2.9", 80))])
+        scraper.rtt.probe = ("http", b"h" * 20, "http://parked.example:80/announce", None, b"p" * 20)
+        assert scraper.peer_probe() is False and scraper.rtt.probe_extra["same_ip_fail"] is True
+
+
+def test_exit_blocked_does_not_claim_the_peer_test_works() -> None:
+    T._PEER_ANY[0] = 0
+    T._peer_conclusive("udp://x.example:1/announce", "exit_blocked")
+    assert T._PEER_ANY[0] == 0
