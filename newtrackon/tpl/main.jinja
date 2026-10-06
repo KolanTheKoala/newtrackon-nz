@@ -117,6 +117,13 @@
         if (!rows.length) return;
         var dt = jQuery(t).DataTable();
         dt.clear(); dt.rows.add(Array.prototype.slice.call(rows)); dt.draw(false);  // keeps sort, page, search
+        // and what's counted from the same data: the totals under the table, the recent events, the monitor line
+        var cap = nt.querySelector('caption'), mine = t.querySelector('caption');
+        if (cap && mine) mine.innerHTML = cap.innerHTML;
+        ['.nt-events', '.nt-health'].forEach(function (sel) {
+          var a = doc.querySelector(sel), b = document.querySelector(sel);
+          if (a && b) b.innerHTML = a.innerHTML;
+        });
         last = Date.now();
       })
       .catch(function () {})
