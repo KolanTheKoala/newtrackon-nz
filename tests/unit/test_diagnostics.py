@@ -1049,3 +1049,17 @@ class TestWhatThePeerTestSaw:
         assert "Last peer test saw" in html and "as 172.17.0.1, a private address" in html and "with its real address" in html
         d = flask_client.get("/api/tracker/akl.example").get_json()
         assert d["peer_test"]["last_seen"]["v6"]["a_ip"] == "172.17.0.1" and d["unusable_address"] == {"v6": "172.17.0.1"}
+
+
+@pytest.mark.usefixtures("region_db")
+def test_up_bad_families_are_orange_not_green(flask_client: FlaskClient) -> None:
+    """tracker.fansub.id answers on both families but hands out its proxy's private address on both: neither is usable,
+    so the badge mustn't show them green ('works')."""
+    import re
+    url = "udp://akl.example:1/announce"
+    T.FAMS[url] = {"v4": True, "v6": True}
+    for _ in range(3):
+        T._peer_hist_add(url, False, "v4")
+        T._peer_hist_add(url, False, "v6")
+    row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>.*?</tr>', flask_client.get("/").get_data(as_text=True), re.S).group(0)
+    assert 'color:#ffa500">IPv4' in row and 'color:#ffa500">IPv6' in row and 'color:#28a745">IPv' not in row
