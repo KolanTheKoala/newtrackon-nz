@@ -731,3 +731,52 @@ def test_exit_blocked_does_not_claim_the_peer_test_works() -> None:
     T._PEER_ANY[0] = 0
     T._peer_conclusive("udp://x.example:1/announce", "exit_blocked")
     assert T._PEER_ANY[0] == 0
+
+
+class TestUdpResend:
+    """One lost UDP packet must not fail a check: the request is resent within the attempt (tracker.tryhackx.org, whose
+    IPv4 address is dead, was marked Down whenever its single IPv6 packet was lost)."""
+
+    class Sock:
+        def __init__(self, drop: int, stray: bool = False) -> None:
+            self.drop, self.stray, self.sent, self.queue = drop, stray, 0, []
+
+        def settimeout(self, t: float) -> None:
+            self.t = t
+
+        def sendall(self, req: bytes) -> None:
+            self.sent += 1
+            if self.sent > self.drop:
+                if self.stray:
+                    self.queue.append(b"\x00\x00\x00\x00" + b"zzzz" + b"\x00" * 8)  # another transaction's reply
+                self.queue.append(b"\x00\x00\x00\x00" + req[12:16] + b"\x00" * 8)
+
+        def recv(self, n: int) -> bytes:
+            if self.queue:
+                return self.queue.pop(0)
+            __import__("time").sleep(min(self.t, 0.05))
+            raise TimeoutError
+
+    @pytest.fixture(autouse=True)
+    def _fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "UDP_RESEND", (0.1, 0.2))
+
+    def test_first_two_packets_lost_still_answers(self) -> None:
+        req, tid = scraper.udp_create_binary_connection_request()
+        s = self.Sock(drop=2)
+        buf, _ = scraper._udp_xchg(s, req, 0.5)
+        assert s.sent == 3 and buf[4:8] == req[12:16]
+
+    def test_reply_for_another_request_is_skipped(self) -> None:
+        req, tid = scraper.udp_create_binary_connection_request()
+        s = self.Sock(drop=0, stray=True)
+        assert scraper._udp_xchg(s, req, 0.5)[0][4:8] == req[12:16] and s.sent == 1
+
+    def test_all_lost_times_out_within_the_limit(self) -> None:
+        import time
+        req, tid = scraper.udp_create_binary_connection_request()
+        s = self.Sock(drop=99)
+        t0 = time.time()
+        with pytest.raises(TimeoutError):
+            scraper._udp_xchg(s, req, 0.4)
+        assert s.sent == 3 and time.time() - t0 < 1.0

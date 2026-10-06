@@ -539,6 +539,35 @@ def ordered_addrs(host, port, family=0, socktype=socket.SOCK_DGRAM):
     return sorted(uniq, key=lambda r: _addr_rank(host, port, r[4][0]))
 
 
+UDP_RESEND = (3.0, 6.0)  # resend a UDP request if no reply after 3 s and 6 s (BEP 15 clients retransmit too)
+
+
+def _udp_xchg(sock, req: bytes, total: float = 10.0) -> tuple[bytes, float]:
+    """Send req, resending it at UDP_RESEND while no reply has come, within `total` seconds. One lost packet must not
+    fail a check. Replies that aren't for this request (another transaction ID) are skipped. Returns (reply, time of the
+    last send) so latency is measured from the copy that was answered (near enough). Raises TimeoutError."""
+    t_start = time()
+    sends = [0.0] + [t for t in UDP_RESEND if t < total]
+    tid = req[12:16]
+    t_sent = t_start
+    for i, at in enumerate(sends):
+        t_sent = time()
+        sock.sendall(req)
+        until = t_start + (sends[i + 1] if i + 1 < len(sends) else total)
+        while True:
+            left = until - time()
+            if left <= 0:
+                break
+            sock.settimeout(left)
+            try:
+                buf = sock.recv(2048)
+            except TimeoutError:  # socket.timeout is the same class
+                break
+            if buf[4:8] == tid:
+                return buf, t_sent
+    raise TimeoutError("UDP timeout")
+
+
 def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
     parsed_tracker = urlparse(udp_url)
     logger.info("%s Scraping UDP", udp_url)
@@ -594,15 +623,13 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
             # Get connection ID
             req, transaction_id = udp_create_binary_connection_request()
             _t0 = time()
-            sock.sendall(req)
-            buf = sock.recv(2048)
-            _rtt_ms = int((time() - _t0) * 1000)
+            buf, _t_sent = _udp_xchg(sock, req, 10.0)
+            _rtt_ms = int((time() - _t_sent) * 1000)
             connection_id = udp_parse_connection_response(buf, transaction_id)
 
             # Announce
             req, transaction_id = udp_create_announce_request(connection_id, thash, peer_id)
-            sock.sendall(req)
-            buf = sock.recv(2048)
+            buf, _ = _udp_xchg(sock, req, 10.0)
             ip_family = sock.family
             sock.close()
 
@@ -829,16 +856,14 @@ def _udp_session(family, sa, src):
         require_public(sa)
         s.connect(sa)
         req, tid = udp_create_binary_connection_request()
-        s.sendall(req)
-        cid = udp_parse_connection_response(s.recv(2048), tid)
+        cid = udp_parse_connection_response(_udp_xchg(s, req, 5.0)[0], tid)
     except Exception:
         s.close()
         raise
 
     def ann(peer_id, left, port, event, th):
         rq, t = udp_create_announce_request(cid, th, peer_id, left=left, port=port, event=event)
-        s.sendall(rq)
-        return udp_parse_announce_response(s.recv(2048), t, s.family)
+        return udp_parse_announce_response(_udp_xchg(s, rq, 5.0)[0], t, s.family)
 
     return s, ann
 
