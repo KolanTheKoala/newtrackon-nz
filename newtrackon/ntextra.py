@@ -117,7 +117,11 @@ def _detail(t):
         "peer_test": {"latest": {True: "pass", False: "fail", None: "n/a"}[T.PEER_OK.get(t.url)] if up else "n/a",
                       "passed": sum(ph), "of": len(ph),
                       # per family, once tested on that family: {"v4": {"passed", "of"}, ...}
-                      "by_family": {k: {"passed": sum(v), "of": len(v)} for k, v in sorted((T.PEER_HIST_FAM.get(t.url) or {}).items()) if k != "?" and v}},
+                      "by_family": {k: {"passed": sum(v), "of": len(v)} for k, v in sorted((T.PEER_HIST_FAM.get(t.url) or {}).items()) if k != "?" and v},
+                      # what our second test client was handed in the last test on each family (see _seen_text)
+                      "last_seen": {k: dict(v) for k, v in sorted((T.PEER_SEEN.get(t.url) or {}).items())}},
+        # an address it hands out instead of the client's real one (Docker, NAT, a proxy or CDN), per family
+        "unusable_address": {k: v["ip"] for k, v in sorted((T.NAT_SEEN.get(t.url) or {}).items())},
         "fake_peers": {"latest": T.FAKE_N.get(t.url), "streak": T.FAKE_FAILS.get(t.url, 0)},
         "stale_peers": bool(T.STALE.get(t.url)),
         "spoof_proof": True if t.url.startswith("http") else T.CID_OK.get(t.url),
@@ -536,6 +540,33 @@ def _fix_page():
     return render_template("static/fix.jinja", active="Fix", titles=FIX_TITLES)
 
 
+def _seen_text(s):
+    """One plain sentence for what client B was handed in a peer test (PEER_SEEN entry)."""
+    if s.get("swarm_empty"):
+        return ("it ignores our second test client's network, and a second client from this server got nothing back, with "
+                "nobody counted: it isn't tracking the torrent at all")
+    counts = ""
+    if s.get("seeds") is not None or s.get("leech") is not None:
+        counts = " (it reported %s seeder%s, %s leecher%s)" % (s.get("seeds", 0) or 0, "" if (s.get("seeds") or 0) == 1 else "s",
+                                                               s.get("leech", 0) or 0, "" if (s.get("leech") or 0) == 1 else "s")
+    if s.get("a") == "ok":
+        out = "our second test client was handed our first one, with its real address: clients find each other"
+    elif s.get("a") == "private":
+        out = ("our second test client was handed our first one as %s, a private address nobody can connect to"
+               % s.get("a_ip"))
+    elif s.get("a") == "other":
+        out = ("our second test client was handed our first one as %s, an address that isn't ours (a proxy or CDN's): nobody "
+               "can connect to it" % s.get("a_ip"))
+    elif s.get("self"):
+        out = ("our second test client was handed back only itself: the server it reached had never seen our first client"
+               + counts)
+    else:
+        out = "our second test client was handed no peers at all" + counts
+    if s.get("foreign"):
+        out += ", plus %d peer%s that can't exist (fake)" % (s["foreign"], "" if s["foreign"] == 1 else "s")
+    return out
+
+
 def _ago(epoch):
     return T._dur(epoch).replace("\u2007", "").strip()
 
@@ -829,6 +860,8 @@ def register(app):
     app.jinja_env.globals["nt_tags"] = _filter_tags
     app.jinja_env.globals["nt_broken_why"] = _broken_why
     app.jinja_env.globals["nt_version"] = _version
+    app.jinja_env.globals["nt_seen_text"] = _seen_text
+    app.jinja_env.globals["nt_ago_of"] = _ago
     app.jinja_env.globals["nt_fam_nopeers"] = lambda t: T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
     app.jinja_env.globals["nt_now"] = lambda: int(__import__("time").time())
     app.jinja_env.globals["nt_events"] = lambda n=10, days=None: list(reversed(

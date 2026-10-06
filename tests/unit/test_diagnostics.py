@@ -1013,3 +1013,39 @@ def test_ipv6_works_filter_excludes_a_family_without_peers(flask_client: FlaskCl
         T._peer_hist_add(url, False, "v4")  # now no peers anywhere: Up/Bad
     row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>', flask_client.get("/").get_data(as_text=True)).group(0)
     assert 'data-nt-fam=""' in row
+
+
+class TestWhatThePeerTestSaw:
+    """The tracker page says what our second client was handed, per family; the API has the same, plus the unusable
+    address. VPN exit addresses are never recorded."""
+
+    def test_probe_records_what_b_got(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "my_ipv4", "160.30.240.158")
+        extra: dict = {}
+        scraper._probe_eval({"peers": [{"IP": "172.17.0.1", "port": 6881}, {"IP": "38.88.124.109", "port": 6882}], "seeds": 1, "leechers": 1}, 6881, extra)
+        assert extra["seen"] == {"a": "private", "a_ip": "172.17.0.1", "self": True, "foreign": 0, "seeds": 1, "leech": 1}
+        assert "38.88.124.109" not in str(extra["seen"])  # B's own (exit) address is never kept
+        scraper._probe_eval({"peers": [{"IP": "160.30.240.158", "port": 6881}]}, 6881, extra)
+        assert extra["seen"]["a"] == "ok" and extra["seen"]["a_ip"] is None
+
+    @pytest.mark.parametrize(("seen", "words"), [
+        ({"a": "ok"}, "with its real address"),
+        ({"a": "private", "a_ip": "172.17.0.1"}, "as 172.17.0.1, a private address"),
+        ({"a": "other", "a_ip": "104.21.83.32"}, "a proxy or CDN"),
+        ({"a": None, "self": True, "seeds": 0, "leech": 1}, "only itself"),
+        ({"a": None, "self": False, "seeds": 0, "leech": 0}, "no peers at all (it reported 0 seeders, 0 leechers)"),
+        ({"a": "ok", "foreign": 1}, "1 peer that can't exist"),
+        ({"swarm_empty": True}, "isn't tracking the torrent at all")])
+    def test_sentences(self, seen, words) -> None:
+        assert words in ntextra._seen_text(seen)
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_and_api(self, flask_client: FlaskClient) -> None:
+        url = "udp://akl.example:1/announce"
+        T._peer_seen_set(url, "v6", {"a": "private", "a_ip": "172.17.0.1", "self": True, "foreign": 0, "seeds": 1, "leech": 1}, False)
+        T._peer_seen_set(url, "v4", {"a": "ok", "a_ip": None, "self": False, "foreign": 0, "seeds": 1, "leech": 1}, True)
+        T._nat_seen_set(url, "v6", "172.17.0.1")
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "Last peer test saw" in html and "as 172.17.0.1, a private address" in html and "with its real address" in html
+        d = flask_client.get("/api/tracker/akl.example").get_json()
+        assert d["peer_test"]["last_seen"]["v6"]["a_ip"] == "172.17.0.1" and d["unusable_address"] == {"v6": "172.17.0.1"}

@@ -807,7 +807,13 @@ def _probe_eval(resp, want, extra):
     # B handed back only itself, never A: A's announce went to a different server than B's (separate tracker instances
     # behind one name or load balancer, not sharing swarms)
     extra["split"] = not a_entries and any(x.get("port") == want + 1 for x in peers)
-    return any(_a_ok(_peer_ip(x)) for x in a_entries)
+    ok = any(_a_ok(_peer_ip(x)) for x in a_entries)
+    # what B was handed, for the tracker page (never the VPN exit's address: only a bad address the tracker gave for A)
+    extra["seen"] = {"a": "ok" if ok else (("other" if ip_is_public(hidden[0]) else "private") if hidden else None),
+                     "a_ip": None if ok or not hidden else hidden[0], "self": extra["split"] or any(x.get("port") == want + 1 for x in peers),
+                     "foreign": extra["foreign"], "seeds": seeds if isinstance(seeds, int) else None,
+                     "leech": leech if isinstance(leech, int) else None}
+    return ok
 
 
 def _probe_src(family):
@@ -954,6 +960,7 @@ def peer_probe(only_family: int | None = None) -> bool | None:
                     sb, annb = _udp_session(a, b, None)
                     if _swarm_empty(annb(pid_b, 1, want + 1, 2, thash), want):
                         ok, extra["same_ip_fail"] = False, True
+                        extra["seen"] = {"swarm_empty": True}
                 except Exception:
                     pass
             sa_, anna = _udp_session(a, b, None)
@@ -1049,6 +1056,7 @@ def peer_probe(only_family: int | None = None) -> bool | None:
             sb_s = hsess("0.0.0.0" if fam == socket.AF_INET else "::")
             if _swarm_empty(hann(sb_s, pid_b, 1, want + 1, "started"), want):
                 ok, extra["same_ip_fail"] = False, True
+                extra["seen"] = {"swarm_empty": True}
             hann(sb_s, pid_b, 1, want + 1, "stopped")
         except Exception:
             pass

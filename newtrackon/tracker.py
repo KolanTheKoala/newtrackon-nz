@@ -211,6 +211,7 @@ class Tracker:
                 _peer_hist_add(self.url, False, _ex.get("fam"))
             if self.peer_ok is not None:
                 _nat_seen_set(self.url, _ex.get("fam"), _ex.get("nat_ip"))
+                _peer_seen_set(self.url, _ex.get("fam"), _ex.get("seen"), self.peer_ok)
             # a test that couldn't run because the VPN exits got no answer is a limit of the test, not the tracker's fault:
             # it doesn't count towards the 7-day "never conclusive" rule
             _peer_conclusive(self.url, "exit_blocked" if (self.peer_ok is None and _ex.get("exit_blocked")) else self.peer_ok)
@@ -222,7 +223,9 @@ class Tracker:
                 if _ok2 is not None:
                     _split_add(self.url, (getattr(scraper.rtt, "family_extra", None) or {}).get("split"))
                     _peer_hist_add(self.url, _ok2, _other)
-                    _nat_seen_set(self.url, _other, (getattr(scraper.rtt, "family_extra", None) or {}).get("nat_ip"))
+                    _fx = getattr(scraper.rtt, "family_extra", None) or {}
+                    _nat_seen_set(self.url, _other, _fx.get("nat_ip"))
+                    _peer_seen_set(self.url, _other, _fx.get("seen"), _ok2)
             logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             self.is_up()
             _FAILSTREAK[0] = 0  # a success: not an outage
@@ -1015,6 +1018,17 @@ def _split(url):
     are no peers: Up/Bad, with the split explained on its page."""
     i = _split_info(url)
     return i if i and i["passed"] >= SPLIT_MIN_RATE * i["tests"] else None
+
+
+_PEER_SEEN_FILE = "data/peer_seen.json"
+PEER_SEEN: dict = _jload(_PEER_SEEN_FILE)  # url -> {"v4"/"v6": what client B was handed in the last peer test, + "ok", "t"}
+
+
+def _peer_seen_set(url, fam, seen, ok):
+    if fam not in ("v4", "v6") or not seen:
+        return
+    PEER_SEEN.setdefault(url, {})[fam] = {**seen, "ok": bool(ok), "t": int(time())}
+    _jsave(PEER_SEEN, _PEER_SEEN_FILE)
 
 
 _NAT_FILE = "data/nat_seen.json"
