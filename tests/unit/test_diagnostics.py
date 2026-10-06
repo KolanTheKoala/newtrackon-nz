@@ -897,3 +897,55 @@ class TestMainTableUsesTheSharedRule:
             T._peer_hist_add(self.URL, bool(ok), "v4")
         row = self._cell(flask_client)
         assert ">Up/Broken<" in row and "separate servers" in row
+
+
+def _scenario(url, name):
+    """Put one tracker into a problem state through the same functions the check loop uses."""
+    if name in ("no_peers", "nopeers_ipv6", "dead_v6_and_no_peers"):
+        for _ in range(6):
+            T._peer_hist_add(url, name == "nopeers_ipv6", "v4")
+            T._peer_hist_add(url, False, "v6")
+    if name == "split":
+        for ok, sp in ((0, 1), (0, 1), (1, 0), (1, 0), (0, 1), (1, 0)):
+            T._split_add(url, sp)
+            T._peer_hist_add(url, bool(ok), "v4" if len(T.PEER_HIST_FAM.get(url, {}).get("v4", [])) < 3 else "v6")
+    if name == "fake":
+        for _ in range(3):
+            T._fake_hist_add(url, True)
+    if name in ("dead_v6", "dead_v6_and_no_peers"):
+        T.FAM_FAILS[url] = {"fam": "v6", "n": 3}
+
+
+@pytest.mark.usefixtures("region_db")
+@pytest.mark.parametrize(("name", "want"), [("ok", None), ("no_peers", "Up/Bad"), ("fake", "Up/Bad"), ("dead_v6", "Up/Broken"),
+                                            ("nopeers_ipv6", "Up/Broken"), ("split", "Up/Broken"), ("dead_v6_and_no_peers", "Up/Bad")])
+def test_all_three_copies_of_the_status_rule_agree(name, want, sample_tracker, flask_client: FlaskClient) -> None:
+    """The status rule lives in three places: ntextra._state (page, API), the feed ladder in Tracker._emit_events, and the
+    main table's status cell. A cause known to one but not the others showed a different label in the table (farted.net,
+    Up/Junk vs Up/Broken). Every problem combination must give the same label in all three."""
+    import re
+    from collections import deque
+    from time import time
+    # 1. page / API
+    t = sample_tracker
+    t.url = "udp://rule.example:1/announce"
+    t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 1440, maxlen=1440)
+    _scenario(t.url, name)
+    t.update_uptime()
+    st, _bad = ntextra._state(t)
+    page = ntextra._STATUS_TEXT.get(st)
+    # 2. feed ladder
+    T.LAST_STATE.pop(t.url, None)
+    t._emit_events()
+    s = T.LAST_STATE[t.url]
+    feed = T._nt_bad_lbl(s["bad"]) if s["st"] == "up_bad" else {"up_junk": "Up/Junk"}.get(s["st"])
+    # 3. main table, same state on a listed tracker
+    akl = "udp://akl.example:1/announce"
+    _scenario(akl, name)
+    html = flask_client.get("/").get_data(as_text=True)
+    row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>.*?</tr>', html, re.S).group(0)
+    table = re.findall(r'<span class="nt-st">.*?>(Up/[A-Za-z]+|Down)<', row, re.S)[0]
+    if want is None:  # healthy: the table says Up/Good and the page script refines it (Up/Slow, Up/New...)
+        assert page not in ("Up/Bad", "Up/Broken", "Up/Junk") and feed is None and table == "Up/Good"
+    else:
+        assert (page, feed, table) == (want, want, want)
