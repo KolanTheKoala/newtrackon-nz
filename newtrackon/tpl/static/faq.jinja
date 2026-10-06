@@ -16,16 +16,21 @@
         <p>The <a href="/submitted">Submitted</a> page shows the reason for every attempt. The usual ones:</p>
         <ul>
             <li>It's the same server as a tracker already listed (only one is kept, preferring UDP, then HTTP, then HTTPS).</li>
-            <li>It wasn't answering when it was tried.</li>
+            <li>It wasn't answering when it was tried, or it answered once but not again 30 minutes later (a new tracker must
+                answer twice).</li>
             <li>It only accepts certain torrents (private or whitelisted trackers can't be tested).</li>
             <li>Its hostname points to a private or local address.</li>
-            <li>It was removed in the last 30 days for being down or unreliable.</li>
+            <li>It's banned: it was removed for being down, unreliable or broken (30 days the first time, 90 the second, for good after
+                that). The ban also covers its other names and IP address. If it's fixed, press <b>Check again now</b> on its page.</li>
+            <li>Too many submissions from your address: up to 20 submissions and 500 trackers an hour.</li>
             <li>Its owner opted out with a <a href="https://www.bittorrent.org/beps/bep_0034.html">BEP34</a> DNS record.</li>
         </ul>
 
         <h5 class="mt-4">A tracker works for me but shows as Down or Up/Bad. Why?</h5>
-        <p>It's tested from several countries, and must hand out real peers and no fake ones. See <a href="/about">About</a> for what each status means,
-            and <a href="/fix">How to fix a tracker</a> if it's yours.</p>
+        <p>It's tested from several countries, and must hand out real peers and no fake ones. Answering isn't enough: an Up/Bad
+            tracker often hands out an address nobody can connect to (a private, Docker, proxy or CDN address), or its domain has
+            expired and a parking service now answers in its place. Its own page says exactly what the checks saw. See
+            <a href="/about">About</a> for what each status means, and <a href="/fix">How to fix a tracker</a> if it's yours.</p>
 
         <h5 class="mt-4">How is the score worked out?</h5>
         <p>Availability &times; stability over recent days, with penalties for failed tests and very slow replies. Details on the

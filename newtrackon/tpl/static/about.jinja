@@ -12,7 +12,8 @@ tracker operators can see what's wrong and how to fix it on <a href="/fix">How t
 <h4>What a check tests</h4>
 <ul>
 <li><b>It answers</b>: a real announce over UDP, HTTP or HTTPS, the same request a torrent client sends.</li>
-<li><b>It hands out peers</b>: a second test client, from a different country, must be told about the first one.</li>
+<li><b>It hands out peers</b>: a second test client, from a different country, must be told about the first one, with its
+    real address (not a private, proxy or CDN address nobody could connect to). IPv4 and IPv6 are tested separately.</li>
 <li><b>No fake peers</b>: the test torrent is a random one only this site knows, so any other peer in the reply is fake.</li>
 <li><b>Every published address works</b>: IPv4 and IPv6 are each tested, from here and from abroad.</li>
 <li><b>Speed</b>: measured from four places: Oceania, Asia, Europe and North America.</li>
@@ -21,7 +22,8 @@ tracker operators can see what's wrong and how to fix it on <a href="/fix">How t
 
 <h4>The score (0&ndash;100)</h4>
 <p><b>Availability &times; stability</b>, weighted towards the last week. A single outage costs little; constant up-and-down is punished
-hard. Slow trackers lose a few points (none under 150&nbsp;ms, &minus;10 at 650&nbsp;ms, at most &minus;40). New trackers start
+hard. Slow trackers lose a few points (none under 150&nbsp;ms, &minus;10 at 650&nbsp;ms, at most &minus;40), and so do odd announce
+intervals (none from 15&nbsp;minutes to 3&nbsp;hours, at most &minus;5 at 2&nbsp;minutes or 24&nbsp;hours). New trackers start
 capped at 80 and earn up to 100 over their first 7 days.</p>
 <table class="table table-sm" style="max-width:520px">
 <thead><tr><th>Over two weeks</th><th>Score</th></tr></thead>
@@ -31,8 +33,8 @@ capped at 80 and earn up to 100 over their first 7 days.</p>
 <tr><td>Down half an hour in every 5 hours</td><td>57</td></tr>
 <tr><td>Flapping every hour</td><td>13</td></tr>
 </tbody></table>
-<p>Handing out no peers or fake peers sets the score to <b>0</b>; a dead IPv4 or IPv6 address caps it at <b>50</b>. Penalties lift as soon as the
-tracker behaves.</p>
+<p>Handing out no peers or fake peers sets the score to <b>0</b>. Being partly broken (a dead IPv4 or IPv6 address, one of them not
+sharing peers, or separate servers that don't share swarms) caps it at <b>50</b>. Penalties lift as soon as the tracker behaves.</p>
 
 <h4>Statuses</h4>
 <ul>
@@ -40,7 +42,9 @@ tracker behaves.</p>
 <li><b>Up/Slow</b>: reliable, but slow (300&nbsp;ms or more on average).</li>
 <li><b>Up/Unreliable</b>: under 90 because of dropouts. <b>Up/Junk</b>: under 50.</li>
 <li><b>Up/New</b>: healthy, still building its first week of history.</li>
-<li><b>Up/Bad</b>: answers but fails a test (no peers, or fake peers). <b>Up/Broken</b>: one of its IPv4/IPv6 addresses is dead.</li>
+<li><b>Up/Bad</b>: answers but fails a test: it hands out no usable peers, or fake ones.</li>
+<li><b>Up/Broken</b>: works for some clients only: its IPv4 or IPv6 address is dead or doesn't share peers, or it runs separate
+    servers that don't share swarms. Still listed, as it's useful to some.</li>
 <li><b style="color:#e0e0e0">Down</b> &#129702;: not answering, with how long.</li>
 </ul>
 
@@ -49,7 +53,16 @@ tracker behaves.</p>
 ones). A tracker's own announce interval doesn't matter.</p>
 
 <h4>Removal</h4>
-<p>After 3+ days listed, a tracker is removed if it hasn't answered for 5 days, has been Up/Bad (no peers or fake peers) for 5 days, or is up too rarely to be useful. It can't be resubmitted for 30 days.</p>
+<p>A tracker is removed if it:</p>
+<ul>
+<li>hasn't answered for <b>5 days</b>, or, after 3+ days listed, answers under 15% of the time once dropouts are counted;</li>
+<li>has been Up/Bad (no or fake peers) for <b>5 days</b> in a row, or for 80% of the last 7 days;</li>
+<li>has been Up/Junk or Up/Broken for <b>30 days</b>;</li>
+<li>says in its own replies that it's private or only serves its own torrents.</li>
+</ul>
+<p>Removal comes with a ban: <b>30 days</b> the first time, <b>90</b> the second, for good after that. The ban covers its other names
+and its IP address too. Its page stays up, and once it's fixed its operator can press <b>Check again now</b> there: if it passes
+like a new tracker (two checks, 30 minutes apart), it's listed again and the ban is lifted. See <a href="/fix#removed">How to fix</a>.</p>
 
 <h4>Credits</h4>
 <p>newTrackon is by <a href="https://github.com/CorralPeltzer">Miguel &Aacute;ngel Corral (CorralPeltzer)</a>
