@@ -79,9 +79,11 @@ def _state(t):
     pfb = T._peer_fam_bad(t.url) if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT else None
     if pfb:
         bad.append("nopeers_ipv" + pfb[-1])  # one family doesn't share peers, the other does
+    if T.PEER_FAILS.get(t.url, 0) < T.PEER_FAIL_LIMIT and T._split(t.url):
+        bad.append("split_swarm")  # separate servers not sharing swarms: works for clients on the same one
     if bad:
-        # only faults on one family (a dead address, or no peer sharing): still works on the other, so "broken", not "bad"
-        return ("up_broken" if all(x.startswith(("dead_ipv", "nopeers_ipv")) for x in bad) else "up_bad"), bad
+        # only partial faults (a dead address, one family not sharing, a split swarm): still useful, so "broken", not "bad"
+        return ("up_broken" if all(x.startswith(("dead_ipv", "nopeers_ipv", "split_swarm")) for x in bad) else "up_bad"), bad
     sc = round(float(t.uptime or 0) + T._nt_iv_penalty(t.url))  # the interval penalty is only for ranking, not the status
     if sc < 50:
         return "up_junk", bad
@@ -361,7 +363,8 @@ FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peer
               "unreliable": "Drops out (Up/Unreliable, Up/Junk)", "slow": "Slow (Up/Slow)", "down-timeout": "Down: timeout",
               "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
               "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer",
-              "interval": "Announce interval too short or too long", "removed": "Removed and banned"}
+              "interval": "Announce interval too short or too long", "removed": "Removed and banned",
+              "split-swarm": "Separate servers that don't share swarms (Up/Broken)"}
 
 
 def _fix_anchor(t):
@@ -375,7 +378,7 @@ def _fix_anchor(t):
     if st == "up_bad":
         return "fake-peers" if "fake_peers" in bad else "no-peers"
     if st == "up_broken":
-        return "dead-address"
+        return "split-swarm" if bad == ["split_swarm"] else "dead-address"
     if st in ("up_unreliable", "up_junk"):
         return "unreliable"
     if st == "up_slow":
@@ -445,6 +448,11 @@ def _evidence(t, d):
             out.append("Over IPv%s it sees every client as %s, a private address, and hands that out instead of their real "
                        "address, so nobody can connect to those peers. Something in front of it hides clients' addresses: "
                        "usually Docker's port proxy (no real IPv6 in the container) or NAT." % (fam[-1], x["ip"]))
+    sp = T._split(t.url) if fix in ("split-swarm", "dead-address") else None
+    if sp:
+        out.append("It runs separate servers that don't share their swarms: in %d of its last %d peer tests our second test "
+                   "client was handed back only itself, by a server that had never seen our first client, while %d of %d tests "
+                   "passed. Clients only meet peers that happen to reach the same server." % (sp["split"], sp["of"], sp["passed"], sp["tests"]))
     pfb = T._peer_fam_bad(t.url) if fix == "dead-address" else None
     if pfb:
         fams = T._peer_fams(t.url)

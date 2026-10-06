@@ -780,3 +780,55 @@ class TestUdpResend:
         with pytest.raises(TimeoutError):
             scraper._udp_xchg(s, req, 0.4)
         assert s.sent == 3 and time.time() - t0 < 1.0
+
+
+class TestSplitSwarm:
+    """tracker.corpscorp.online: separate servers behind one name. Client B is sometimes handed back only itself by a server
+    that never saw A; other times both land on one server and meet. Up/Broken (never Up/Bad), no family blamed."""
+
+    URL = "udp://split.example:80/announce"
+
+    def test_probe_spots_b_handed_back_to_itself(self) -> None:
+        extra: dict = {}
+        assert scraper._probe_eval({"peers": [{"IP": "38.88.124.109", "port": 6882}], "seeds": 0, "leechers": 1}, 6881, extra) is False
+        assert extra["split"] is True
+        assert scraper._probe_eval({"peers": [{"IP": "8.8.8.8", "port": 6881}]}, 6881, extra) is True and extra["split"] is False
+        assert scraper._probe_eval({"peers": []}, 6881, extra) is False and extra["split"] is False  # plain no peers
+
+    def _hist(self, v4, v6, split):
+        for ok, sp in zip(v4, split[: len(v4)]):
+            T._split_add(self.URL, sp)
+            T._peer_hist_add(self.URL, bool(ok), "v4")
+        for ok, sp in zip(v6, split[len(v4):]):
+            T._split_add(self.URL, sp)
+            T._peer_hist_add(self.URL, bool(ok), "v6")
+
+    def test_split_is_up_broken_not_up_bad_and_blames_no_family(self, sample_tracker) -> None:
+        # what corpscorp did: IPv4 failed every test (split), IPv6 passed 4 of 6
+        self._hist([0, 0, 0], [1, 0, 1, 1, 0, 1], [1, 1, 1, 0, 1, 0, 0, 1, 0])
+        assert T._split(self.URL)["split"] >= 2 and T.PEER_FAILS.get(self.URL, 0) == 0
+        assert T._peer_fam_bad(self.URL) is None
+        t = sample_tracker
+        t.url, t.status = self.URL, 1
+        st, bad = ntextra._state(t)
+        assert st == "up_broken" and bad == ["split_swarm"] and ntextra._fix_anchor(t) == "split-swarm"
+
+    def test_never_passing_is_still_no_peers(self) -> None:
+        self._hist([0, 0, 0], [0, 0, 0], [1] * 6)
+        assert T._split(self.URL) is None and T.PEER_FAILS.get(self.URL, 0) >= T.PEER_FAIL_LIMIT
+
+    def test_one_odd_result_is_not_a_split(self) -> None:
+        self._hist([1, 1, 0], [1, 1, 1], [0, 0, 1, 0, 0, 0])
+        assert T._split(self.URL) is None
+
+    def test_feed_label_and_clock_are_broken(self) -> None:
+        b = ["runs separate servers that don't share swarms (clients only meet peers on the same server)"]
+        assert T._nt_bad_lbl(b) == "Up/Broken" and T._broken("up_bad", b) and not T._peer_bad("up_bad", b)
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_explains_it(self, flask_client: FlaskClient) -> None:
+        self.URL = "udp://akl.example:1/announce"
+        self._hist([0, 0, 0], [1, 0, 1, 1, 0, 1], [1, 1, 1, 0, 1, 0, 0, 1, 0])
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "It runs separate servers that don&#39;t share their swarms" in html or "It runs separate servers that don't share their swarms" in html
+        assert "/fix#split-swarm" in html

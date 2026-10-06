@@ -154,6 +154,29 @@ EOF</pre>
         the family you don't serve. It clears once that address answers.</p>
     </details>
 
+    <h4 id="split-swarm">Separate servers that don't share swarms (Up/Broken)</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker is really several tracker servers behind one name, and they don't tell each other who
+            is in each torrent. Two people only find each other if they happen to reach the same server, so most of the time they
+            don't. It still works for some, so it stays listed as Up/Broken.</p>
+        <p><b>How we know:</b> our second test client is sometimes handed back <b>only itself</b>, by a server that has never seen
+            our first client, which announced seconds earlier. Other times the two land on the same server and meet normally.</p>
+    </div>
+    <p><b>Most likely causes, and what to do:</b></p>
+    <ul>
+        <li><b>A load balancer or anycast spreads clients over several tracker instances</b> (common on cloud hosting). Give all
+            instances shared storage for the peer lists (for example one Redis or database they all use), or run one instance.</li>
+        <li><b>The balancer picks the server by client address.</b> Clients in the same torrent still end up on different servers.
+            If the instances can't share storage, route by <b>info-hash</b> instead, so every announce for one torrent reaches the same
+            server. An HTTP balancer can do that (in nginx, <code>hash $arg_info_hash consistent;</code> in the upstream block); for
+            UDP the info-hash is inside the packet, so it needs the tracker's own clustering support.</li>
+        <li><b>Old and new servers both answer</b> after a move (an old address still in DNS, or the old server still running).
+            Shut the old one down, or point every address at the new one.</li>
+    </ul>
+    <p>The tracker's page shows how many of our peer tests met a different server.</p>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker runs on several servers behind one name, and they don't
+        share peer lists, so clients often don't find each other. Can all instances use shared storage, or can we run just one?"</p></div>
+
     <h4 id="unreliable">Drops out (Up/Unreliable, Up/Junk)</h4>
     <div class="nt-plain">
         <p><b>In plain words:</b> your tracker works some of the time, but too often it doesn't answer. Users can't rely on it, so it's

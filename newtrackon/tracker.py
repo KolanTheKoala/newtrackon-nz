@@ -203,6 +203,8 @@ class Tracker:
                     logger.info("%s FAKE PEERS: %d fake peer(s) on a random hash", self.url, _ex["foreign"])
             if _ex.get("inflated"):
                 logger.info("%s INFLATED COUNTS: %s seeders / %s leechers on a random hash", self.url, *_ex["inflated"])
+            if self.peer_ok is not None:
+                _split_add(self.url, _ex.get("split"))
             if self.peer_ok is True:
                 _peer_hist_add(self.url, True, _ex.get("fam"))
             elif self.peer_ok is False:
@@ -218,6 +220,7 @@ class Tracker:
             if _other and len(_fr) == 2 and _fr.get(_other):
                 _ok2 = scraper.peer_probe_family(self.url, _other)
                 if _ok2 is not None:
+                    _split_add(self.url, (getattr(scraper.rtt, "family_extra", None) or {}).get("split"))
                     _peer_hist_add(self.url, _ok2, _other)
                     _nat_seen_set(self.url, _other, (getattr(scraper.rtt, "family_extra", None) or {}).get("nat_ip"))
             logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
@@ -349,7 +352,7 @@ class Tracker:
         self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
         if (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:  # dead published family N times in a row
             self.uptime = min(self.uptime, 50)  # still works on its other family
-        elif PEER_FAILS.get(self.url, 0) < PEER_FAIL_LIMIT and _peer_fam_bad(self.url):  # one family shares no peers
+        elif PEER_FAILS.get(self.url, 0) < PEER_FAIL_LIMIT and (_peer_fam_bad(self.url) or _split(self.url)):  # partly shares
             self.uptime = min(self.uptime, 50)  # Up/Broken like a dead address: same cap
         if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers in N of its last PEER_WINDOW checks
             self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
@@ -535,6 +538,8 @@ class Tracker:
                 pfb = _peer_fam_bad(url) if PEER_FAILS.get(url, 0) < PEER_FAIL_LIMIT else None
                 if pfb:
                     bad.append(f"its IPv{pfb[-1]} side doesn't share peers (3+ of its last 6 IPv{pfb[-1]} peer tests failed)")
+                if PEER_FAILS.get(url, 0) < PEER_FAIL_LIMIT and _split(url):
+                    bad.append("runs separate servers that don't share swarms (clients only meet peers on the same server)")
                 if bad:
                     st = "up_bad"
                 else:  # same ladder as the page/API, with a little hysteresis so borderline trackers don't flap
@@ -998,11 +1003,40 @@ def _peer_fams(url):
 
 
 def _peer_fam_bad(url):
-    """'v4'/'v6' if that family fails the peer test (3+ of its last 6) while another family passes: partly broken."""
+    """'v4'/'v6' if that family fails the peer test (3+ of its last 6) while another family passes: partly broken.
+    Not for a split swarm: there which family fails is down to which server each client lands on."""
+    if _split(url):
+        return None
     fams = {k: v for k, v in _peer_fams(url).items() if k != "?"}
     bad = [k for k, v in fams.items() if v.count(0) >= PEER_FAIL_LIMIT]
     good = [k for k, v in fams.items() if v.count(0) < PEER_FAIL_LIMIT and len(v) >= PEER_WINDOW // 2]
     return bad[0] if bad and good else None
+
+
+_SPLIT_FILE = "data/split_hist.json"
+SPLIT_HIST: dict = _jload(_SPLIT_FILE)  # url -> last PEER_WINDOW peer tests: 1 = B was handed back only itself, without A
+SPLIT_MIN = 2  # that many of the last PEER_WINDOW tests, while some tests pass: separate servers not sharing swarms
+
+
+def _split_add(url, flag):
+    h = (SPLIT_HIST.get(url, []) + [1 if flag else 0])[-PEER_WINDOW:]
+    if any(h) or url in SPLIT_HIST:
+        SPLIT_HIST[url] = h
+        _jsave(SPLIT_HIST, _SPLIT_FILE)
+
+
+def _split(url):
+    """{'split', 'of', 'passed', 'tests'} when the tracker splits its swarms across separate servers: in SPLIT_MIN+ of its
+    last peer tests client B got only itself back (the server it reached had never seen A), while other tests passed. It
+    works for clients that land on the same server, so it's Up/Broken, never Up/Bad, and no IP family is blamed."""
+    h = SPLIT_HIST.get(url) or []
+    if h.count(1) < SPLIT_MIN:
+        return None
+    fams = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k != "?"} or _peer_fams(url)
+    passed, tests = sum(v.count(1) for v in fams.values()), sum(len(v) for v in fams.values())
+    if not passed:
+        return None  # never shares anything: that's no peers, not a split
+    return {"split": h.count(1), "of": len(h), "passed": passed, "tests": tests}
 
 
 _NAT_FILE = "data/nat_seen.json"
@@ -1046,7 +1080,8 @@ def _peer_hist_add(url, ok, fam=None):
     _jsave(PEER_HIST_FAM, _PEER_HIST_FAM_FILE)
     # "hands out no peers" (Up/Bad) only when every family that counts fails; one failing family is _peer_fam_bad
     fams = _peer_fams(url)
-    _peer_fail_set(url, min(v.count(0) for v in fams.values()) if fams else h.count(0))
+    # a split swarm still works for clients on the same server: never "hands out no peers"
+    _peer_fail_set(url, 0 if _split(url) else (min(v.count(0) for v in fams.values()) if fams else h.count(0)))
 
 
 # A peer test that's never conclusive (only our first test client is ever answered) would freeze its last 6 results
@@ -1276,7 +1311,7 @@ JUNK_BRIDGE = 24 * 3600  # spells out of it shorter than this don't restart that
 
 def _broken(st, bad):
     """Up/Broken: its only faults are a dead IPv4/IPv6 address or one family not sharing peers (the feed ladder: up_bad)."""
-    return st == "up_bad" and bool(bad) and all("address is dead" in b or "side doesn't share peers" in b for b in bad)
+    return st == "up_bad" and bool(bad) and all("address is dead" in b or "side doesn't share peers" in b or "separate servers" in b for b in bad)
 
 
 def _poor(st, bad):
@@ -1934,7 +1969,7 @@ def _nt_bad_lbl(bad):
     # a dead IP family on its own is Up/Broken (same rule as the page); anything else is Up/Bad
     try:
         b = [str(x).lower() for x in (bad or [])]
-        if b and all(("ipv4" in x or "ipv6" in x) and ("peer" not in x or "side doesn't share peers" in x) for x in b):
+        if b and all("separate servers" in x or (("ipv4" in x or "ipv6" in x) and ("peer" not in x or "side doesn't share peers" in x)) for x in b):
             return "Up/Broken"
     except Exception:
         pass

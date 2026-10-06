@@ -782,6 +782,9 @@ def _probe_eval(resp, want, extra):
     # the tracker hides clients' addresses (NAT, Docker's userland proxy), and nobody could connect to that peer
     hidden = [_peer_ip(x) for x in a_entries if not ip_is_public(_peer_ip(x))]
     extra["nat_ip"] = hidden[0] if hidden and len(hidden) == len(a_entries) else None
+    # B handed back only itself, never A: A's announce went to a different server than B's (separate tracker instances
+    # behind one name or load balancer, not sharing swarms)
+    extra["split"] = not a_entries and any(x.get("port") == want + 1 for x in peers)
     return any(ip_is_public(_peer_ip(x)) for x in a_entries)
 
 
