@@ -440,6 +440,11 @@ def _evidence(t, d):
     if fix == "fake-peers":
         out.append("Returned %s peer(s) for a random torrent only this site knows, in %d of its last 6 checks."
                    % (d["fake_peers"]["latest"] if d["fake_peers"]["latest"] is not None else "unknown", d["fake_peers"]["streak"]))
+    for fam, x in sorted((T.NAT_SEEN.get(t.url) or {}).items()):
+        if fix in ("no-peers", "dead-address"):
+            out.append("Over IPv%s it sees every client as %s, a private address, and hands that out instead of their real "
+                       "address, so nobody can connect to those peers. Something in front of it hides clients' addresses: "
+                       "usually Docker's port proxy (no real IPv6 in the container) or NAT." % (fam[-1], x["ip"]))
     pfb = T._peer_fam_bad(t.url) if fix == "dead-address" else None
     if pfb:
         fams = T._peer_fams(t.url)

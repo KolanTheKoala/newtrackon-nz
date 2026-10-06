@@ -640,3 +640,37 @@ def test_tracker_page_shows_the_peer_test_per_family(flask_client: FlaskClient) 
     html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
     assert "IPv4: pass (passed 3 of 3) &middot; IPv6: fail (passed 0 of 3)" in html
     assert flask_client.get("/api/tracker/akl.example").get_json()["peer_test"]["by_family"] == {"v4": {"passed": 3, "of": 3}, "v6": {"passed": 0, "of": 3}}
+
+
+class TestNatHiddenAddresses:
+    def test_ipv4_entries_in_an_ipv6_reply_are_read(self) -> None:
+        import socket
+        buf = bytes.fromhex("ac110001c73aac110001c739")  # what tracker.farted.net sent over IPv6
+        assert scraper.decode_binary_peers_list(buf, 0, socket.AF_INET6) == [{"IP": "172.17.0.1", "port": 51002}, {"IP": "172.17.0.1", "port": 51001}]
+
+    def test_a_private_address_on_the_right_port_fails_and_is_named(self) -> None:
+        extra: dict = {}
+        assert scraper._probe_eval({"peers": [{"IP": "172.17.0.1", "port": 6881}, {"IP": "172.17.0.1", "port": 6882}]}, 6881, extra) is False
+        assert extra["nat_ip"] == "172.17.0.1"
+
+    def test_the_real_public_address_passes(self) -> None:
+        extra: dict = {}
+        assert scraper._probe_eval({"peers": [{"IP": "8.8.8.8", "port": 6881}]}, 6881, extra) is True
+        assert extra["nat_ip"] is None
+
+    def test_record_set_and_cleared(self) -> None:
+        u = "udp://n.example:1/announce"
+        T._nat_seen_set(u, "v6", "172.17.0.1")
+        assert T.NAT_SEEN[u]["v6"]["ip"] == "172.17.0.1" and T._jload("data/nat_seen.json")[u]
+        T._nat_seen_set(u, "v6", None)
+        assert u not in T.NAT_SEEN
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_explains_it(self, flask_client: FlaskClient) -> None:
+        url = "udp://akl.example:1/announce"
+        for _ in range(3):
+            T._peer_hist_add(url, True, "v4")
+            T._peer_hist_add(url, False, "v6")
+        T._nat_seen_set(url, "v6", "172.17.0.1")
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "Over IPv6 it sees every client as 172.17.0.1, a private address" in html and "Docker" in html

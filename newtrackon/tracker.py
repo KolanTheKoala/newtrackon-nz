@@ -207,6 +207,8 @@ class Tracker:
                 _peer_hist_add(self.url, True, _ex.get("fam"))
             elif self.peer_ok is False:
                 _peer_hist_add(self.url, False, _ex.get("fam"))
+            if self.peer_ok is not None:
+                _nat_seen_set(self.url, _ex.get("fam"), _ex.get("nat_ip"))
             # a test that couldn't run because the VPN exits got no answer is a limit of the test, not the tracker's fault:
             # it doesn't count towards the 7-day "never conclusive" rule
             _peer_conclusive(self.url, "exit_blocked" if (self.peer_ok is None and _ex.get("exit_blocked")) else self.peer_ok)
@@ -217,6 +219,7 @@ class Tracker:
                 _ok2 = scraper.peer_probe_family(self.url, _other)
                 if _ok2 is not None:
                     _peer_hist_add(self.url, _ok2, _other)
+                    _nat_seen_set(self.url, _other, (getattr(scraper.rtt, "family_extra", None) or {}).get("nat_ip"))
             logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             self.is_up()
             _FAILSTREAK[0] = 0  # a success: not an outage
@@ -1000,6 +1003,26 @@ def _peer_fam_bad(url):
     bad = [k for k, v in fams.items() if v.count(0) >= PEER_FAIL_LIMIT]
     good = [k for k, v in fams.items() if v.count(0) < PEER_FAIL_LIMIT and len(v) >= PEER_WINDOW // 2]
     return bad[0] if bad and good else None
+
+
+_NAT_FILE = "data/nat_seen.json"
+NAT_SEEN: dict = _jload(_NAT_FILE)  # url -> {"v4"/"v6": {"ip": private address it handed out, "t"}}: hides clients' addresses
+
+
+def _nat_seen_set(url, fam, ip):
+    """Note (or clear) that this family's peer test got client A back with a private address instead of its real one."""
+    if fam not in ("v4", "v6"):
+        return
+    cur = (NAT_SEEN.get(url) or {}).get(fam)
+    if ip:
+        if not cur or cur.get("ip") != ip:
+            NAT_SEEN.setdefault(url, {})[fam] = {"ip": ip, "t": int(time())}
+            _jsave(NAT_SEEN, _NAT_FILE)
+    elif cur:
+        NAT_SEEN[url].pop(fam, None)
+        if not NAT_SEEN[url]:
+            NAT_SEEN.pop(url)
+        _jsave(NAT_SEEN, _NAT_FILE)
 
 
 def _peer_hist_add(url, ok, fam=None):

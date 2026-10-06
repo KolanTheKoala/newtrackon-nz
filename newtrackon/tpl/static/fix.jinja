@@ -107,7 +107,14 @@ curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000002&amp;port=6882&amp;uplo
     <p><b>Or: one family doesn't share peers.</b> Both addresses answer, but clients on one of them (often IPv6) are never
         told about each other: our two test clients on IPv6 never meet, while on IPv4 they do. Usual causes: the tracker keeps no
         peer lists for that family (an IPv4-only build answering on IPv6), or something in front of it hides IPv6 clients' real
-        addresses. The tracker's page says which family.</p>
+        addresses. The tracker's page says which family, and if it hands out a private address (like <code>172.17.0.1</code>),
+        that's the cause: see the next paragraph.</p>
+    <p><b>Hands out a private address (172.17.0.1, 10.x, 192.168.x).</b> The tracker sees every client as that address, so
+        it gives everyone an address nobody can reach. Almost always the tracker runs in <b>Docker</b> and IPv6 (or all)
+        traffic reaches it through Docker's port proxy, which replaces each client's address with the container's gateway.
+        Fix: give the container real IPv6 (in <code>/etc/docker/daemon.json</code> set <code>"ipv6": true</code>,
+        <code>"ip6tables": true</code> and an IPv6 subnet, or run it with <code>network_mode: host</code>), or set the
+        tracker to trust the real client address from whatever sits in front of it.</p>
     <p><b>Most likely causes, and what to do:</b></p>
     <ul>
         <li><b>An old or wrong address is still in your domain's settings</b> (the DNS records). In your domain or hosting control panel,

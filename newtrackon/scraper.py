@@ -365,6 +365,10 @@ def parse_http_tracker_response(data: bytes) -> HTTPAnnounceResponse:
 def decode_binary_peers_list(buf: bytes, offset: int, ip_family: int) -> list[PeerInfo]:
     peers: list[PeerInfo] = []
     peer_length = 6 if ip_family == socket.AF_INET else 18
+    if ip_family == socket.AF_INET6 and (len(buf) - offset) % 18 and (len(buf) - offset) % 6 == 0:
+        # an IPv6 reply carrying 6-byte IPv4 entries (seen from a tracker behind Docker's proxy): read them as IPv4,
+        # rather than dropping them, so what it actually hands out can be judged
+        ip_family, peer_length = socket.AF_INET, 6
     binary_response = memoryview(buf)
     while offset != len(buf):
         if len(buf) < offset + peer_length:
@@ -734,6 +738,11 @@ def _probe_peers(resp):
     return [x for x in list(resp.get("peers", []) or []) + list(resp.get("peers6", []) or []) if isinstance(x, dict)]
 
 
+def _peer_ip(x):
+    ip = x.get("IP", x.get("ip", ""))
+    return ip.decode("ascii", "replace") if isinstance(ip, bytes) else str(ip)
+
+
 def _probe_eval(resp, want, extra):
     peers = _probe_peers(resp)
     # Only our own probe clients can know this random hash: anything else is fake by the tracker.
@@ -741,7 +750,12 @@ def _probe_eval(resp, want, extra):
     seeds = resp.get("seeds", resp.get("complete"))
     leech = resp.get("leechers", resp.get("incomplete"))
     extra["inflated"] = (seeds, leech) if isinstance(seeds, int) and isinstance(leech, int) and (seeds > 2 or leech > 2) else None
-    return any(x.get("port") == want for x in peers)
+    a_entries = [x for x in peers if x.get("port") == want]
+    # client A must come back with a real (public) address: a private one (172.17.0.1, 10.x...) means something in front of
+    # the tracker hides clients' addresses (NAT, Docker's userland proxy), and nobody could connect to that peer
+    hidden = [_peer_ip(x) for x in a_entries if not ip_is_public(_peer_ip(x))]
+    extra["nat_ip"] = hidden[0] if hidden and len(hidden) == len(a_entries) else None
+    return any(ip_is_public(_peer_ip(x)) for x in a_entries)
 
 
 def _probe_src(family):
@@ -996,6 +1010,7 @@ def peer_probe_family(url, fam_name):
     p = _up(url)
     saved = (getattr(rtt, "probe", None), getattr(rtt, "probe_extra", None))
     try:
+        rtt.family_extra = None
         if p.scheme == "udp":
             sa = ordered_addrs(p.hostname, p.port, fam)[0][4]
             thash, pid = urandom(20), generate_peer_id()
@@ -1005,9 +1020,12 @@ def peer_probe_family(url, fam_name):
             finally:
                 s_.close()
             rtt.probe = ("udp", thash, fam, sa, pid)
-            return peer_probe()
-        rtt.probe = ("http", urandom(20), url, None, generate_peer_id())
-        return peer_probe(only_family=fam)
+            ok = peer_probe()
+        else:
+            rtt.probe = ("http", urandom(20), url, None, generate_peer_id())
+            ok = peer_probe(only_family=fam)
+        rtt.family_extra = dict(getattr(rtt, "probe_extra", None) or {})  # what this family's test saw (nat_ip...)
+        return ok
     except Exception:
         return None
     finally:
