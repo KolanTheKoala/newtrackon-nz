@@ -112,6 +112,9 @@
       .then(function (r) { if (!r.ok) throw 0; return r.text(); })
       .then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html');
+        // a new version of the site: new rows may need new styles or icons, so reload the whole page
+        var vNew = doc.querySelector('.nt-statusline a[href*="/commit/"]'), vOld = document.querySelector('.nt-statusline a[href*="/commit/"]');
+        if (vNew && vOld && vNew.getAttribute('href') !== vOld.getAttribute('href')) { location.reload(); return; }
         var nt = (t.id && doc.getElementById(t.id)) || doc.querySelector('table');
         var rows = nt ? nt.querySelectorAll('tbody > tr') : [];
         if (!rows.length) return;
