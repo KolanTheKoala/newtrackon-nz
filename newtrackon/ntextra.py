@@ -686,6 +686,47 @@ def _badge_svg(left, right, color):
     )
 
 
+def _stars(score):
+    """Whole stars out of 5, exactly as the main table shows them (20 points each, the template's rounding)."""
+    return max(0, min(5, int(round(int(round(float(score or 0))) / 20))))
+
+
+def _star_path(cx, cy, r=5.4):
+    """A five-pointed star as an SVG path, centred on (cx, cy)."""
+    import math
+    pts = []
+    for k in range(10):
+        a = math.pi / 2 + k * math.pi / 5
+        rr = r if k % 2 == 0 else r * 0.42
+        pts.append("%.2f,%.2f" % (cx + rr * math.cos(a), cy - rr * math.sin(a)))
+    return "M" + " L".join(pts) + " Z"
+
+
+def _badge_svg_stars(left, n, right, color):
+    """newTrackon NZ | five stars, n filled | status and score."""
+    from xml.sax.saxutils import escape
+    lw, rw = _badge_text_width(left), _badge_text_width(right)
+    sw = 5 * 12 + 10  # five 12 px stars, 5 px padding each side
+    w = lw + sw + rw
+    L, R = escape(left), escape(right)
+    label = "%s: %d of 5 stars, %s" % (L, n, R)
+    stars = "".join('<path d="%s" fill="%s"%s/>' % (_star_path(lw + 5 + 6 + 12 * i, 10), "#f5c518" if i < n else "none",
+                                                      "" if i < n else ' stroke="#8b93a1" stroke-width="1"') for i in range(5))
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="20" role="img" aria-label="{label}">'
+        f"<title>{label}</title>"
+        '<linearGradient id="g" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>'
+        f'<clipPath id="c"><rect width="{w}" height="20" rx="3" fill="#fff"/></clipPath>'
+        f'<g clip-path="url(#c)"><rect width="{lw}" height="20" fill="#131a60"/><rect x="{lw}" width="{sw}" height="20" fill="#0b1633"/>'
+        f'<rect x="{lw + sw}" width="{rw}" height="20" fill="{color}"/><rect width="{w}" height="20" fill="url(#g)"/></g>'
+        f"<g>{stars}</g>"
+        '<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">'
+        f'<text x="{lw / 2:.1f}" y="15" fill="#010101" fill-opacity=".3">{L}</text><text x="{lw / 2:.1f}" y="14">{L}</text>'
+        f'<text x="{lw + sw + rw / 2:.1f}" y="15" fill="#010101" fill-opacity=".3">{R}</text><text x="{lw + sw + rw / 2:.1f}" y="14">{R}</text>'
+        "</g></svg>"
+    )
+
+
 def _badge(host):
     host = host.lower()
     if host.endswith(".svg"):
@@ -697,7 +738,7 @@ def _badge(host):
         st = _state(t)[0]
         down, down_for = _is_it_down(t)
         right = ("Down \u00b7 " + down_for) if down else "%s \u00b7 %d" % (_STATUS_TEXT.get(st, st), round(float(t.uptime or 0)))
-        svg, code = _badge_svg("newTrackon NZ", right, _BADGE_COLOR.get(st, "#e07b00")), 200
+        svg, code = _badge_svg_stars("newTrackon NZ", _stars(t.uptime), right, _BADGE_COLOR.get(st, "#e07b00")), 200
     # short cache: badges are embedded elsewhere and should follow the status within minutes
     return Response(svg, code, mimetype="image/svg+xml",
                     headers={"Cache-Control": "max-age=300", "Access-Control-Allow-Origin": "*", "X-Content-Type-Options": "nosniff"})

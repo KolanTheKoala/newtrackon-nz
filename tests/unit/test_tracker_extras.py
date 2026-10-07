@@ -182,3 +182,22 @@ def test_status_line_at_the_bottom_with_the_version(flask_client: FlaskClient, t
     monkeypatch.setattr(ntextra, "VERSION_FILE", str(vf))
     html = flask_client.get("/").get_data(as_text=True)
     assert 'commit/7e4233b"' in html and "2026.10.07 &middot; 7e4233b" in html
+
+
+def test_badge_stars_match_the_table() -> None:
+    """The badge's stars use the main table's rule: min(5, round(round(score) / 20)) with Jinja's rounding."""
+    from jinja2 import Environment
+    from newtrackon import ntextra
+    tpl = Environment().from_string("{% set nt_r = s|round|int %}{{ [((nt_r / 20)|round|int), 5]|min }}")
+    for s in [x / 2 for x in range(0, 201)] + [9.99, 10.0, 29.5, 49.9, 89.4, 89.5, 90.5]:
+        assert ntextra._stars(s) == int(tpl.render(s=s)), s
+
+
+@pytest.mark.usefixtures("region_db")
+def test_badge_draws_five_stars(flask_client: FlaskClient) -> None:
+    import re
+    svg = flask_client.get("/badge/akl.example.svg").get_data(as_text=True)
+    stars = re.findall(r'<path d="M[^"]+" fill="([^"]+)"', svg)
+    assert len(stars) == 5 and "of 5 stars" in svg and svg.startswith("<svg")
+    n = int(re.search(r"(\d) of 5 stars", svg).group(1))
+    assert stars.count("#f5c518") == n and stars.count("none") == 5 - n
