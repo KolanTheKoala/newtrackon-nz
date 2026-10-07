@@ -574,7 +574,7 @@ class TestPeerTestPerFamily:
         monkeypatch.setattr(scraper, "peer_probe", lambda only_family=None: (scraper.rtt.probe[2], only_family))
         scraper.rtt.probe, scraper.rtt.probe_extra = ("udp", b"main", socket.AF_INET, ("192.0.2.1", 6969), b"pid"), {"fam": "v4"}
         assert scraper.peer_probe_family(self.U, "v6") == (socket.AF_INET6, None)
-        assert calls and calls[0][2] == 0x76FD  # client A registered on IPv6 with the probe's port
+        assert calls and calls[0][2] == scraper.probe_port(0x76FD)  # client A registered on IPv6 with the check's port
         assert scraper.rtt.probe[1] == b"main" and scraper.rtt.probe_extra == {"fam": "v4"}
 
 
@@ -1078,3 +1078,34 @@ def test_interval_icon(flask_client: FlaskClient, iv, shown, words) -> None:
         assert words in row and 'href="/fix#interval"' in row
         assert 'class="nt-fixlink" href="/fix#interval"' in row  # the spanner, when the interval is the only fault
         assert "fa-stopwatch" in row
+
+
+class TestProbesLookLikeRealClients:
+    """Fixed peer-ID prefix, fixed ports and a User-Agent that didn't match the peer ID made our checks easy to pick out
+    (and so easy to treat better than real users)."""
+
+    def test_profile_peer_id_and_user_agent_match(self) -> None:
+        names = {"qB": "qBittorrent/", "TR": "Transmission/"}
+        seen = set()
+        for _ in range(200):
+            scraper.new_client()
+            pid, ua = scraper.generate_peer_id().decode(), scraper.headers()["User-Agent"]
+            assert len(pid) == 20 and ua.startswith(names[pid[1:3]])
+            v = pid[3:7]  # e.g. 5120 -> 5.1.2
+            assert ua.split("/")[1].replace(".", "") == v[:3] or ua.split("/")[1].replace(".", "")[:3] == v[:3]
+            seen.add(pid[:8])
+        assert len(seen) >= 4  # not one fixed prefix any more
+
+    def test_ports_vary_and_leave_room_for_b(self) -> None:
+        ports = set()
+        for _ in range(200):
+            scraper.new_client()
+            p = scraper.probe_port(6881)
+            assert scraper.PROBE_PORTS[0] <= p < scraper.PROBE_PORTS[1] and p % 2 == 0
+            ports.add(p)
+        assert len(ports) > 100
+
+    def test_the_raw_page_hides_the_port_used(self) -> None:
+        scraper.new_client()
+        p = scraper.probe_port(0)
+        assert str(p) not in scraper.redact_origin("peers ... port %d ..." % p)

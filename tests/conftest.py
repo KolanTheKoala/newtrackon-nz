@@ -86,6 +86,10 @@ def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[N
             monkeypatch.setattr(T, name, {})
     monkeypatch.setattr(T, "EVENTS", [])
     monkeypatch.setattr(T, "FORCE_CHECK", set())
+    from newtrackon import scraper as _sc
+    for _a in ("profile", "probe_port"):  # per-thread client state of the last check: not carried between tests
+        if hasattr(_sc.rtt, _a):
+            delattr(_sc.rtt, _a)
     monkeypatch.setattr(T, "_ONLINE", [0.0, True])
     monkeypatch.setattr(T, "_FAILSTREAK", [0])
     yield

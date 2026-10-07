@@ -55,6 +55,11 @@ HTTP_PORT: int = 6881
 UDP_PORT: int = 30461
 MAX_PEERS = 10  # a random info hash has no real swarm; anything beyond noise is a tracker injecting fake peers
 PEER_ID_PREFIX = "-qB5230-"
+# What our test clients look like: each check picks one of these real clients (matching peer ID and User-Agent) and a
+# random port, so a tracker can't easily pick our checks out and treat them better than real users.
+CLIENT_PROFILES = (("-qB5120-", "qBittorrent/5.1.2"), ("-qB5050-", "qBittorrent/5.0.5"), ("-qB5030-", "qBittorrent/5.0.3"),
+                   ("-qB4670-", "qBittorrent/4.6.7"), ("-TR4060-", "Transmission/4.0.6"), ("-TR4050-", "Transmission/4.0.5"))
+PROBE_PORTS = (20000, 59990)  # client A's port is an even number in this range; B uses +1, the connection-ID test +2
 PEER_ID_CHARS = string.ascii_letters + string.digits + "-_.~"
 my_ipv4: str | None = None
 my_ipv6: str | None = None
@@ -313,8 +318,25 @@ def get_bep_34(hostname: str | None) -> tuple[bool, list[ProtocolPref] | None]:
     return False, None
 
 
+def new_client() -> None:
+    """Start a check as a fresh client: a random real-client profile and a random port, for this thread."""
+    rtt.profile = random.choice(CLIENT_PROFILES)
+    rtt.probe_port = random.randrange(PROBE_PORTS[0], PROBE_PORTS[1], 2)
+
+
+def probe_port(default: int) -> int:
+    return getattr(rtt, "probe_port", None) or default
+
+
+def headers() -> dict[str, str]:
+    """SCRAPING_HEADERS with the current client's User-Agent."""
+    prof = getattr(rtt, "profile", None)
+    return {**SCRAPING_HEADERS, "User-Agent": prof[1]} if prof else SCRAPING_HEADERS
+
+
 def generate_peer_id() -> bytes:
-    return (PEER_ID_PREFIX + "".join(random.choices(PEER_ID_CHARS, k=12))).encode()
+    prof = getattr(rtt, "profile", None)
+    return ((prof[0] if prof else PEER_ID_PREFIX) + "".join(random.choices(PEER_ID_CHARS, k=12))).encode()
 
 
 def parse_http_tracker_response(data: bytes) -> HTTPAnnounceResponse:
@@ -384,12 +406,13 @@ def decode_binary_peers_list(buf: bytes, offset: int, ip_family: int) -> list[Pe
 
 def _announce_http_once(url: str) -> HTTPAnnounceResponse:
     logger.info("%s Scraping HTTP(S)", url)
+    new_client()
     thash = urandom(20)
 
     args_dict = {
         "info_hash": thash,
         "peer_id": (_pid := generate_peer_id()),
-        "port": HTTP_PORT,
+        "port": probe_port(HTTP_PORT),
         "uploaded": 0,
         "downloaded": 0,
         "left": 0,
@@ -571,6 +594,7 @@ def _udp_xchg(sock, req: bytes, total: float = 10.0) -> tuple[bytes, float]:
 def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
     parsed_tracker = urlparse(udp_url)
     logger.info("%s Scraping UDP", udp_url)
+    new_client()
     thash = urandom(20)
     peer_id = generate_peer_id()
     ip: str | None = None
@@ -628,7 +652,7 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
             connection_id = udp_parse_connection_response(buf, transaction_id)
 
             # Announce
-            req, transaction_id = udp_create_announce_request(connection_id, thash, peer_id)
+            req, transaction_id = udp_create_announce_request(connection_id, thash, peer_id, port=probe_port(0x76FD))
             buf, _ = _udp_xchg(sock, req, 10.0)
             ip_family = sock.family
             sock.close()
@@ -743,7 +767,7 @@ def get_server_ip(ip_version: str) -> str:
 
 
 def memory_limited_get(url: str) -> tuple[requests.Response, bytes]:
-    response = requests.get(url, headers=SCRAPING_HEADERS, timeout=10, stream=True, allow_redirects=False)
+    response = requests.get(url, headers=headers(), timeout=10, stream=True, allow_redirects=False)
     raw = cast(HTTPResponse, response.raw)
     content = raw.read(MAX_RESPONSE_SIZE + 1, decode_content=True)
     if len(content) > MAX_RESPONSE_SIZE:
@@ -756,7 +780,7 @@ def redact_origin(response: str) -> str:
         response = response.replace(my_ipv4, "v4-redacted")
     if my_ipv6:
         response = response.replace(my_ipv6, "v6-redacted")
-    for port in to_redact:
+    for port in to_redact + ([str(rtt.probe_port)] if getattr(rtt, "probe_port", None) else []):
         response = response.replace(port, "redacted")
     return response
 
@@ -934,7 +958,7 @@ def peer_probe(only_family: int | None = None) -> bool | None:
         extra["fam"] = "v6" if a == socket.AF_INET6 else "v4"  # the family this test ran over
     sleep = __import__("time").sleep
     if kind == "udp":
-        want = 0x76FD
+        want = probe_port(0x76FD)
         ok = None
         sb = sa_ = None
         fb = False
@@ -994,7 +1018,7 @@ def peer_probe(only_family: int | None = None) -> bool | None:
                     s_.close()
         return ok
 
-    want = HTTP_PORT
+    want = probe_port(HTTP_PORT)
     from urllib.parse import urlparse as _up
     _u = _up(a)
     host, hport = _u.hostname, _u.port or (443 if _u.scheme == "https" else 80)
@@ -1010,7 +1034,7 @@ def peer_probe(only_family: int | None = None) -> bool | None:
         args = {"info_hash": thash, "peer_id": peer_id, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1}
         if event:
             args["event"] = event
-        response = sess.get(a + "?" + urlencode(args), headers=SCRAPING_HEADERS, timeout=10, allow_redirects=False)
+        response = sess.get(a + "?" + urlencode(args), headers=headers(), timeout=10, allow_redirects=False)
         content = response.content[:65536]
         if response.status_code != 200 or not content:
             raise RuntimeError("probe: HTTP error")
@@ -1096,7 +1120,7 @@ def peer_probe_family(url, fam_name):
             thash, pid = urandom(20), generate_peer_id()
             s_, ann = _udp_session(fam, sa, None)
             try:
-                ann(pid, 0, 0x76FD, 2, thash)
+                ann(pid, 0, probe_port(0x76FD), 2, thash)
             finally:
                 s_.close()
             rtt.probe = ("udp", thash, fam, sa, pid)
@@ -1157,9 +1181,10 @@ def family_probe(url):
                     ad = _SrcAdapter(src or wild)
                     ss.mount("http://", ad)
                     ss.mount("https://", ad)
-                    q = {"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": 0x76FF, "uploaded": 0,
+                    new_client()
+                    q = {"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": probe_port(0x76FF), "uploaded": 0,
                          "downloaded": 0, "left": 1, "compact": 1}
-                    r = ss.get(url + "?" + urlencode(q), headers=SCRAPING_HEADERS, timeout=6, allow_redirects=False)
+                    r = ss.get(url + "?" + urlencode(q), headers=headers(), timeout=6, allow_redirects=False)
                     parse_http_tracker_response(r.content[:65536])
                 ok = True
                 break
@@ -1251,10 +1276,11 @@ def _http_rtt(url, p, addr, src):
     """HTTP(S) announce round trip with TCP and TLS set up *before* the clock starts: one request/response,
     no handshakes, whether or not the server keeps connections alive. Best of 2 samples, like UDP."""
     import ssl
-    q = urlencode({"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": 0x76FF, "uploaded": 0,
+    new_client()
+    q = urlencode({"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": probe_port(0x76FF), "uploaded": 0,
                    "downloaded": 0, "left": 1, "compact": 1})
     host = p.hostname if not p.port else f"{p.hostname}:{p.port}"
-    ua = (SCRAPING_HEADERS or {}).get("User-Agent", "newTrackon") if isinstance(SCRAPING_HEADERS, dict) else "newTrackon"
+    ua = headers().get("User-Agent", "newTrackon")
     req = (f"GET {p.path or '/'}?{q} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\n"
            f"Accept: */*\r\nConnection: close\r\n\r\n").encode()
     best = None
