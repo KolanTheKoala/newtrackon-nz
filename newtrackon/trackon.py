@@ -53,6 +53,7 @@ def update_outdated_trackers() -> NoReturn:
         try:
             ingest.confirm_due(now)
             ingest.retry_due(now)
+            _T.delayed_due(now)
         except Exception:
             logger.exception("second checks failed")
         trackers_outdated: list[Tracker] = []
@@ -77,6 +78,10 @@ def update_outdated_trackers() -> NoReturn:
             else:
                 db.update_tracker(tracker)
             save_deque_to_disk(raw_data, raw_history_file)
+            try:  # between checks too, so a long batch doesn't stretch the delayed tests' wait
+                _T.delayed_due()
+            except Exception:
+                logger.exception("delayed peer tests failed")
         sleep(5)
 
 

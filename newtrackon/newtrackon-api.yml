@@ -173,7 +173,11 @@ paths:
                           a_ip (that wrong address), self (handed back only itself), foreign (peers that can't exist),
                           seeds / leech (the counts it reported), ok (the verdict), t (Unix time); or swarm_empty:
                           true when the VPN exits got no answer and a second client from this server found nobody
-                          counted. The VPN exits' own addresses are never included.
+                          counted. The VPN exits' own addresses are never included. delayed: {v4|v6: {passed, of,
+                          last}}, the delayed peer test, about once a day on a family that passes the instant one: the
+                          second client asks 5 to 15 minutes later (at most 80% of the tracker's announce interval) and
+                          must still be handed the first one. last: {ok, after_s (the actual wait), t, seen (as in
+                          last_seen)}. For information only: it doesn't affect the status yet.
                       unusable_address:
                         type: object
                         description: >-

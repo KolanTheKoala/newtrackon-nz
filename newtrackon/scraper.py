@@ -872,6 +872,103 @@ def _pref_set(key, src):
         pass
 
 
+def _http_ann(url, src, thash, pid, left, port, event):
+    """One HTTP(S) announce for the delayed peer test, from source address src."""
+    s_ = requests.Session()
+    ad = _SrcAdapter(src)
+    s_.mount("http://", ad)
+    s_.mount("https://", ad)
+    args = {"info_hash": thash, "peer_id": pid, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1}
+    if event:
+        args["event"] = event
+    r = s_.get(url + "?" + urlencode(args), headers=headers(), timeout=10, allow_redirects=False)
+    content = r.content[:65536]
+    if r.status_code != 200 or not content:
+        raise RuntimeError("HTTP error")
+    resp = parse_http_tracker_response(content)
+    if "failure reason" in resp:
+        raise RuntimeError("failure reason")
+    return resp
+
+
+def delayed_start(url: str, fam_name: str) -> dict | None:
+    """Delayed peer test, part 1: client A (this server) announces a fresh random torrent and stays registered. Part 2
+    (delayed_finish), minutes later, checks the tracker still hands A out: catches trackers that forget peers within
+    seconds or minutes, which pass the instant test but never let real clients (announcing every 30 min) meet."""
+    from urllib.parse import urlparse as _up
+    p = _up(url)
+    fam = socket.AF_INET6 if fam_name == "v6" else socket.AF_INET
+    saved = (getattr(rtt, "profile", None), getattr(rtt, "probe_port", None))  # the running check keeps its own client
+    new_client()
+    port, thash, pid = probe_port(0x76FD), urandom(20), generate_peer_id()
+    prof = list(getattr(rtt, "profile", None) or ())
+    try:
+        if p.scheme == "udp":
+            sa = ordered_addrs(p.hostname, p.port, fam)[0][4]
+            s_, ann = _udp_session(fam, sa, None)
+            try:
+                ann(pid, 0, port, 2, thash)
+            finally:
+                s_.close()
+        else:
+            socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80), fam)
+            sa = None
+            _http_ann(url, "0.0.0.0" if fam == socket.AF_INET else "::", thash, pid, 0, port, "started")
+    except Exception:
+        return None
+    finally:
+        rtt.profile, rtt.probe_port = saved
+    return {"url": url, "fam": fam_name, "sa": sa, "thash": thash.hex(), "pid": pid.decode(), "port": port, "profile": prof}
+
+
+def delayed_finish(st: dict) -> tuple[bool | None, dict]:
+    """Delayed peer test, part 2: client B (a VPN exit) must now be handed A. (ok or None if no exit answered, extra)."""
+    from urllib.parse import urlparse as _up
+    p = _up(st["url"])
+    fam = socket.AF_INET6 if st["fam"] == "v6" else socket.AF_INET
+    if st.get("profile"):
+        rtt.profile = tuple(st["profile"])
+    rtt.probe_port = st["port"]
+    thash, pid_a, want = bytes.fromhex(st["thash"]), st["pid"].encode(), st["port"]
+    pid_b = generate_peer_id()
+    extra: dict = {}
+    ok = None
+    for src in _probe_srcs(fam, st["url"] if p.scheme != "udp" else None):
+        try:
+            if p.scheme == "udp":
+                sb, annb = _udp_session(fam, tuple(st["sa"]), src)
+                try:
+                    resp = annb(pid_b, 1, want + 1, 2, thash)
+                    try:
+                        annb(pid_b, 1, want + 1, 3, thash)
+                    except Exception:
+                        pass
+                finally:
+                    sb.close()
+            else:
+                resp = _http_ann(st["url"], src, thash, pid_b, 1, want + 1, "started")
+                try:
+                    _http_ann(st["url"], src, thash, pid_b, 1, want + 1, "stopped")
+                except Exception:
+                    pass
+            ok = _probe_eval(resp, want, extra)
+            break
+        except Exception:
+            continue
+    try:  # retire client A
+        if p.scheme == "udp":
+            sa_, anna = _udp_session(fam, tuple(st["sa"]), None)
+            try:
+                anna(pid_a, 0, want, 3, thash)
+            finally:
+                sa_.close()
+        else:
+            _http_ann(st["url"], "0.0.0.0" if fam == socket.AF_INET else "::", thash, pid_a, 0, want, "stopped")
+    except Exception:
+        pass
+    return ok, extra
+
+
 def _probe_srcs(family, key=None):
     """Every VPN exit source IP for this family: the one this tracker last answered first, the rest shuffled."""
     try:

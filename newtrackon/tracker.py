@@ -226,6 +226,14 @@ class Tracker:
                     _fx = getattr(scraper.rtt, "family_extra", None) or {}
                     _nat_seen_set(self.url, _other, _fx.get("nat_ip"))
                     _peer_seen_set(self.url, _other, _fx.get("seen"), _ok2)
+            else:
+                _ok2 = None
+            # once a day, on a family that just passed the instant peer test: the delayed one (watch-only)
+            try:
+                if not (self.peer_ok is True and _delayed_maybe_start(self.url, _main)) and _ok2 is True:
+                    _delayed_maybe_start(self.url, _other)
+            except Exception:
+                logger.exception("delayed peer test failed to start for %s", self.url)
             logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             self.is_up()
             _FAILSTREAK[0] = 0  # a success: not an outage
@@ -1031,6 +1039,65 @@ def _split(url):
     are no peers: Up/Bad, with the split explained on its page."""
     i = _split_info(url)
     return i if i and i["passed"] >= SPLIT_MIN_RATE * i["tests"] else None
+
+
+# Delayed peer test (watch-only for now: shown on the tracker page and in the API, no effect on the status). Once a
+# day per tracker and family, on a family that passes the instant test: client A announces, and minutes later client
+# B must still be handed it. A tracker that forgets peers in seconds passes the instant test but is useless to real
+# clients. The wait is capped at 80% of the tracker's own announce interval, so a tracker isn't faulted for dropping
+# peers that should have re-announced by then.
+DELAYED_EVERY = 20 * 3600
+DELAYED_RANGE = (300, 900)
+DELAYED_AFFECTS_STATUS = False
+_DELAYED_FILE = "data/delayed_hist.json"
+DELAYED_HIST: dict = _jload(_DELAYED_FILE)  # url -> {fam: {"r": [1, 0, ...], "t": last start, "last": {...}}}
+DELAYED_PENDING: list = []  # [due time, state from scraper.delayed_start, start time]: in memory (a restart drops them)
+
+
+def _delayed_wait(url):
+    import random as _r
+    wait = _r.uniform(*DELAYED_RANGE)
+    iv = ANN_IV.get(url)
+    if isinstance(iv, int) and iv > 0:
+        wait = max(60.0, min(wait, 0.8 * iv))
+    return wait
+
+
+def _delayed_maybe_start(url, fam):
+    """Start a delayed peer test on this family if it hasn't had one for DELAYED_EVERY. True if one was started."""
+    e = (DELAYED_HIST.get(url) or {}).get(fam) or {}
+    if fam not in ("v4", "v6") or time() - e.get("t", 0) < DELAYED_EVERY or any(p[1]["url"] == url for p in DELAYED_PENDING):
+        return False
+    wait = _delayed_wait(url)
+    st = scraper.delayed_start(url, fam)
+    DELAYED_HIST.setdefault(url, {}).setdefault(fam, {})["t"] = int(time())  # also when A couldn't announce: try tomorrow
+    _jsave(DELAYED_HIST, _DELAYED_FILE)
+    if st:
+        DELAYED_PENDING.append([time() + wait, st, time()])
+        logger.info("%s delayed peer test on %s started: B asks in %d min", url, fam, round(wait / 60))
+    return bool(st)
+
+
+def delayed_due(now=None):
+    """From the check loop: finish the delayed peer tests that are due."""
+    now = now or time()
+    for item in [p for p in DELAYED_PENDING if p[0] <= now]:
+        DELAYED_PENDING.remove(item)
+        url, fam = item[1]["url"], item[1]["fam"]
+        try:
+            ok, extra = scraper.delayed_finish(item[1])
+        except Exception:
+            logger.exception("delayed peer test failed for %s", url)
+            continue
+        after = int(time() - item[2])
+        if ok is None:
+            logger.info("%s delayed peer test on %s: no verdict (no VPN exit answered)", url, fam)
+            continue
+        e = DELAYED_HIST.setdefault(url, {}).setdefault(fam, {})
+        e["r"] = (e.get("r", []) + [1 if ok else 0])[-PEER_WINDOW:]
+        e["last"] = {"ok": bool(ok), "after_s": after, "t": int(time()), "seen": extra.get("seen")}
+        _jsave(DELAYED_HIST, _DELAYED_FILE)
+        logger.info("%s delayed peer test on %s after %d min: %s", url, fam, round(after / 60), "PASS" if ok else "FAIL")
 
 
 _PEER_SEEN_FILE = "data/peer_seen.json"
@@ -2250,7 +2317,8 @@ _URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_F
                ("ANN_IV", "_ANN_IV_FILE"), ("REGION_LAT", "_REGION_FILE"), ("WARNINGS", "_WARN_FILE"),
                ("CLOSED", "_CLOSED_FILE"), ("REGION_SAMPLES", "_REGION_TS_FILE"), ("LAT_HIST", "_LAT_HIST_FILE"),
                ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"), ("PEER_HIST_FAM", "_PEER_HIST_FAM_FILE"),
-               ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"))
+               ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"),
+               ("DELAYED_HIST", "_DELAYED_FILE"))
 _URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
 
 

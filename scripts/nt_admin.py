@@ -13,7 +13,7 @@ reinstate      a removed tracker that was removed by a fault in our checks: clea
                towards a longer ban), and with --clean-history drops the uptime history it would get back. Then press
                "Check again now" on its page (the VPS's nt-admin wrapper does that).
 clear-clocks   drop a listed tracker's removal clocks (Up/Bad, not-working, Junk/Broken) and its Up/Bad log.
-clear-peers    drop a tracker's peer-test records (all families, split, fake peers, unusable address, last seen).
+clear-peers    drop a tracker's peer-test records (all families, split, fake peers, unusable address, last seen, delayed).
 clear-history  drop a listed tracker's uptime history (30-day slots and daily summary) and saved state.
 forget         delete a removal record and its dated ban lines (permanent bans are left alone).
 
@@ -32,7 +32,7 @@ import time
 from urllib.parse import urlparse
 
 PEER_FILES = ("peer_fails.json", "peer_hist.json", "peer_hist_fam.json", "peer_last.json", "split_hist.json",
-              "peer_seen.json", "nat_seen.json", "fake_fails.json", "fake_hist.json")
+              "peer_seen.json", "nat_seen.json", "fake_fails.json", "fake_hist.json", "delayed_hist.json")
 CLOCK_KEYS = ("bad_since", "bad_left", "bad_log", "useless_since", "useless_left", "junk_since", "junk_left")
 SHOW_FILES = PEER_FILES + ("last_state.json", "fam_fails.json", "fam_hist.json", "fams.json", "closed.json", "warnings.json",
                            "down_why.json", "ann_iv.json", "confirm.json")

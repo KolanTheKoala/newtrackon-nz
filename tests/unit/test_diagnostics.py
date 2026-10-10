@@ -1109,3 +1109,113 @@ class TestProbesLookLikeRealClients:
         scraper.new_client()
         p = scraper.probe_port(0)
         assert str(p) not in scraper.redact_origin("peers ... port %d ..." % p)
+
+
+class TestDelayedPeerTest:
+    """Fix for trackers that forget peers within minutes: they pass the instant peer test but real clients, announcing
+    minutes apart, never meet. Watch-only for now."""
+
+    URL = "udp://akl.example:1/announce"
+
+    @pytest.fixture
+    def fake(self, monkeypatch: pytest.MonkeyPatch):
+        calls: dict = {"start": [], "finish": []}
+
+        def start(url, fam):
+            calls["start"].append((url, fam))
+            return {"url": url, "fam": fam, "sa": ["192.0.2.1", 1], "thash": "00" * 20, "pid": "-qB5050-abcdefghijkl", "port": 30000, "profile": []}
+
+        def finish(st):
+            calls["finish"].append(st)
+            return calls.get("verdict", True), {"seen": {"a": "ok" if calls.get("verdict", True) else None, "self": True}}
+        monkeypatch.setattr(scraper, "delayed_start", start)
+        monkeypatch.setattr(scraper, "delayed_finish", finish)
+        return calls
+
+    def test_once_a_day_per_family(self, fake) -> None:
+        assert T._delayed_maybe_start(self.URL, "v4") is True
+        assert T._delayed_maybe_start(self.URL, "v4") is False  # one running
+        T.DELAYED_PENDING.clear()
+        assert T._delayed_maybe_start(self.URL, "v4") is False  # done today
+        assert T._delayed_maybe_start(self.URL, "v6") is True  # the other family has its own day
+        assert T._delayed_maybe_start(self.URL, None) is False
+        assert fake["start"] == [(self.URL, "v4"), (self.URL, "v6")]
+
+    def test_a_failed_start_waits_until_tomorrow(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "delayed_start", lambda url, fam: None)
+        assert T._delayed_maybe_start(self.URL, "v4") is False
+        assert T.DELAYED_PENDING == [] and T.DELAYED_HIST[self.URL]["v4"]["t"] > 0
+
+    def test_wait_capped_by_announce_interval(self) -> None:
+        for _ in range(20):
+            assert 300 <= T._delayed_wait(self.URL) <= 900
+        T.ANN_IV[self.URL] = 300
+        assert all(T._delayed_wait(self.URL) <= 240 for _ in range(20))
+        T.ANN_IV[self.URL] = 30
+        assert T._delayed_wait(self.URL) == 60
+
+    def test_finishes_only_when_due_and_records(self, fake) -> None:
+        from time import time
+        T._delayed_maybe_start(self.URL, "v4")
+        T.delayed_due(time())
+        assert fake["finish"] == [] and len(T.DELAYED_PENDING) == 1
+        T.DELAYED_PENDING[0][2] -= 600  # started 10 min ago
+        fake["verdict"] = False
+        T.delayed_due(time() + 1000)
+        assert T.DELAYED_PENDING == [] and len(fake["finish"]) == 1
+        e = T.DELAYED_HIST[self.URL]["v4"]
+        assert e["r"] == [0] and e["last"]["ok"] is False and 600 <= e["last"]["after_s"] <= 602
+
+    def test_no_verdict_and_errors_record_nothing(self, fake, monkeypatch: pytest.MonkeyPatch) -> None:
+        from time import time
+        fake["verdict"] = None
+        T._delayed_maybe_start(self.URL, "v4")
+        T.delayed_due(time() + 1000)
+        assert "r" not in T.DELAYED_HIST[self.URL]["v4"]
+        T.DELAYED_HIST.clear()
+        T._delayed_maybe_start(self.URL, "v4")
+        monkeypatch.setattr(scraper, "delayed_finish", lambda st: 1 / 0)
+        T.delayed_due(time() + 1000)  # logged, not raised
+        assert T.DELAYED_PENDING == [] and "r" not in T.DELAYED_HIST[self.URL]["v4"]
+
+    def test_status_unaffected(self, fake) -> None:
+        from time import time
+        assert T.DELAYED_AFFECTS_STATUS is False
+        T.DELAYED_HIST[self.URL] = {"v4": {"r": [0] * 6, "t": int(time()), "last": {"ok": False, "after_s": 600, "t": int(time()), "seen": {}}}}
+        assert "delayed" not in str(T.status_rule.__code__.co_names)
+
+    @pytest.mark.usefixtures("region_db")
+    def test_page_and_api(self, flask_client: FlaskClient) -> None:
+        from time import time
+        T.DELAYED_HIST[self.URL] = {"v4": {"r": [1, 0], "t": int(time()), "last": {"ok": False, "after_s": 720, "t": int(time()),
+                                                                                  "seen": {"a": None, "self": True}}},
+                                    "v6": {"t": int(time())}}  # started, no result yet: not shown
+        html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
+        assert "Delayed peer test" in html and "passed 1 of 2" in html and "asking 12 min after" in html and "only itself" in html
+        assert "IPv6</b>: passed" not in html
+        d = flask_client.get("/api/tracker/akl.example").get_json()
+        assert d["peer_test"]["delayed"] == {"v4": {"passed": 1, "of": 2, "last": T.DELAYED_HIST[self.URL]["v4"]["last"]}}
+
+    def test_scraper_udp_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A registers and stays; B later uses the same torrent from a VPN exit on the port after A's; A is retired."""
+        sent: list = []
+
+        def session(fam, sa, src):
+            def ann(pid, left, port, event, th):
+                sent.append((src, pid, left, port, event, th))
+                a = sent[0]
+                return {"peers": [{"IP": "160.30.240.158", "port": a[3]}, {"IP": "198.51.100.7", "port": a[3] + 1}], "seeds": 1, "leechers": 1}
+            return type("S", (), {"close": lambda self: None})(), ann
+        monkeypatch.setattr(scraper, "_udp_session", session)
+        monkeypatch.setattr(scraper, "ordered_addrs", lambda *a, **k: [(0, 0, 0, "", ("192.0.2.1", 1))])
+        monkeypatch.setattr(scraper, "_probe_srcs", lambda fam, key=None: ["10.9.0.2"])
+        monkeypatch.setattr(scraper, "_a_ok", lambda ip: ip == "160.30.240.158")
+        scraper.rtt.profile, scraper.rtt.probe_port = ("-TR4060-", "Transmission/4.0.6"), 40000
+        st = scraper.delayed_start(self.URL, "v4")
+        assert (scraper.rtt.profile, scraper.rtt.probe_port) == (("-TR4060-", "Transmission/4.0.6"), 40000)  # check's client kept
+        assert st and len(sent) == 1 and sent[0][0] is None and sent[0][4] == 2 and sent[0][3] == st["port"]
+        ok, extra = scraper.delayed_finish(st)
+        assert ok is True and extra["seen"]["a"] == "ok"
+        b, b_stop, a_stop = sent[1:]
+        assert b[0] == "10.9.0.2" and b[3] == st["port"] + 1 and b[5] == sent[0][5] and b[4] == 2 and b_stop[4] == 3
+        assert a_stop[0] is None and a_stop[1] == sent[0][1] and a_stop[4] == 3

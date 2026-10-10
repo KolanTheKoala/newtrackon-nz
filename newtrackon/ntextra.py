@@ -119,7 +119,10 @@ def _detail(t):
                       # per family, once tested on that family: {"v4": {"passed", "of"}, ...}
                       "by_family": {k: {"passed": sum(v), "of": len(v)} for k, v in sorted((T.PEER_HIST_FAM.get(t.url) or {}).items()) if k != "?" and v},
                       # what our second test client was handed in the last test on each family (see _seen_text)
-                      "last_seen": {k: dict(v) for k, v in sorted((T.PEER_SEEN.get(t.url) or {}).items())}},
+                      "last_seen": {k: dict(v) for k, v in sorted((T.PEER_SEEN.get(t.url) or {}).items())},
+                      # the delayed peer test (watch-only): {"v4": {"passed", "of", "last": {ok, after_s, t, seen}}, ...}
+                      "delayed": {k: {"passed": sum(v.get("r", [])), "of": len(v.get("r", [])), "last": dict(v["last"])}
+                                  for k, v in sorted((T.DELAYED_HIST.get(t.url) or {}).items()) if v.get("last")}},
         # an address it hands out instead of the client's real one (Docker, NAT, a proxy or CDN), per family
         "unusable_address": {k: v["ip"] for k, v in sorted((T.NAT_SEEN.get(t.url) or {}).items())},
         "fake_peers": {"latest": T.FAKE_N.get(t.url), "streak": T.FAKE_FAILS.get(t.url, 0)},
