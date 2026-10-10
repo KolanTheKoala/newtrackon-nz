@@ -1413,9 +1413,16 @@ def _nt_bad_share(url, now=None):
     s = LAST_STATE.get(url) or {}
     now = now or time()
     w0, span = now - BAD_SHARE_DAYS * 86400, BAD_SHARE_DAYS * 86400
-    tot = sum(max(0, min(e, now) - max(b, w0)) for b, e in (s.get("bad_log") or []))
+    spells = [(max(int(b), w0), min(int(e), now)) for b, e in (s.get("bad_log") or [])]
     if _peer_bad(s.get("st"), s.get("bad")):
-        tot += max(0, now - max(int(s.get("since", now)), w0))
+        spells.append((max(int(s.get("pb_since", s.get("since", now))), w0), now))
+    # the union, so no moment counts twice (spells saved before pb_since could overlap: 'since' is the start of the
+    # stored state, and Up/Broken is stored as up_bad too, so a tracker flipping between them logged the same hours again)
+    tot, end = 0.0, w0
+    for b, e in sorted(spells):
+        b = max(b, end)
+        if e > b:
+            tot, end = tot + e - b, e
     return tot / span
 
 
@@ -1428,8 +1435,13 @@ def _bad_track(prev, st, now, bad=None):
     d.update(_stretch(prev, st, now, _useless, "useless", BAD_BRIDGE, bad))
     prev = prev or {}
     log = [x for x in (prev.get("bad_log") or []) if now - x[1] <= BAD_SHARE_DAYS * 86400]
-    if _peer_bad(prev.get("st"), prev.get("bad")) and not _peer_bad(st, bad):
-        log.append([int(prev.get("since", now)), int(now)])
+    was, bad_now = _peer_bad(prev.get("st"), prev.get("bad")), _peer_bad(st, bad)
+    # pb_since: start of the current no/fake-peers spell itself (not 'since', which Up/Broken spells share: both are stored as up_bad)
+    start = int(prev.get("pb_since", prev.get("since", now))) if was else int(now)
+    if bad_now:
+        d["pb_since"] = start
+    elif was:
+        log.append([max(start, max((int(x[1]) for x in log), default=start)), int(now)])
     if log:
         d["bad_log"] = log
     return d

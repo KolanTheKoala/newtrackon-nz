@@ -202,6 +202,31 @@ class TestBadStretch:
         s = {"st": "up_bad", "bad": dead + self.NP, "since": 65 * self.H, **T._bad_track(s, "up_bad", 65 * self.H, dead + self.NP)}
         assert s["bad_since"] == 65 * self.H
 
+    def test_share_flipping_with_up_broken_like_corpscorp(self) -> None:
+        """tracker.corpscorp.online flipped between Up/Bad (no peers) and Up/Broken (split swarm), both stored as up_bad
+        with one 'since': every spell was logged from that same start and the share read 240%. Each hour counts once."""
+        url, split = "udp://cc.example:80/announce", ["runs separate servers that don't share swarms"]
+        s, since = None, 0
+        for h, bad in ((0, self.NP), (6, split), (24, self.NP), (30, split), (48, self.NP), (50, split), (72, self.NP), (73, split)):
+            st = {"st": "up_bad", "bad": bad, "since": since, "dead": []}
+            st.update(T._bad_track(s, "up_bad", h * self.H, bad))
+            s = st
+        T.LAST_STATE[url] = s
+        assert s["bad_log"] == [[0, 6 * self.H], [24 * self.H, 30 * self.H], [48 * self.H, 50 * self.H], [72 * self.H, 73 * self.H]]
+        assert abs(T._nt_bad_share(url, 80 * self.H) - 15 / 168) < 1e-6
+        s = {**s, "bad": self.NP, **T._bad_track(s, "up_bad", 90 * self.H, self.NP)}
+        assert s["pb_since"] == 90 * self.H
+        T.LAST_STATE[url] = s
+        assert abs(T._nt_bad_share(url, 100 * self.H) - 25 / 168) < 1e-6
+
+    def test_share_of_overlapping_saved_spells_counts_once(self) -> None:
+        url = "udp://cc.example:80/announce"
+        T.LAST_STATE[url] = {"st": "up_bad", "bad": self.NP, "since": 0, "dead": [],
+                             "bad_log": [[0, 10 * self.H], [0, 30 * self.H], [0, 50 * self.H]]}
+        assert abs(T._nt_bad_share(url, 168 * self.H) - 1.0) < 1e-6  # all of it, never more
+        T.LAST_STATE[url]["st"] = "up_good"
+        assert abs(T._nt_bad_share(url, 168 * self.H) - 50 / 168) < 1e-6
+
     def test_seeded_from_events_like_corpscorp(self) -> None:
         url, now = "udp://cc.example:80/announce", 200 * self.H
         evs = [(122.8, "good", "is Up/Good again"), (121.7, "bad", self.BAD), (120.2, "good", "is Up/Good again"), (119.3, "bad", self.BAD),
