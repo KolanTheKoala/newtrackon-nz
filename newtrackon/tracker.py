@@ -454,10 +454,16 @@ class Tracker:
                 return
             r = REMOVED.get(host)
             prior = int(r.get("count", 1)) if r else 0  # removals before this one
-            # earlier removals of other names on the same server count too, so a new name doesn't start the ladder again
+            # earlier removals of other names on the same server count too, so a new name doesn't start the ladder again;
+            # but only once that name's ban had run out when this one was listed: a sister tracker listed alongside it
+            # (tracker.dler.org and tracker2.dler.org) going down with the same fault is one problem, not a repeat
             mine = _nt_ip_keys(list(getattr(self, "ips", None) or []) + list((getattr(self, "recent_ips", None) or {}).keys()))
+            # when it was first listed: for a tracker back after its own ban, its earlier listing (its sister's removal
+            # from that first time mustn't count again now)
+            listed = min([int(x) for x in (getattr(self, "added", None), (r or {}).get("added")) if x] or [0])
             prior += sum(int(o.get("count", 1)) for h, o in REMOVED.items()
-                         if h != host and mine & _nt_ip_keys(o.get("ips")) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS))
+                         if h != host and mine & _nt_ip_keys(o.get("ips")) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS)
+                         and _nt_ban_end(h, o) <= listed)
             days = BAN_STEPS[min(prior, len(BAN_STEPS) - 1)]
             with open(_DENY_FILE, "a", encoding="utf-8") as fh:
                 fh.write(f"{host}\n" if days is None else (f"{host} {int(time())}\n" if days == 30 else f"{host} {int(time())} {days}\n"))
@@ -1306,6 +1312,13 @@ def _nt_ban_entries():
         else:
             out.append((p[0].lower(), None, None))
     return out
+
+
+def _nt_ban_end(host, rec):
+    """When the latest ban on a host this site removed runs out (inf: for good). With no ban line (lifted, or removed
+    without a ban), its removal time."""
+    ends = [float("inf") if since is None else since + days * 86400 for h, since, days in _nt_ban_entries() if h == host]
+    return max(ends) if ends else int(rec.get("t") or 0)
 
 
 def _nt_banned(host, now=None):

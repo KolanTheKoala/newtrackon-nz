@@ -6,6 +6,7 @@
     python scripts/nt_admin.py [--data DIR] clear-peers HOST
     python scripts/nt_admin.py [--data DIR] clear-history HOST
     python scripts/nt_admin.py [--data DIR] forget HOST
+    python scripts/nt_admin.py [--data DIR] shorten-ban HOST
 
 show           everything stored about the host (safe while the app runs).
 reinstate      a removed tracker that was removed by a fault in our checks: clears its peer-test records and saved
@@ -16,6 +17,8 @@ clear-clocks   drop a listed tracker's removal clocks (Up/Bad, not-working, Junk
 clear-peers    drop a tracker's peer-test records (all families, split, fake peers, unusable address, last seen, delayed).
 clear-history  drop a listed tracker's uptime history (30-day slots and daily summary) and saved state.
 forget         delete a removal record and its dated ban lines (permanent bans are left alone).
+shorten-ban    move a running 90-day ban down to 30 days, from the same start, and lower the removal count to match:
+               for a ban that went up a step for one problem counted twice. Bans for good are left alone.
 
 Every change first copies the files it touches to DIR/admin-backups/<time>-<command>-<host>/.
 """
@@ -33,7 +36,7 @@ from urllib.parse import urlparse
 
 PEER_FILES = ("peer_fails.json", "peer_hist.json", "peer_hist_fam.json", "peer_last.json", "split_hist.json",
               "peer_seen.json", "nat_seen.json", "fake_fails.json", "fake_hist.json", "delayed_hist.json")
-CLOCK_KEYS = ("bad_since", "bad_left", "bad_log", "useless_since", "useless_left", "junk_since", "junk_left")
+CLOCK_KEYS = ("bad_since", "bad_left", "bad_log", "pb_since", "useless_since", "useless_left", "junk_since", "junk_left")
 SHOW_FILES = PEER_FILES + ("last_state.json", "fam_fails.json", "fam_hist.json", "fams.json", "closed.json", "warnings.json",
                            "down_why.json", "ann_iv.json", "confirm.json")
 
@@ -207,16 +210,54 @@ def forget(d: Data) -> None:
     print("%s: removal record %s, dated bans %s" % (d.host, "deleted" if had else "none", "lifted" if keep != lines else "none"))
 
 
+def shorten_ban(d: Data, now: float | None = None) -> None:
+    removed = d.load("removed.json")
+    rec = removed.get(d.host)
+    if not rec:
+        sys.exit("%s has no removal record: not a ban this site made" % d.host)
+    now = now or time.time()
+    try:
+        with open(d.path("denylist.txt")) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    running = []
+    for i, ln in enumerate(lines):
+        p = ln.split()
+        if p[:1] != [d.host] or len(p) < 2 or not p[1].isdigit():
+            continue
+        days = int(p[2]) if len(p) > 2 and p[2].isdigit() else 30
+        if now - int(p[1]) <= days * 86400:
+            running.append((i, int(p[1]), days))
+    if len(running) != 1:
+        sys.exit("%s: %s running dated ban lines, not exactly one: nothing changed" % (d.host, len(running)))
+    i, since, days = running[0]
+    if days <= 30:
+        sys.exit("%s: its ban is already %d days: nothing changed" % (d.host, days))
+    lines[i] = "%s %d" % (d.host, since)
+    d._backup("denylist.txt")
+    with open(d.path("denylist.txt"), "r+") as f:
+        f.write("\n".join(lines) + "\n")
+        f.truncate()
+    d.changed.append("denylist.txt")
+    rec["count"] = 1
+    d.save("removed.json", removed)
+    end = since + 30 * 86400
+    print("%s: ban now 30 days from %s, %s %s; removal count 1" % (
+        d.host, time.strftime("%Y-%m-%d", time.gmtime(since)), "ends" if end > now else "ended",
+        time.strftime("%Y-%m-%d", time.gmtime(end))))
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default="data", help="the app's data directory (default: data)")
-    ap.add_argument("command", choices=("show", "reinstate", "clear-clocks", "clear-peers", "clear-history", "forget"))
+    ap.add_argument("command", choices=("show", "reinstate", "clear-clocks", "clear-peers", "clear-history", "forget", "shorten-ban"))
     ap.add_argument("host")
     ap.add_argument("--clean-history", action="store_true", help="reinstate: drop the uptime history it would get back")
     a = ap.parse_args(argv)
     d = Data(a.data, a.command, a.host)
     {"show": show, "clear-clocks": clear_clocks, "clear-peers": clear_peers, "clear-history": clear_history,
-     "forget": forget}.get(a.command, lambda d: reinstate(d, a.clean_history))(d)
+     "forget": forget, "shorten-ban": shorten_ban}.get(a.command, lambda d: reinstate(d, a.clean_history))(d)
     if d.backup_dir:
         print("backup:", d.backup_dir)
 

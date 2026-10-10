@@ -25,7 +25,7 @@ def data(tmp_path):
     w("peer_hist_fam.json", {U: {"v4": [0, 0, 0]}, L: {"v4": [1, 1, 1]}})
     w("peer_fails.json", {U: 3})
     w("split_hist.json", {U: [1, 1]})
-    w("last_state.json", {U: {"st": "up_bad", "bad_since": 5}, L: {"st": "up_bad", "bad": ["x"], "bad_since": 5, "bad_log": [[1, 2]], "junk_since": 9}})
+    w("last_state.json", {U: {"st": "up_bad", "bad_since": 5}, L: {"st": "up_bad", "bad": ["x"], "bad_since": 5, "bad_log": [[1, 2]], "pb_since": 5, "junk_since": 9}})
     w("daily.json", {L: [["2026-10-01", 100.0, 48, {}]]})
     (tmp_path / "denylist.txt").write_text("gone.example 1790000000\nforever.example\n")
     con = sqlite3.connect(tmp_path / "trackon.db")
@@ -87,3 +87,52 @@ def test_fault_record_deleted_once_relisted(monkeypatch) -> None:
     T.REMOVED["gone.example"] = {"url": U, "reason": "removed in error", "fault": True, "count": 1}
     src = open(ingest.__file__).read()
     assert 'if (_t.REMOVED.get(host) or {}).get("fault"):' in src and "_t.REMOVED.pop(host, None)" in src
+
+
+class TestShortenBan:
+    """1.tracker.eu.org and two others: removed, relisted by hand on 2026-10-05, removed again 15 minutes later on the
+    same Up/Bad clock and banned 90 days as a second removal. One problem: 30 days."""
+
+    NOW = 1791200000
+
+    def _setup(self, data, line, count=2):
+        rec = _j(data, "removed.json")
+        rec["gone.example"].update({"t": self.NOW - 86400, "count": count})
+        (data / "removed.json").write_text(json.dumps(rec))
+        (data / "denylist.txt").write_text("gone.example 1700000000\n" + line + "\nforever.example\n")
+
+    def test_90_to_30(self, data, capsys) -> None:
+        self._setup(data, "gone.example %d 90" % (self.NOW - 86400))
+        A.shorten_ban(A.Data(str(data), "shorten-ban", "gone.example"), now=self.NOW)
+        assert (data / "denylist.txt").read_text() == "gone.example 1700000000\ngone.example %d\nforever.example\n" % (self.NOW - 86400)
+        assert _j(data, "removed.json")["gone.example"]["count"] == 1
+        assert "ban now 30 days" in capsys.readouterr().out
+        backups = os.listdir(data / "admin-backups")
+        assert sorted(os.listdir(data / "admin-backups" / backups[0])) == ["denylist.txt", "removed.json"]
+
+    def test_via_main(self, data) -> None:
+        self._setup(data, "gone.example %d 90" % (int(__import__("time").time()) - 86400))
+        A.main(["--data", str(data), "shorten-ban", "gone.example"])
+        assert _j(data, "removed.json")["gone.example"]["count"] == 1
+
+    @pytest.mark.parametrize("line", ["gone.example %d" % (NOW - 86400),        # already 30 days
+                                      "gone.example %d 90" % (NOW - 100 * 86400),  # ran out
+                                      ""])                                       # no ban
+    def test_refuses_and_changes_nothing(self, data, line) -> None:
+        self._setup(data, line)
+        before = ((data / "denylist.txt").read_text(), (data / "removed.json").read_text())
+        with pytest.raises(SystemExit):
+            A.shorten_ban(A.Data(str(data), "shorten-ban", "gone.example"), now=self.NOW)
+        assert ((data / "denylist.txt").read_text(), (data / "removed.json").read_text()) == before
+        assert not (data / "admin-backups").exists()
+
+    def test_never_touches_a_host_without_a_removal_record(self, data) -> None:
+        with pytest.raises(SystemExit):
+            A.shorten_ban(A.Data(str(data), "shorten-ban", "forever.example"), now=self.NOW)
+        assert "forever.example\n" in (data / "denylist.txt").read_text()
+
+    def test_count_from_another_name_stays_1(self, data) -> None:
+        """tracker.dler.org: 90 days from its sister tracker's removal, its own count already 1."""
+        self._setup(data, "gone.example %d 90" % (self.NOW - 86400), count=1)
+        A.shorten_ban(A.Data(str(data), "shorten-ban", "gone.example"), now=self.NOW)
+        assert _j(data, "removed.json")["gone.example"]["count"] == 1

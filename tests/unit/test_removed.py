@@ -362,6 +362,59 @@ def test_repeat_ban_counts_other_names_on_the_same_server(sample_tracker) -> Non
     assert open("data/denylist.txt").read().split()[2] == "90"  # its second removal on that server: 90 days, not 30
 
 
+class TestSameServerOnlyAfterItsBan:
+    """tracker.dler.org got 90 days because tracker2.dler.org, on the same server and listed alongside it, was removed
+    for the same fault 5 days earlier. Another name's removal only raises the ban if that ban had run out when this
+    tracker was listed (a comeback under a new name), not for sister trackers going down together."""
+
+    D = 86400
+
+    def _ban(self, t, old_line: str, added: int) -> str:
+        t.ips, t.added = ["203.0.113.9"], added
+        T.REMOVED["old-name.example"] = {"url": "udp://old-name.example:1/announce", "t": 1_000 * self.D, "reason": "x", "count": 1,
+                                         "ips": ["203.0.113.9"], "network": "Chunghwa Telecom"}
+        with open("data/denylist.txt", "w") as f:
+            f.write(old_line)
+        t._nt_ban()
+        return open("data/denylist.txt").read().splitlines()[-1]
+
+    def test_sister_listed_during_its_ban(self, sample_tracker) -> None:
+        line = self._ban(sample_tracker, f"old-name.example {1_000 * self.D}\n", added=1_000 * self.D + 7_000)
+        assert len(line.split()) == 2  # 30 days
+
+    def test_sister_listed_before_its_removal(self, sample_tracker) -> None:
+        line = self._ban(sample_tracker, f"old-name.example {1_000 * self.D}\n", added=900 * self.D)
+        assert len(line.split()) == 2
+
+    def test_new_name_after_the_ban_ran_out(self, sample_tracker) -> None:
+        line = self._ban(sample_tracker, f"old-name.example {1_000 * self.D}\n", added=1_031 * self.D)
+        assert line.split()[2] == "90"
+
+    def test_after_a_90_day_ban_only_once_it_ran_out(self, sample_tracker) -> None:
+        old = f"old-name.example {1_000 * self.D} 90\n"
+        assert len(self._ban(sample_tracker, old, added=1_031 * self.D).split()) == 2  # still banned then
+        assert self._ban(sample_tracker, old, added=1_091 * self.D).split()[2] == "90"
+
+    def test_banned_for_good_never_ran_out(self, sample_tracker) -> None:
+        assert len(self._ban(sample_tracker, "old-name.example\n", added=5_000 * self.D).split()) == 2
+
+    def test_no_ban_line_counts_from_its_removal(self, sample_tracker) -> None:
+        assert self._ban(sample_tracker, "", added=1_000 * self.D + 1).split()[2] == "90"
+        assert len(self._ban(sample_tracker, "", added=1_000 * self.D - 1).split()) == 2
+
+    def test_back_after_its_own_ban_the_sister_still_doesnt_count(self, sample_tracker) -> None:
+        """tracker.dler.org serves its 30 days, is listed again and removed again: its own second removal, 90 days. The
+        sister's removal from its first listing mustn't count now just because the sister's ban has run out since."""
+        T.REMOVED[sample_tracker.host] = {"url": sample_tracker.url, "t": 1_005 * self.D, "reason": "x", "count": 1,
+                                          "added": 1_000 * self.D + 7_000}
+        assert self._ban(sample_tracker, f"old-name.example {1_000 * self.D}\n", added=1_040 * self.D).split()[2] == "90"
+
+    def test_its_own_earlier_removal_still_counts(self, sample_tracker) -> None:
+        """Its own record: reinstated early at its operator's request (ban lifted) and removed again is a second removal."""
+        T.REMOVED[sample_tracker.host] = {"url": sample_tracker.url, "t": 1_000 * self.D, "reason": "x", "count": 1}
+        assert self._ban(sample_tracker, "", added=900 * self.D).split()[2] == "90"
+
+
 class TestIpBanBothFamilies:
     @pytest.fixture(autouse=True)
     def _setup(self, removed: None) -> None:
