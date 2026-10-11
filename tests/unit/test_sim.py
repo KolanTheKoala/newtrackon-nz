@@ -74,7 +74,13 @@ class Sim:
         mp.setattr(scraper, "region_latency", lambda u, fams=None: {"Oceania": 30, "Asia": 60, "Europe": 90, "North America": 80})
         mp.setattr(T, "_delayed_maybe_start", lambda u, f: False)
         mp.setattr(T, "_monitor_online", lambda: True)
-        mp.setattr(T, "_nt_local_fault", lambda t, e: False)
+        # the real local-fault logic: only what it asks the network is scripted (world "elsewhere": our test clients
+        # abroad get an answer while this server doesn't)
+        mp.setattr(T, "_nt_local_fault", _REAL_LOCAL_FAULT)  # conftest replaces it for every test
+        mp.setattr(T, "_nt_vps_retry_ok", lambda u: False)
+        mp.setattr(T, "_nt_reachable_elsewhere", lambda u: bool(self.state().get("elsewhere")))
+        mp.setattr(T, "_nt_public_dns_has", lambda h: False)
+        mp.setattr(T, "_nt_signal", lambda kind, host: None)
 
     def _tracker(self, url, added_days):
         from urllib.parse import urlparse
@@ -361,7 +367,8 @@ def test_accepting_a_protocol_upgrade_never_writes_a_ban(monkeypatch) -> None:
 
 # ---- randomized timelines: whatever the tracker does, it's never removed earlier than the rules allow, and the reason
 # matches what it was doing. The bounds come from the per-check record of what the world was doing, not from the code.
-MODES = ["ok", "ok", "ok", "none", "nat", "split", "rare", "fake", "down", "flap", "dead6", "nopeers6", "inconclusive", "na"]
+MODES = ["ok", "ok", "ok", "none", "nat", "split", "rare", "fake", "down", "flap", "dead6", "nopeers6", "inconclusive", "na",
+         "abroad"]
 
 
 def _random_world(rng):
@@ -374,6 +381,8 @@ def _random_world(rng):
         mode = next((m for end, m in segs if d < end), "ok")
         if mode == "down":
             return {"answers": False}
+        if mode == "abroad":  # blocks this server, answers our test clients in other countries
+            return {"answers": False, "elsewhere": True}
         if mode == "flap":
             return {"answers": int(d * 48) % 3 != 0}
         if mode == "dead6":
@@ -437,11 +446,13 @@ def test_random_timelines_never_remove_early(monkeypatch, seed) -> None:
     if not s.removed:
         return
     t_rm, why = s.removed
-    down = [st == "down" for _, st, _ in s.log]
+    down = [st == "down" and not w.get("elsewhere") for (_, st, _), w in zip(s.log, seen)]  # answering abroad isn't down
     pbad = [st == "up_bad" and _peer_bad_codes(c) for _, st, c in s.log]
     world_now = seen[-1]
+    if why.startswith(("no answer for", "not working for")):
+        assert not world_now.get("elsewhere"), (seed, why, "removed while answering our test clients abroad")
     if why.startswith("no answer for"):
-        last_answer = max((t for t, st, _ in s.log if st != "down"), default=None)
+        last_answer = max((t for (t, st, _), w in zip(s.log, seen) if st != "down" or w.get("elsewhere")), default=None)
         assert not world_now["answers"] and (last_answer is None or t_rm - last_answer >= 5 * DAY), (seed, why)
     elif "(Up/Bad)" in why:
         ok, extra = s.latest  # its latest test showed the fault it's removed for
@@ -505,18 +516,23 @@ def test_random_restart_changes_nothing(monkeypatch, seed) -> None:
     assert (b.removed, [(t, st) for t, st, _ in b.log]) == ref, (seed, at, a.removed, b.removed)
 
 
-def test_blocking_only_this_server_says_so(monkeypatch) -> None:
-    """Wellington times out but the VPN exits get answers (it blocks this server): half-down slots, and the reason must
-    say what happened, not 'no answer in 0% of checks'."""
-    s = Sim(monkeypatch, lambda d: {"answers": d < 1})
-    monkeypatch.setattr(T, "_nt_local_fault", T.__dict__["_nt_local_fault"].__wrapped__ if hasattr(T._nt_local_fault, "__wrapped__") else _REAL_LOCAL_FAULT)
-    monkeypatch.setattr(T, "_nt_vps_retry_ok", lambda u: False)
-    monkeypatch.setattr(T, "_nt_reachable_elsewhere", lambda u: True)
-    monkeypatch.setattr(T, "_nt_signal", lambda kind, host: None)
+def test_answering_only_abroad_stays(monkeypatch) -> None:
+    """No answer here, but our test clients in other countries get one (it blocks this server): it stays listed, shown as
+    Down from here (user's call). Once it answers nobody, the usual 5 days run from its last answer anywhere."""
+    s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": 1 <= d < 12})
+    s.run(12)
+    assert s.removed is None and s.log[-1][1] == "down"
+    assert ntextra_dying(s.tr, s.now) is None  # not greyed as about to go
+    last_abroad = T.ELSEWHERE[s.tr.url]
+    assert 11.8 <= _days(last_abroad) < 12
     s.run(10)
-    assert s.removed is not None, "removed?"
-    assert "though it answers our test clients in other countries" in s.removed[1] and "0% of checks" not in s.removed[1], s.removed[1]
-    assert any("may be blocking this server" in x for x in T.REMOVED[s.tr.host]["detail"])
+    assert s.removed is not None and s.removed[1].startswith("no answer for 5 days"), s.removed
+    assert 5 * DAY <= s.removed[0] - last_abroad <= 5 * DAY + 5 * HOUR, (_days(last_abroad), _days(s.removed[0]))
+
+
+def ntextra_dying(t, now):
+    from newtrackon import ntextra
+    return ntextra._dying(t, now)
 
 
 def test_inconclusive_for_7_days_end_to_end(monkeypatch) -> None:
@@ -534,3 +550,45 @@ def test_inconclusive_for_7_days_end_to_end(monkeypatch) -> None:
     assert "no conclusive peer test" in s.removed[1] and "(Up/Bad)" in s.removed[1], s.removed[1]
     detail = T.REMOVED[s.tr.host]["detail"]
     assert detail[0].startswith("No conclusive peer test for 7 days") and not [x for x in detail if x.startswith("Passed 0")]
+
+
+def test_a_failing_peer_test_brings_the_next_check_forward(monkeypatch) -> None:
+    s = Sim(monkeypatch, lambda d: {"peers": "none" if 2 <= d < 6 else "ok"}).run(1.9)
+    assert s.tr.interval >= 7200  # healthy: long intervals
+    s.run(4.2)
+    first_fail = next(t for t, st, _ in s.log if _days(t) >= 2)
+    bad = s.first("up_bad")
+    assert bad - first_fail <= HOUR, (bad - first_fail) / 60  # Up/Bad within the hour, not after 3 long intervals
+    assert s.tr.interval > 900  # settled Up/Bad: not checked every 15 minutes
+    s.run(2)
+    first_pass = next(t for t, st, _ in s.log if _days(t) >= 6)
+    good = next(t for t, st, _ in s.log if t > first_pass and st != "up_bad")
+    assert good - first_pass <= 1.5 * HOUR, (good - first_pass) / 60  # the fix shows soon too
+
+
+def test_split_servers_arent_checked_every_15_minutes(monkeypatch) -> None:
+    s = Sim(monkeypatch, lambda d: {"peers": "split"}).run(3)
+    ivs = [t2 - t1 for (t1, _, _), (t2, _, _) in zip(s.log[-20:], s.log[-19:])]
+    assert min(ivs) > 1000, ivs
+
+
+def test_up_bad_then_answering_only_abroad_stays(monkeypatch) -> None:
+    # Up/Bad for 6 days (its clock past 5 days), then it blocks this server but answers our test clients abroad
+    s = Sim(monkeypatch, lambda d: {"peers": "none"} if 1 <= d < 6.3 else ({"answers": False, "elsewhere": True} if d >= 6.3 else {}))
+    s.run(6.3)
+    if s.removed:  # removed for its 5 days of Up/Bad before it started blocking: fine, that's the rule
+        assert "(Up/Bad)" in s.removed[1]
+        return
+    s.run(10)
+    assert s.removed is None, s.removed
+
+
+def test_answering_abroad_counts_in_full_for_the_15_percent_rule(sample_tracker) -> None:
+    from time import time as _t
+    t, now = sample_tracker, int(_t())
+    t.added, t.last_uptime, t.status = now - 30 * DAY, now - HOUR, 0
+    t.last_downtime = now
+    T.ELSEWHERE[t.url] = now
+    t.historic = deque([1, 0.5, 0.5, 0.5, 0, 0.5, 0.5, 1] * 60, maxlen=1440)  # mostly answering only abroad, flipping often
+    t.update_uptime()
+    assert t.to_be_deleted is False

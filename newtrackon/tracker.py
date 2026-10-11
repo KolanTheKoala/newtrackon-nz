@@ -409,7 +409,7 @@ class Tracker:
             PEER_OK.get(self.url) is False or (PEER_OK.get(self.url) is None and _peer_na_failing(self.url, now_ts)))
         fake_now = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and self.status == 1 and bool(FAKE_N.get(self.url))
         cl = CLOSED.get(self.url) or {}
-        if cl.get("n", 0) >= CLOSED_LIMIT and (self.status == 0 or nopeers_now):
+        if cl.get("n", 0) >= CLOSED_LIMIT and ((self.status == 0 and not _answers_elsewhere_now(self)) or nopeers_now):
             _NT_DEL_REASON[self.url] = cl["why"]
             logger.info("Evicting %s (%s, %d checks in a row)", self.url, cl["why"], cl["n"])
             self.to_be_deleted = True
@@ -439,7 +439,10 @@ class Tracker:
         listed = (now_ts - int(self.added or now_ts)) / 86400.0
         if ud is not None and self.status != 0 and not _peer_rule_applies(self.url):
             ud = None  # answering but failing the (paused) HTTP peer test: not counted as "not working"
-        if ud is not None and ud >= REMOVE_DAYS and listed >= 3 and (self.status == 0 or failing):
+        # down now, from everywhere: answering our test clients abroad isn't "not working" (the stored state is from the
+        # check before, so it can still say Up/Bad at the first such check)
+        down_now = self.status == 0 and not _answers_elsewhere_now(self)
+        if ud is not None and ud >= REMOVE_DAYS and listed >= 3 and (down_now or failing):
             _NT_DEL_REASON[self.url] = _useless_reason(self, ud)
             logger.info("Evicting %s (down or Up/Bad for %.1f days)", self.url, ud)
             self.to_be_deleted = True
@@ -458,21 +461,19 @@ class Tracker:
                 self._nt_ban()
                 return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
-        dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
+        dead_days = (now_ts - _last_answer(self)) / 86400.0  # an answer to our test clients abroad counts (it stays)
         # a reinstated tracker gets its last week back but, like a new one, 3 days before the 15% rule judges it: judged at
         # once on the week that got it removed, a fixed tracker went again at its first check (with a 90-day ban)
         back = REINSTATED.get(self.url)
         if back and now_ts - int(back) < 3 * 86400:
             age_days = min(age_days, (now_ts - int(back)) / 86400.0)
-        if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and availability * stability < 0.15)):
+        # for removal an answer to our test clients abroad counts in full (it stays: user's call); the score keeps it at half
+        rav, rst = _nt_avail_stab([1 if float(x) > 0 else 0 for x in self.historic]) if any(0 < float(x) < 1 for x in self.historic) else (availability, stability)
+        if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and rav * rst < 0.15)):
             # the event, the removed page and the ban list say which of the two it was
             _dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(self.url)))
-            _else = _answers_elsewhere(self, dead_days)
-            _NT_DEL_REASON[self.url] = (("no answer from this site's server for %d days%s, though it answers our test clients in other "
-                                         "countries: it may be blocking this site" % (int(dead_days), " (%s)" % _dw if _dw else ""))
-                                        if dead_days >= REMOVE_DAYS and _else else
-                                        "no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else "") if dead_days >= REMOVE_DAYS else
-                                        "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * availability * stability))
+            _NT_DEL_REASON[self.url] = ("no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else "") if dead_days >= REMOVE_DAYS else
+                                        "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * rav * rst))
             logger.info(
                 "Evicting %s (score=%.2f%%, availability=%.1f%%, no success for %.1f days, samples=%s, age_days=%.1f)",
                 self.url,
@@ -663,6 +664,8 @@ class Tracker:
 
     def _next_interval(self) -> int:
         recent = list(self.historic)[-12:]
+        if self.status == 1 and _peer_unsettled(self.url):
+            return 900  # its latest peer test disagrees with its status: look again soon (user's call, 2026-10-12)
         if self.status == 0:
             if 1 in recent:
                 return 900  # just dropped / flapping: watch closely
@@ -698,7 +701,11 @@ class Tracker:
     def is_down(self) -> None:
         self.status = 0
         self.last_downtime = int(time())
-        self._record(0.5 if getattr(self, "_nt_partial", False) else 0)
+        partial = getattr(self, "_nt_partial", False)
+        self._record(0.5 if partial else 0)
+        if partial:  # no answer here, but our test clients in other countries got one: it works, it stays (user's call)
+            ELSEWHERE[self.url] = self.last_downtime
+            _jsave(ELSEWHERE, _ELSEWHERE_FILE)
         self._nt_partial = False
         self.interval = self._next_interval()
 
@@ -1264,9 +1271,6 @@ def _removal_detail(rec, before=None):
                    "(only the first one ever got an answer), so it couldn't show that it shares peers. From then on each "
                    "check counted as a failed test.")
         return out, "no-peers"
-    if "may be blocking this site" in low:
-        out.append("This site's server got no answer from it, while our test clients in other countries did: it may be "
-                   "blocking this server, for example after limiting announces from one address.")
     if peers:
         fake = "fake peers" in low
         for fam, s in _peer_evidence(url, before):
@@ -1343,6 +1347,17 @@ PEER_NA_DAYS = 7
 _PEER_LAST_FILE = "data/peer_last.json"
 PEER_LAST: dict = _jload(_PEER_LAST_FILE)  # url -> last conclusive peer test (or when we started waiting for one)
 _PEER_ANY = [0.0]  # last conclusive peer test for any tracker: the test itself works
+
+
+def _peer_unsettled(url):
+    """Its latest peer test disagrees with its last 6: failing (or fake peers) while it isn't Up/Bad for it yet, or passing
+    while it still is. Checked again in 15 minutes then, so Up/Bad shows within the hour instead of after up to 3 long check
+    intervals, and so does a fix. Not for separate servers that don't share swarms: those pass and fail by turns."""
+    if _split(url):
+        return False
+    ok, bad = PEER_OK.get(url), PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT
+    fake, fake_bad = bool(FAKE_N.get(url)), FAKE_FAILS.get(url, 0) >= PEER_FAIL_LIMIT
+    return (ok is False and not bad) or (ok is True and bad) or fake != fake_bad
 
 
 def _peer_na_failing(url, now=None):
@@ -1514,8 +1529,9 @@ def _nt_upbad_days(url, now=None):
 
 
 def _useless(st, bad):
-    """Not working for anyone: down, or answering but handing out no peers or fake ones."""
-    return st == "down" or _peer_bad(st, bad)
+    """Not working for anyone: down (not just from here: answering our test clients abroad isn't), or answering but
+    handing out no peers or fake ones."""
+    return (st == "down" and ELSEWHERE_TEXT not in (bad or [])) or _peer_bad(st, bad)
 
 
 def _nt_useless_days(url, now=None):
@@ -1564,13 +1580,20 @@ def _junk_broken_now(t):
     return None
 
 
-def _answers_elsewhere(t, days):
-    """Most of its missed checks over these days were half slots: no answer from this server, but answers from the VPN
-    exits (it blocks this site, or the route from here is broken)."""
-    n = max(1, int(days * 86400 // Tracker.SLOT))
-    h = [float(x) for x in list(getattr(t, "historic", None) or [])][-n:]
-    missed = [x for x in h if x < 1]
-    return bool(missed) and sum(1 for x in missed if x > 0) * 2 >= len(missed)
+_ELSEWHERE_FILE = "data/elsewhere.json"
+ELSEWHERE: dict = __import__("newtrackon.store", fromlist=["load"]).load(_ELSEWHERE_FILE)  # url -> last check answered only abroad
+ELSEWHERE_TEXT = "it answers our test clients in other countries, not this site's server"
+
+
+def _last_answer(t):
+    """Its last answer to any of our checks: from this server, or only from our test clients in other countries (a tracker
+    that answers those works for its users, and stays listed: user's call, 2026-10-12)."""
+    return max(int(getattr(t, "last_uptime", 0) or 0), int(ELSEWHERE.get(t.url, 0) or 0))
+
+
+def _answers_elsewhere_now(t):
+    """Its latest check got no answer here, but an answer from our test clients abroad."""
+    return t.status == 0 and int(ELSEWHERE.get(t.url, 0) or 0) >= int(t.last_downtime or 0) > 0
 
 
 def _useless_reason(t, days):
@@ -1581,15 +1604,11 @@ def _useless_reason(t, days):
     h = [float(x) for x in list(getattr(t, "historic", None) or [])][-n:]
     down = round(100 * sum(1 for x in h if x < 1) / len(h)) if h else 0  # half slots: no answer here, only from elsewhere
     head = "not working for %d days" % int(days)
-    if _answers_elsewhere(t, days):
-        head += ", for this site's server"
     fake = FAKE_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT
     no_peers = fake or PEER_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT
     dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(t.url))) if t.status == 0 else None
     if not no_peers:
-        return "%s: no answer in %d%% of checks, and never back for 12 hours in a row%s%s" % (
-            head, down, " (%s)" % dw if dw else "",
-            "; it answers our test clients in other countries: it may be blocking this site" if _answers_elsewhere(t, days) else "")
+        return "%s: no answer in %d%% of checks, and never back for 12 hours in a row%s" % (head, down, " (%s)" % dw if dw else "")
     try:
         cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(t.url)
     except Exception:
@@ -2567,8 +2586,11 @@ def status_rule(t, pst=None):
 
 def feed_state(t, pst=None):
     """The rule as the event feed and LAST_STATE store it: Up/Broken is filed under 'up_bad' with its problem texts
-    (_nt_bad_lbl and _broken() tell them apart) and Up/New under 'up_good'."""
+    (_nt_bad_lbl and _broken() tell them apart) and Up/New under 'up_good'. Down while it answers our test clients abroad
+    is stored with ELSEWHERE_TEXT, so the not-working clock doesn't run (it stays)."""
     st, codes = status_rule(t, pst)
+    if st == "down" and _answers_elsewhere_now(t):
+        return "down", [ELSEWHERE_TEXT]
     return {"up_broken": "up_bad", "up_new": "up_good"}.get(st, st), [_bad_text(c) for c in codes]
 
 
@@ -2784,7 +2806,7 @@ _URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_F
                ("CLOSED", "_CLOSED_FILE"), ("REGION_SAMPLES", "_REGION_TS_FILE"), ("LAT_HIST", "_LAT_HIST_FILE"),
                ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"), ("PEER_HIST_FAM", "_PEER_HIST_FAM_FILE"),
                ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"),
-               ("DELAYED_HIST", "_DELAYED_FILE"), ("REINSTATED", "_REINSTATED_FILE"))
+               ("DELAYED_HIST", "_DELAYED_FILE"), ("REINSTATED", "_REINSTATED_FILE"), ("ELSEWHERE", "_ELSEWHERE_FILE"))
 _URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
 
 
@@ -2817,7 +2839,7 @@ def _peer_reset(url):
     _probe_save()
 
 
-_PROTOCOL_STORES = ("FAM_FAILS", "FAM_HIST", "FAMS", "CLOSED", "WARNINGS", "ANN_IV", "DOWN_WHY")
+_PROTOCOL_STORES = ("FAM_FAILS", "FAM_HIST", "FAMS", "CLOSED", "WARNINGS", "ANN_IV", "DOWN_WHY", "ELSEWHERE")
 
 
 def _protocol_reset(url):

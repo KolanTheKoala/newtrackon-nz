@@ -25,7 +25,7 @@ def _dying(t, now=None):
     import time
     now = now or time.time()
     if _rowcls(t) == "offline":
-        days = (now - int(t.last_uptime or 0)) / 86400.0
+        days = (now - T._last_answer(t)) / 86400.0  # answering our test clients abroad counts: it stays
         return "No answer for %d+ days: removed and banned after %d" % (int(days), T.REMOVE_DAYS) if days >= _DYING_DAYS else None
     ub = T._nt_upbad_days(t.url, now) if T._peer_rule_applies(t.url) else None
     if ub is not None and ub >= _DYING_DAYS:
