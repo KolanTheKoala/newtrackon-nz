@@ -78,10 +78,22 @@ class TestPages:
         assert d["removed"]["banned_until"] == NOW + 28 * 86400 and d["removed"]["banned_permanently"] is False
         assert "removed" not in flask_client.get("/api/tracker/private.example").get_json()
 
-    def test_ban_list_on_submitted(self, flask_client: FlaskClient, removed: None) -> None:
+    def test_submitted_links_to_the_ban_page(self, flask_client: FlaskClient, removed: None) -> None:
         html = flask_client.get("/submitted").get_data(as_text=True)
-        banned = html.split('id="banned"')[1]
-        assert 'href="/tracker/gone.example"' in banned and "private.example" not in html and "manual.example" not in html
+        assert 'href="/bans"' in html.split('id="banned"')[1]  # old /submitted#banned links still land next to the link
+        assert "gone.example" not in html and "private.example" not in html and "manual.example" not in html
+
+    def test_ban_page_most_recent_first(self, flask_client: FlaskClient, removed: None) -> None:
+        t = SimpleNamespace(host="newer.example", url="udp://newer.example:1/announce", added=NOW - 9 * 86400, countries=[], networks=[])
+        T._removed_add(t, "handed out no peers for 5 days (Up/Bad)", now=NOW - 3600)
+        with open("data/denylist.txt", "a", encoding="utf-8") as f:
+            f.write("newer.example %d\n" % (NOW - 3600))
+        r = flask_client.get("/bans")
+        html = r.get_data(as_text=True)
+        assert r.status_code == 200 and "<h2>Banned trackers</h2>" in html
+        assert 'href="/tracker/gone.example"' in html and "no answer for 5+ days" in html and "handed out no peers" in html
+        assert html.index("newer.example") < html.index("gone.example")
+        assert "private.example" not in html and "manual.example" not in html  # manual denylist entries are never shown
 
 
 class TestRefusedRows:

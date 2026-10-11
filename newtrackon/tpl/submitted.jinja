@@ -67,7 +67,7 @@
         {% set bans = nt_bans() %}
         <p>
             <b>Number of trackers in the queue: {{ size }}</b>
-            {% if bans %}&middot; <a href="#banned">{{ bans|length }} banned tracker{{ "" if bans|length == 1 else "s" }}</a>{% endif %}
+            {% if bans %}&middot; <a href="/bans">{{ bans|length }} banned tracker{{ "" if bans|length == 1 else "s" }}</a>{% endif %}
         </p>
     </div>
     {% if data or pending or confirming %}
@@ -147,17 +147,7 @@
         </div>
     {% endif %}
     <div class="container mt-4" id="banned">
-        <h4>Banned trackers</h4>
-        <p>Removed trackers (no answer or Up/Bad for 5 days, Up/Junk or Up/Broken for 30, too unreliable, private or whitelist-only) can't be submitted again for 30 days: 90 days the second time, never after the third.</p>
-        {% if bans %}
-        <div class="table-responsive">
-            <table class="table table-sm nt-sub" style="margin-left:0">
-                <thead><tr><th class="u">Tracker</th><th class="t">Removed</th><th>Banned until</th></tr></thead>
-                <tbody>{% for b in bans %}<tr><td class="u"><a href="/tracker/{{ b.host|urlencode }}">{{ b.host }}</a></td>
-                    <td class="t">{{ nt_date(b.removed) }}</td><td>{{ nt_date(b.until) if b.until else "permanent" }}</td></tr>{% endfor %}</tbody>
-            </table>
-        </div>
-        {% else %}<p>None right now.</p>{% endif %}
+        <p>Removed trackers can't be submitted again for a while: see the <a href="/bans">banned trackers</a>{% if bans %} ({{ bans|length }} now){% endif %}.</p>
     </div>
     <script>
         $(document).ready(function () {

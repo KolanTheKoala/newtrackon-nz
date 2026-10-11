@@ -845,6 +845,14 @@ def _bans(now=None):
     return sorted(out, key=lambda x: (x["until"] is None, x["until"] or 0, x["host"]))
 
 
+def _bans_page():
+    from flask import render_template
+    bans = sorted(_bans(), key=lambda b: (-(b["removed"] or 0), b["host"]))  # most recent removal first
+    return render_template("bans.jinja", bans=bans, active="Submitted", title="Banned trackers",
+                           description="Public BitTorrent trackers this site removed and can't be submitted again yet: "
+                                       "why each was removed and when its ban ends.")
+
+
 def _date(ts):
     from datetime import datetime, timezone
     return datetime.fromtimestamp(int(ts), timezone.utc).strftime("%-d %b %Y")
@@ -880,6 +888,7 @@ def register(app):
     app.add_url_rule("/rankings", "nt_rankings", _rankings_page)
     app.add_url_rule("/tools", "nt_tools", _tools_page)
     app.add_url_rule("/clients", "nt_clients", _clients_page)
+    app.add_url_rule("/bans", "nt_bans", _bans_page)
     app.add_url_rule("/badge/<host>", "nt_badge", _badge)
     app.jinja_env.globals["nt_health"] = _monitor_health
 
