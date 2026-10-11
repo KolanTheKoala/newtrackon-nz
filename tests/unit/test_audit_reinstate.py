@@ -95,3 +95,22 @@ def test_still_flaky_after_3_days_goes(sample_tracker) -> None:
     t.historic = deque([1, 0, 0, 0, 0, 0, 0, 0] * 60, maxlen=1440)
     t.update_uptime()
     assert t.to_be_deleted is True
+
+
+def test_no_exit_for_its_family_is_our_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+    from newtrackon import scraper
+    monkeypatch.setattr(scraper, "_probe_src", lambda f: None if f == socket.AF_INET6 else "10.9.0.2")
+    scraper.rtt.probe = ("http", b"x" * 20, "http://v6only.example:6969/announce", None, b"-qB5000-000000000000")
+    assert scraper.peer_probe(only_family=socket.AF_INET6) is None
+    assert scraper.rtt.probe_extra.get("exit_blocked") is True  # so the 7-day inconclusive rule never fails it
+
+
+def test_fixed_flaky_tracker_is_clear_of_15_percent_after_3_days(sample_tracker) -> None:
+    t, now = sample_tracker, int(time())
+    hist = ("1" + "0" * 7) * 42  # the restored week: up 12%, dropping out every 4 hours
+    T.REINSTATED[t.url] = now - 3 * DAY - 60  # past its 3 days
+    t.added, t.last_uptime, t.status = now - 30 * DAY, now, 1
+    t.historic = deque([{"1": 1, "h": 0.5}.get(c, 0) for c in hist] + [1] * (3 * 48 + 1), maxlen=1440)  # then 3 days all up
+    t.update_uptime()
+    assert t.to_be_deleted is False

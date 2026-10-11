@@ -1142,10 +1142,12 @@ def peer_probe(only_family: int | None = None) -> bool | None:
 
     # A and B must share an address family: trackers only hand out peers of the asker's family.
     fam = sa_s = None
+    no_src = False
     for f in (socket.AF_INET, socket.AF_INET6):
         if only_family and f != only_family:
             continue
         if not _probe_src(f):
+            no_src = True  # no VPN exit for this family: a limit of our test, never the tracker's fault
             continue
         try:
             socket.getaddrinfo(host, hport, f)
@@ -1156,6 +1158,8 @@ def peer_probe(only_family: int | None = None) -> bool | None:
         fam, sa_s = f, s_try
         break
     if fam is None:
+        if no_src:
+            extra["exit_blocked"] = True  # as when no exit gets an answer: doesn't count towards "7 days inconclusive"
         return None
     extra["fam"] = "v6" if fam == socket.AF_INET6 else "v4"  # the family this test ran over
     ok = None
