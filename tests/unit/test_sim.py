@@ -110,8 +110,9 @@ class Sim:
         if s.get("rejects"):  # its own error message to every client (a whitelist: "info hash is not authorized")
             raise RuntimeError(("Error while announcing: %s" if proto == "UDP" else "Tracker error message: %s") % s["rejects"])
         if not s["answers"] or all(f in (s.get("dead") or ()) for f in self.fams):
-            # world "refused": it refuses this server (a firewall REJECT) rather than ignoring it
-            raise RuntimeError("%s connection failed" % proto if s.get("refused") else "UDP timeout")
+            # world "refused": it refuses this server (a firewall REJECT) rather than ignoring it; "err": what this server
+            # gets instead (a CDN's "HTTP 403", its own "you're banned")
+            raise RuntimeError(s.get("err") or ("%s connection failed" % proto if s.get("refused") else "UDP timeout"))
         return {"interval": 1800, "leechers": 0, "seeds": 1, "peers": []}
 
     def _fam_mode(self, fam):
@@ -396,7 +397,7 @@ def test_accepting_a_protocol_upgrade_never_writes_a_ban(monkeypatch) -> None:
 # ---- randomized timelines: whatever the tracker does, it's never removed earlier than the rules allow, and the reason
 # matches what it was doing. The bounds come from the per-check record of what the world was doing, not from the code.
 MODES = ["ok", "ok", "ok", "none", "nat", "split", "rare", "fake", "down", "flap", "dead6", "nopeers6", "inconclusive", "na",
-         "abroad", "abroad_none", "abroad_refused", "down_refused"]
+         "abroad", "abroad_none", "abroad_refused", "down_refused", "abroad_403", "abroad_banned"]
 
 
 def _random_world(rng):
@@ -417,6 +418,10 @@ def _random_world(rng):
             return {"answers": False, "elsewhere": True, "refused": True}
         if mode == "down_refused":  # refuses everyone: its port is closed
             return {"answers": False, "refused": True}
+        if mode == "abroad_403":  # a CDN in front blocks this server; our test clients abroad get answers
+            return {"answers": False, "elsewhere": True, "err": "HTTP 403 status code returned"}
+        if mode == "abroad_banned":  # it tells this server it's banned, and answers our test clients abroad
+            return {"answers": False, "elsewhere": True, "err": "Tracker error message: your IP address is banned"}
         if mode == "flap":
             return {"answers": int(d * 48) % 3 != 0}
         if mode == "dead6":
@@ -702,13 +707,20 @@ class TestRefusingThisServer:
         assert s.removed is not None and s.removed[1].startswith("no answer for 5 days"), s.removed
         assert 5 * DAY <= s.removed[0] - last_up <= 5 * DAY + 5 * HOUR, (_days(last_up), _days(s.removed[0]))
 
-    def test_its_own_error_message_is_never_answering_elsewhere(self, monkeypatch) -> None:
-        # a whitelist tracker refuses our test clients abroad too, and that refusal looks like an answer to the check
-        # from there: it's recorded as it is (down, then removed as whitelist-only), never as Down from NZ
-        s = Sim(monkeypatch, lambda d: {"rejects": "info hash is not authorized with this tracker" if d >= 1 else None,
-                                        "elsewhere": True}).run(5)
+    def test_a_whitelist_is_still_judged_as_one(self, monkeypatch) -> None:
+        # it refuses our test clients abroad too: that's no answer there (scraper._genuine), so it's recorded as it is
+        # (down, then removed as whitelist-only), never as Down from NZ
+        s = Sim(monkeypatch, lambda d: {"rejects": "info hash is not authorized with this tracker" if d >= 1 else None}).run(5)
         assert s.tr.url not in T.ELSEWHERE
         assert s.removed is not None and "whitelist" in s.removed[1], s.removed
+
+    @pytest.mark.parametrize("err", ["HTTP 403 status code returned", "Tracker error message: your IP address is banned",
+                                     "Failed bdecoding HTTP response: not a bencoded dict", "HTTP 429 status code returned"])
+    def test_saying_no_to_this_server_alone_stays(self, monkeypatch, err) -> None:
+        # a CDN blocking this server, or the tracker banning it, while it answers our test clients abroad: Down from NZ
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1, "err": err}, url="http://sim.example:6969/announce").run(20)
+        assert s.removed is None, s.removed
+        assert T.status_rule(s.tr) == ("down", ["answers_elsewhere"])
 
     @pytest.mark.parametrize("record", ["as kept now", "like t.overflow.biz's"])
     def test_reinstated_through_our_test_clients_abroad_stays(self, monkeypatch, record) -> None:

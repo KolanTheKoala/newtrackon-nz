@@ -1362,52 +1362,86 @@ def peer_probe_exits(url):
     return None
 
 
-def announce_via_exits(url):
-    """One announce of a fresh random torrent through each VPN exit in turn, for a tracker that doesn't answer this server
-    (it refuses it, or the route from here is broken): (response, ms, where) from the first exit that gets a genuine
-    tracker answer, else None. Its own error message isn't an answer (a whitelist tracker's refusal would look like one).
-    IPv4 if it has an IPv4 address, else IPv6. Client A leaves again at once ('stopped')."""
+def _families(url):
+    """[(family, exits.json source key)] for each IP family the tracker's name has an address in."""
     p = urlparse(url)
     port = p.port or (443 if p.scheme == "https" else 80)
-    udp = p.scheme == "udp"
-    try:
-        socket.getaddrinfo(p.hostname, port, socket.AF_INET)
-        fam, key = socket.AF_INET, "src4"
-    except OSError:
-        fam, key = socket.AF_INET6, "src6"
-    for name, e in (_exits() or {}).items():
-        src = e.get(key)
-        if not src:
-            continue
-        new_client()
-        thash, pid, prt = urandom(20), generate_peer_id(), probe_port(0x76FD if udp else HTTP_PORT)
-        t0 = time()
+    out = []
+    for fam, key in ((socket.AF_INET, "src4"), (socket.AF_INET6, "src6")):
         try:
-            if udp:
-                s_, ann = _udp_session(fam, ordered_addrs(p.hostname, port, fam, socket.SOCK_DGRAM)[0][4], src)
-                try:
-                    resp = ann(pid, 0, prt, 2, thash)
-                    ms = int((time() - t0) * 1000)
-                    try:
-                        ann(pid, 0, prt, 3, thash)
-                    except Exception:
-                        pass
-                finally:
-                    s_.close()
-            else:
-                resp = _http_ann(url, src, thash, pid, 0, prt, "started")
-                ms = int((time() - t0) * 1000)
-                if "peers" not in resp and "peers6" not in resp:
-                    continue  # not a tracker's answer
-                try:
-                    _http_ann(url, src, thash, pid, 0, prt, "stopped")
-                except Exception:
-                    pass
-            check_peer_count(resp)  # as for an answer here: a crowd for a random torrent is made up
+            if socket.getaddrinfo(p.hostname, port, fam):
+                out.append((fam, key))
+        except OSError:
+            continue
+    return out
+
+
+def _genuine(url, fam, src):
+    """One announce of a fresh random torrent over one IP family, from source address src (None: this server's own), and
+    (response, ms) if it's a genuine tracker answer: not its own error message (a whitelist's refusal, a ban), not an
+    error page, not a made-up crowd. Raises otherwise. The client leaves again at once ('stopped')."""
+    p = urlparse(url)
+    port = p.port or (443 if p.scheme == "https" else 80)
+    new_client()  # this thread's own client: the check running in the caller's thread keeps its own
+    thash, pid = urandom(20), generate_peer_id()
+    t0 = time()
+    if p.scheme == "udp":
+        prt = probe_port(0x76FD)
+        s_, ann = _udp_session(fam, ordered_addrs(p.hostname, port, fam, socket.SOCK_DGRAM)[0][4], src)
+        try:
+            resp = ann(pid, 0, prt, 2, thash)  # an error reply (action 3) raises
+            ms = int((time() - t0) * 1000)
+            try:
+                ann(pid, 0, prt, 3, thash)
+            except Exception:
+                pass
+        finally:
+            s_.close()
+    else:
+        prt, src = probe_port(HTTP_PORT), src or ("0.0.0.0" if fam == socket.AF_INET else "::")  # pinned to this family
+        resp = _http_ann(url, src, thash, pid, 0, prt, "started")  # a failure reason or a non-200 raises
+        ms = int((time() - t0) * 1000)
+        if "peers" not in resp and "peers6" not in resp:
+            raise RuntimeError("not a tracker's answer")
+        try:
+            _http_ann(url, src, thash, pid, 0, prt, "stopped")
         except Exception:
-            continue  # no answer through that exit
-        return resp, ms, _lbl(e, name)
-    return None
+            pass
+    check_peer_count(resp)  # as for an answer here: a crowd for a random torrent is made up
+    return resp, ms
+
+
+def _first_genuine(url, sources):
+    """The first genuine answer from any of sources [(family, src, where)], all tried at once (a tracker that's dead
+    everywhere costs one timeout, not one per exit and family): (response, ms, where), or None."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    if not sources:
+        return None
+    pool = ThreadPoolExecutor(max_workers=len(sources))
+    try:
+        jobs = {pool.submit(_genuine, url, fam, src): where for fam, src, where in sources}
+        for job in as_completed(jobs):
+            try:
+                resp, ms = job.result()
+            except Exception:
+                continue  # no genuine answer that way
+            return resp, ms, jobs[job]
+        return None
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)  # the rest end on their own timeouts
+
+
+def announce_via_exits(url):
+    """For a tracker that doesn't answer this server (it blocks it, or the route from here is broken): does it work for our
+    test clients abroad? A genuine announce answer through any VPN exit, on any IP family it has (one whose IPv4 is dead
+    everywhere and whose IPv6 only answers abroad counts): (response, ms, where), or None."""
+    srcs = [(fam, e[key], _lbl(e, name)) for name, e in (_exits() or {}).items() for fam, key in _families(url) if e.get(key)]
+    return _first_genuine(url, srcs)
+
+
+def answers_here(url):
+    """A genuine announce answer to this server, on any IP family the tracker has (the retry after a failed check)."""
+    return _first_genuine(url, [(fam, None, "here") for fam, _ in _families(url)]) is not None
 
 
 def peer_probe_family(url, fam_name):

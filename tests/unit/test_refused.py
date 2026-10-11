@@ -16,19 +16,33 @@ from newtrackon import tracker as T
 from .test_sim import _REAL_LOCAL_FAULT
 
 
-@pytest.mark.parametrize(("err", "abroad"), [
-    ("UDP connection failed", True), ("HTTP connection failed", True), ("UDP timeout", True), ("HTTP timeout", True),
-    ("UDP error: [Errno 113] No route to host", True),  # a firewall REJECT (icmp-host-prohibited)
-    ("Tracker error message: info hash is not authorized with this tracker", False),  # its own message: recorded as it is
-    ("Error while announcing: unregistered torrent", False),
-    ("HTTP 403 status code returned", False)])
-def test_refused_or_ignored_here_but_answering_abroad_is_half_down(monkeypatch: pytest.MonkeyPatch, err: str, abroad: bool) -> None:
+@pytest.mark.parametrize(("err", "kind"), [
+    ("UDP connection failed", "path"), ("HTTP connection failed", "path"), ("UDP timeout", "path"), ("HTTP timeout", "path"),
+    ("UDP error: [Errno 113] No route to host", "path"),  # a firewall REJECT (icmp-host-prohibited)
+    ("HTTP 403 status code returned", "blocked"),  # a CDN in front blocks this server
+    ("Tracker error message: your IP address is banned", "blocked"),  # it bans this server
+    ("Failed bdecoding HTTP response: html", "blocked"),  # a block page
+    ("Can't resolve IP", None)])  # DNS has its own check
+def test_failing_here_but_answering_abroad_is_half_down(monkeypatch: pytest.MonkeyPatch, err: str, kind) -> None:
+    """Whatever failed here, if our test clients abroad get a genuine answer it's Down from NZ. Only a timeout or a refusal
+    is a 'path' signal (nt-watch: 5 in 30 min means our own network): a reply saying no is about this server."""
+    signals = []
     monkeypatch.setattr(T, "_nt_vps_retry_ok", lambda u: False)
     monkeypatch.setattr(T, "_nt_reachable_elsewhere", lambda u: True)
-    monkeypatch.setattr(T, "_nt_signal", lambda kind, host: None)
+    monkeypatch.setattr(T, "_nt_public_dns_has", lambda h: False)
+    monkeypatch.setattr(T, "_nt_signal", lambda k, host: signals.append(k))
     t = SimpleNamespace(url="udp://x.example:6969/announce", host="x.example")
     assert _REAL_LOCAL_FAULT(t, RuntimeError(err)) is False  # recorded either way, never skipped
-    assert getattr(t, "_nt_partial", False) is abroad
+    assert getattr(t, "_nt_partial", False) is (kind is not None) and signals == ([kind] if kind else [])
+
+
+def test_not_when_the_check_is_removing_it_anyway(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = []
+    monkeypatch.setattr(T, "_nt_vps_retry_ok", lambda u: asked.append(u) or False)
+    monkeypatch.setattr(T, "_nt_reachable_elsewhere", lambda u: asked.append(u) or True)
+    t = SimpleNamespace(url="udp://x.example:6969/announce", host="x.example", to_be_deleted=True)
+    assert _REAL_LOCAL_FAULT(t, RuntimeError("its own DNS records (BEP 34) say it doesn't accept connections")) is False
+    assert asked == [] and not getattr(t, "_nt_partial", False)
 
 
 def test_no_route_is_a_refusal() -> None:
@@ -45,37 +59,60 @@ def _only(families):
     return fake
 
 
-@pytest.mark.parametrize(("families", "fam", "src"), [((socket.AF_INET6,), socket.AF_INET6, "fd00::2"),
-                                                      ((socket.AF_INET, socket.AF_INET6), socket.AF_INET, "10.0.0.2")])
-def test_tried_abroad_on_the_family_it_has(monkeypatch: pytest.MonkeyPatch, families, fam, src) -> None:
-    calls = []
+EXITS2 = {"a": {"src4": "10.0.0.2", "src6": "fd00::2", "region": "Europe", "location": "Frankfurt"}}
+
+
+@pytest.mark.parametrize(("families", "tried"), [((socket.AF_INET6,), {(socket.AF_INET6, "fd00::2")}),
+                                                 ((socket.AF_INET, socket.AF_INET6), {(socket.AF_INET, "10.0.0.2"), (socket.AF_INET6, "fd00::2")})])
+def test_tried_abroad_on_every_family_it_has(monkeypatch: pytest.MonkeyPatch, families, tried) -> None:
+    """IPv6-only, or IPv4 dead everywhere while IPv6 answers abroad: both found."""
+    calls = set()
+
+    def genuine(url, fam, src):
+        calls.add((fam, src))
+        if fam == socket.AF_INET:
+            raise OSError("its IPv4 address is dead")
+        return {"interval": 1800, "peers": []}, 50
     monkeypatch.setattr(socket, "getaddrinfo", _only(families))
-    monkeypatch.setattr(scraper, "_exits", lambda: {"a": {"src4": "10.0.0.2", "src6": "fd00::2"}})
-    monkeypatch.setattr(scraper, "_rtt_via", lambda url, f, s: calls.append((f, s)) or 30.0)
-    assert T._nt_reachable_elsewhere("udp://v6only.example:6969/announce") is True
-    assert calls == [(fam, src)]
+    monkeypatch.setattr(scraper, "_exits", lambda: EXITS2)
+    monkeypatch.setattr(scraper, "_genuine", genuine)
+    assert T._nt_reachable_elsewhere("udp://x.example:6969/announce") is True
+    assert calls == tried
     calls.clear()
-    assert T._nt_vps_retry_ok("udp://v6only.example:6969/announce") is True
-    assert calls == [(fam, None)]
+    assert T._nt_vps_retry_ok("udp://x.example:6969/announce") is True  # the retry from here, on each family too
+    assert calls == {(f, None) for f, _ in tried}
 
 
 def test_one_exit_failing_doesnt_stop_the_others(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", _only((socket.AF_INET,)))
     monkeypatch.setattr(scraper, "_exits", lambda: {"a": {"src4": "10.0.0.2"}, "b": {"src4": "10.0.0.3"}})
 
-    def rtt(url, f, s):
-        if s == "10.0.0.2":
+    def genuine(url, fam, src):
+        if src == "10.0.0.2":
             raise OSError("this exit is down")
-        return 40.0
-    monkeypatch.setattr(scraper, "_rtt_via", rtt)
+        return {"interval": 1800, "peers": []}, 40
+    monkeypatch.setattr(scraper, "_genuine", genuine)
     assert T._nt_reachable_elsewhere("udp://x.example:6969/announce") is True
+
+
+def test_the_retry_from_here_is_pinned_to_each_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    srcs = set()
+
+    def ann(url, src, thash, pid, left, port, event):
+        srcs.add(src)
+        return {"interval": 1800, "complete": 0, "incomplete": 0, "peers": []}
+    monkeypatch.setattr(socket, "getaddrinfo", _only((socket.AF_INET, socket.AF_INET6)))
+    monkeypatch.setattr(scraper, "_http_ann", ann)
+    assert scraper.answers_here("http://x.example:6969/announce") is True
+    assert srcs <= {"0.0.0.0", "::"} and srcs  # this server's own address, on that family only
 
 
 class TestAnnounceViaExits:
     EXITS = {"airvpn": {"src4": "10.0.0.2", "src6": "fd00::2", "region": "Europe", "location": "Frankfurt"},
              "airvpn2": {"src4": "10.0.0.3", "src6": "fd00::3", "region": "North America", "location": "Miami"}}
 
-    def test_http_first_exit_that_answers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_http_the_exit_that_answers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import time
         monkeypatch.setattr(socket, "getaddrinfo", _only((socket.AF_INET,)))
         monkeypatch.setattr(scraper, "_exits", lambda: self.EXITS)
         seen = []
@@ -83,12 +120,13 @@ class TestAnnounceViaExits:
         def ann(url, src, thash, pid, left, port, event):
             seen.append((src, event))
             if src == "10.0.0.2":
-                raise RuntimeError("probe: HTTP error")
+                raise RuntimeError("probe: HTTP error")  # a 403 from a CDN, say
             return {"interval": 1800, "complete": 0, "incomplete": 0, "peers": []}
         monkeypatch.setattr(scraper, "_http_ann", ann)
         resp, ms, where = scraper.announce_via_exits("http://x.example:6969/announce")
         assert resp["interval"] == 1800 and where == "North America: Miami" and ms >= 0
-        assert seen == [("10.0.0.2", "started"), ("10.0.0.3", "started"), ("10.0.0.3", "stopped")]
+        time.sleep(0.2)  # the client that answered leaves again
+        assert {("10.0.0.2", "started"), ("10.0.0.3", "started"), ("10.0.0.3", "stopped")} <= set(seen)
 
     def test_its_own_error_message_isnt_an_answer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(socket, "getaddrinfo", _only((socket.AF_INET,)))
@@ -97,6 +135,12 @@ class TestAnnounceViaExits:
         def ann(*a):
             raise RuntimeError("probe: failure reason")  # _http_ann raises on a failure reason
         monkeypatch.setattr(scraper, "_http_ann", ann)
+        assert scraper.announce_via_exits("http://x.example:6969/announce") is None
+
+    def test_bencoded_but_not_a_tracker_answer_isnt_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(socket, "getaddrinfo", _only((socket.AF_INET,)))
+        monkeypatch.setattr(scraper, "_exits", lambda: self.EXITS)
+        monkeypatch.setattr(scraper, "_http_ann", lambda *a: {"interval": 1800, "complete": 0})  # no peer list at all
         assert scraper.announce_via_exits("http://x.example:6969/announce") is None
 
     def test_a_made_up_crowd_isnt_an_answer(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +164,19 @@ class TestAnnounceViaExits:
             return Sock(), lambda pid, left, port, event, th: {"interval": 900, "leechers": 0, "seeds": 1, "peers": []}
         monkeypatch.setattr(scraper, "_udp_session", session)
         resp, _, where = scraper.announce_via_exits("udp://x.example:6969/announce")
-        assert resp["interval"] == 900 and where == "Europe: Frankfurt" and used == [(socket.AF_INET6, "fd00::2")]
+        assert resp["interval"] == 900 and where in ("Europe: Frankfurt", "North America: Miami")
+        assert used and {f for f, _ in used} == {socket.AF_INET6}  # IPv6 only: it has no IPv4 address
+
+    def test_a_whitelist_isnt_reachable_elsewhere(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(socket, "getaddrinfo", _only((socket.AF_INET,)))
+        monkeypatch.setattr(scraper, "_exits", lambda: self.EXITS)
+        monkeypatch.setattr(scraper, "_udp_session", lambda fam, sa, src: (SimpleNamespace(close=lambda: None), self._refuse))
+        monkeypatch.setattr(scraper, "ordered_addrs", lambda h, p, f, t: [(f, t, 0, "", ("192.0.2.1", p))])
+        assert T._nt_reachable_elsewhere("udp://x.example:6969/announce") is False
+
+    @staticmethod
+    def _refuse(pid, left, port, event, th):
+        raise RuntimeError("Error while announcing: info hash is not authorized")  # what an error reply (action 3) raises
 
 
 @pytest.mark.usefixtures("empty_queues")

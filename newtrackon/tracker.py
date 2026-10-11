@@ -2768,31 +2768,14 @@ def _nt_public_dns_has(host):
     return False
 
 
-def _nt_try_fam(url):
-    """The IP family to try a tracker on again, from here or from our test clients abroad: IPv4 if it has an IPv4
-    address, else IPv6 (an IPv6-only tracker was never tried abroad before 2026-10-12, so blocking this server removed it)."""
-    import socket as _s
-    p = parse.urlparse(url)
-    try:
-        _s.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80), _s.AF_INET)
-        return _s.AF_INET
-    except OSError:
-        return _s.AF_INET6
-
-
 def _nt_reachable_elsewhere(url):
-    """Does the tracker answer through any of the VPN exits (a genuine tracker answer: a connection reply for UDP, HTTP
-    200 with a bencoded body for HTTP)?"""
-    import socket as _s
-    fam = _nt_try_fam(url)
-    for e in (scraper._exits() or {}).values():
-        src = e.get("src4" if fam == _s.AF_INET else "src6")
-        try:
-            if src and scraper._rtt_via(url, fam, src) is not None:
-                return True
-        except Exception:
-            continue  # that exit got nothing: try the next
-    return False
+    """Does the tracker work for our test clients abroad: a genuine announce answer (not its own error message, not an
+    error page) through any VPN exit, on any IP family it has? (Before 2026-10-12: a connection reply or anything
+    bencoded, over IPv4 only.)"""
+    try:
+        return scraper.announce_via_exits(url) is not None
+    except Exception:
+        return False
 
 
 def _nt_local_fault(t, err):
@@ -2806,16 +2789,20 @@ def _nt_local_fault(t, err):
     kind = None
     if "resolve" in msg and host and _nt_public_dns_has(host):
         kind = "dns"
-    # still no answer from here, but alive elsewhere: it times out or refuses this server (a block, or a broken route).
-    # Not its own error message ("Rejected"): a whitelist tracker's refusal of our test client abroad would count as an
-    # answer there, and its CLOSED rule needs it recorded as it is.
-    elif _nt_down_label(msg) in ("Timeout", "Refused") and not _nt_vps_retry_ok(t.url) and _nt_reachable_elsewhere(t.url):
-        kind = "path"
+    # no proper answer here, but a genuine one for our test clients abroad: it works for its users, so it stays (Down from
+    # NZ), whatever failed here: a timeout, a refusal, a CDN's 403, its own "you're banned". Not DNS (its own check above),
+    # nor a check that's removing it anyway. The answer abroad must be a real announce answer, so a tracker refusing
+    # everyone with its own message (a whitelist) isn't counted, and its CLOSED rule judges it as before.
+    elif _nt_down_label(msg) != "DNS" and not getattr(t, "to_be_deleted", False) and not _nt_vps_retry_ok(t.url) \
+            and _nt_reachable_elsewhere(t.url):
+        # "path" (no answer, or refused) is what nt-watch counts as a sign of trouble on our own network; a reply that
+        # says no (an HTTP error, its own message) is about this server, not the network
+        kind = "path" if _nt_down_label(msg) in ("Timeout", "Refused") else "blocked"
     if not kind:
         _NT_SKIPS.pop(t.url, None)
         return False
     _nt_signal(kind, host)
-    if kind == "path":  # down from Wellington, up elsewhere: record it as half an outage instead of skipping
+    if kind in ("path", "blocked"):  # down from Wellington, up elsewhere: record it as half an outage instead of skipping
         t._nt_partial = True
         logger.warning("%s PARTIAL: '%s' from Wellington but answers via VPN exits - recorded as half down", t.url, err)
         return False
@@ -2837,9 +2824,9 @@ def _nt_is_new(t, sc=None, ms=None):
 
 
 def _nt_vps_retry_ok(url):
-    """Re-try from this server first: if it answers now, the failure was a blip, not our network path."""
+    """Re-try from this server first: if it gives a genuine answer now, the failure was a blip, not our network path."""
     try:
-        return scraper._rtt_via(url, _nt_try_fam(url), None) is not None
+        return scraper.answers_here(url)
     except Exception:
         return False
 
