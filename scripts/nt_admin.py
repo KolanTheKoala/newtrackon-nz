@@ -10,8 +10,8 @@
 
 show           everything stored about the host (safe while the app runs).
 reinstate      a removed tracker that was removed by a fault in our checks: clears its peer-test records and saved
-               state, marks the removal as ours (once it's listed again the app deletes the record, so it doesn't count
-               towards a longer ban), and with --clean-history drops the uptime history it would get back. Then press
+               state, lifts its dated ban, marks the removal as ours (it then counts for nothing, and once it's listed
+               again the app deletes the record), and with --clean-history drops the uptime history it would get back. Then press
                "Check again now" on its page (the VPS's nt-admin wrapper does that).
 clear-clocks   drop a listed tracker's removal clocks (Up/Bad, not-working, Junk/Broken) and its Up/Bad log.
 clear-peers    drop a tracker's peer-test records (all families, split, fake peers, unusable address, last seen, delayed).
@@ -151,6 +151,7 @@ def reinstate(d: Data, clean_history: bool) -> None:
     if clean_history:
         rec.pop("hist", None)
     d.save("removed.json", removed)
+    _lift_dated_bans(d)  # our fault: no ban (it would also refuse its sister names' submissions meanwhile)
     print("%s ready: peer records and saved state cleared, removal marked as ours%s. Now press Check again now on its page."
           % (d.host, ", uptime history dropped" if clean_history else ""))
 
@@ -190,24 +191,31 @@ def clear_history(d: Data) -> None:
     print("%s: uptime history and saved state cleared" % d.host)
 
 
+def _lift_dated_bans(d: Data) -> bool:
+    """Remove the host's dated ban lines (bans for good are left alone). True if any went."""
+    try:
+        with open(d.path("denylist.txt")) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return False
+    keep = [ln for ln in lines if not (ln.split()[:1] == [d.host] and len(ln.split()) > 1 and ln.split()[1].isdigit())]
+    if keep == lines:
+        return False
+    d._backup("denylist.txt")
+    with open(d.path("denylist.txt"), "r+") as f:
+        f.write("\n".join(keep) + ("\n" if keep else ""))
+        f.truncate()
+    d.changed.append("denylist.txt")
+    return True
+
+
 def forget(d: Data) -> None:
     removed = d.load("removed.json")
     had = removed.pop(d.host, None) is not None
     if had:
         d.save("removed.json", removed)
-    try:
-        with open(d.path("denylist.txt")) as f:
-            lines = f.read().splitlines()
-    except FileNotFoundError:
-        lines = []
-    keep = [ln for ln in lines if not (ln.split()[:1] == [d.host] and len(ln.split()) > 1 and ln.split()[1].isdigit())]
-    if keep != lines:
-        d._backup("denylist.txt")
-        with open(d.path("denylist.txt"), "r+") as f:
-            f.write("\n".join(keep) + ("\n" if keep else ""))
-            f.truncate()
-        d.changed.append("denylist.txt")
-    print("%s: removal record %s, dated bans %s" % (d.host, "deleted" if had else "none", "lifted" if keep != lines else "none"))
+    lifted = _lift_dated_bans(d)
+    print("%s: removal record %s, dated bans %s" % (d.host, "deleted" if had else "none", "lifted" if lifted else "none"))
 
 
 def shorten_ban(d: Data, now: float | None = None) -> None:

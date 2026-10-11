@@ -43,6 +43,7 @@ class TestBadShare:
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "since": now - int(1.5 * DAY), "bad_since": now - int(1.5 * DAY),
                                "bad_log": [[now - 7 * DAY + 3600, now - int(2.05 * DAY)]]}
         monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         assert T._nt_upbad_days(t.url, now) < T.UPBAD_DAYS and T._nt_bad_share(t.url, now) >= T.BAD_SHARE
         t.update_uptime()
@@ -53,6 +54,7 @@ class TestBadShare:
         t = sample_tracker
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "since": now - int(4 * DAY), "bad_since": now - int(4 * DAY)}
         monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 4 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
         assert t.to_be_deleted is False  # 4 days bad of 4 listed: the 5-day clock decides
@@ -196,6 +198,7 @@ class TestUselessClock:
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": now - int(0.5 * DAY),
                                "bad_since": now - int(0.5 * DAY), "useless_since": now - int(5.1 * DAY)}
         monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
         assert t.to_be_deleted is True and T._NT_DEL_REASON[t.url].startswith("not working for 5 days")

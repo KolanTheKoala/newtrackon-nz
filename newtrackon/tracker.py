@@ -23,6 +23,10 @@ max_downtime: int = 47304000  # 1.5 years
 IP_HISTORY_WINDOW: int = 48 * 3600  # 48 hours in seconds
 
 
+class _NtOurDNS(RuntimeError):
+    """Our resolver gave a private address for a name that public DNS resolves to a public one: our fault."""
+
+
 class Tracker:
     url: str
     host: str
@@ -124,7 +128,12 @@ class Tracker:
                 self.to_be_deleted = True
                 raise RuntimeError("Tracker unresponsive for too long, removed")
 
+            before = self.url
             self.update_scheme_from_bep_34()
+            if self.url != before:  # its DNS (BEP 34) moved it to another protocol or port: its records follow it
+                logger.info("%s moved to %s by its BEP 34 records", before, self.url)
+                _nt_migrate_url(before, self.url)
+                _protocol_reset(self.url)
             try:
                 self.update_ips()
             finally:
@@ -135,6 +144,14 @@ class Tracker:
                 self.to_be_deleted = False
                 self._offline_skip()
                 return
+            if isinstance(reason, _NtOurDNS) and _NT_SKIPS.get(self.url, 0) < 6:
+                # our resolver gave a private address where public DNS gives a public one: our fault, not counted (at
+                # most 6 times in a row, like other local faults, so a lasting fault is recorded in the end)
+                _NT_SKIPS[self.url] = _NT_SKIPS.get(self.url, 0) + 1
+                logger.warning("%s LOCAL FAULT (dns): %s - not counted", self.url, reason)
+                self._offline_skip()
+                return
+            _NT_SKIPS.pop(self.url, None) if isinstance(reason, _NtOurDNS) else None
             if _nt_local_fault(self, reason):  # works from elsewhere: our fault, not the tracker's
                 self.to_be_deleted = False
                 self._offline_skip()
@@ -158,83 +175,88 @@ class Tracker:
             else:
                 response = scraper.announce_http(self.url)
 
-            interval = response.get("interval")
-            _ann_iv_set(self.url, interval if isinstance(interval, int) else None)
-            _warn_set(self.url, response.get("warning message"))
-            _closed_seen(self.url, response.get("warning message"))
-            if isinstance(interval, int):
-                pass  # interval is set adaptively in is_up()/is_down()
-            pretty_data = scraper.redact_origin(pp.pformat(response))
-            debug: HistoryData = {
-                "url": self.url,
-                "ip": next(iter(self.ips)) if self.ips else "",
-                "time": int(t1),
-                "info": pretty_data,
-                "status": 1,
-            }
-            persistence.raw_data.appendleft(debug)
-            self.latency = scraper.rtt.ms if getattr(scraper.rtt, "ms", None) is not None else int((time() - t1) * 1000)
-            self.latency = _nt_region_avg(self.url) or self.latency
-            self.peer_ok = scraper.peer_probe()
-            PEER_OK[self.url] = self.peer_ok
-            _ex = getattr(scraper.rtt, "probe_extra", None) or {}
-            FAKE_N[self.url] = _ex.get("foreign")
-            INFLATED[self.url] = _ex.get("inflated")
-            STALE[self.url] = _ex.get("stale")
-            CID_OK[self.url] = _ex.get("cid_ok")
-            _fr = scraper.family_probe(self.url)
-            _df = next((k for k, v in _fr.items() if not v), None) if len(_fr) == 2 and sum(_fr.values()) == 1 else None
-            _fam_set(self.url, _df, _fr)
+            # it answered: from here on it's our own bookkeeping. A bug in it is logged and the check still counts as an
+            # answer (it used to be caught below as the tracker failing, and a save racing another thread was one)
             try:
-                _region_set(self.url, scraper.region_latency(self.url, _fr))
+                interval = response.get("interval")
+                _ann_iv_set(self.url, interval if isinstance(interval, int) else None)
+                _warn_set(self.url, response.get("warning message"))
+                _closed_seen(self.url, response.get("warning message"))
+                if isinstance(interval, int):
+                    pass  # interval is set adaptively in is_up()/is_down()
+                pretty_data = scraper.redact_origin(pp.pformat(response))
+                debug: HistoryData = {
+                    "url": self.url,
+                    "ip": next(iter(self.ips)) if self.ips else "",
+                    "time": int(t1),
+                    "info": pretty_data,
+                    "status": 1,
+                }
+                persistence.raw_data.appendleft(debug)
+                self.latency = scraper.rtt.ms if getattr(scraper.rtt, "ms", None) is not None else int((time() - t1) * 1000)
+                self.latency = _nt_region_avg(self.url) or self.latency
+                self.peer_ok = scraper.peer_probe()
+                PEER_OK[self.url] = self.peer_ok
+                _ex = getattr(scraper.rtt, "probe_extra", None) or {}
+                FAKE_N[self.url] = _ex.get("foreign")
+                INFLATED[self.url] = _ex.get("inflated")
+                STALE[self.url] = _ex.get("stale")
+                CID_OK[self.url] = _ex.get("cid_ok")
+                _fr = scraper.family_probe(self.url)
+                _df = next((k for k, v in _fr.items() if not v), None) if len(_fr) == 2 and sum(_fr.values()) == 1 else None
+                _fam_set(self.url, _df, _fr)
+                try:
+                    _region_set(self.url, scraper.region_latency(self.url, _fr))
+                except Exception:
+                    pass
+                if _df:
+                    logger.info("%s DEAD FAMILY: published %s address does not answer", self.url, _df)
+                _probe_save()
+                debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": _ex.get("cid_ok")}
+                if _ex.get("stale"):
+                    logger.info("%s STALE PEERS: still hands out a peer after it sent stopped", self.url)
+                if _ex.get("cid_ok") is False:
+                    logger.info("%s CONNID NOT ENFORCED: accepted an announce with a made-up connection ID", self.url)
+                if _ex.get("foreign") is not None:
+                    _fake_hist_add(self.url, _ex["foreign"] > 0)
+                    if _ex["foreign"]:
+                        logger.info("%s FAKE PEERS: %d fake peer(s) on a random hash", self.url, _ex["foreign"])
+                if _ex.get("inflated"):
+                    logger.info("%s INFLATED COUNTS: %s seeders / %s leechers on a random hash", self.url, *_ex["inflated"])
+                if self.peer_ok is not None:
+                    _split_add(self.url, _ex.get("split"))
+                if self.peer_ok is True:
+                    _peer_hist_add(self.url, True, _ex.get("fam"))
+                elif self.peer_ok is False:
+                    _peer_hist_add(self.url, False, _ex.get("fam"))
+                if self.peer_ok is not None:
+                    _nat_seen_set(self.url, _ex.get("fam"), _ex.get("nat_ip"))
+                    _peer_seen_set(self.url, _ex.get("fam"), _ex.get("seen"), self.peer_ok)
+                # a test that couldn't run because the VPN exits got no answer is a limit of the test, not the tracker's fault:
+                # it doesn't count towards the 7-day "never conclusive" rule
+                _peer_conclusive(self.url, "exit_blocked" if (self.peer_ok is None and _ex.get("exit_blocked")) else self.peer_ok)
+                # the other published family gets its own peer test, so one family's result can't stand for both
+                _main = _ex.get("fam")
+                _other = {"v4": "v6", "v6": "v4"}.get(_main)
+                if _other and len(_fr) == 2 and _fr.get(_other):
+                    _ok2 = scraper.peer_probe_family(self.url, _other)
+                    if _ok2 is not None:
+                        _split_add(self.url, (getattr(scraper.rtt, "family_extra", None) or {}).get("split"))
+                        _peer_hist_add(self.url, _ok2, _other)
+                        _fx = getattr(scraper.rtt, "family_extra", None) or {}
+                        _nat_seen_set(self.url, _other, _fx.get("nat_ip"))
+                        _peer_seen_set(self.url, _other, _fx.get("seen"), _ok2)
+                else:
+                    _ok2 = None
+                # once a day, on a family that just passed the instant peer test: the delayed one (watch-only)
+                try:
+                    if not (self.peer_ok is True and _delayed_maybe_start(self.url, _main)) and _ok2 is True:
+                        _delayed_maybe_start(self.url, _other)
+                except Exception:
+                    logger.exception("delayed peer test failed to start for %s", self.url)
+                logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
             except Exception:
-                pass
-            if _df:
-                logger.info("%s DEAD FAMILY: published %s address does not answer", self.url, _df)
-            _probe_save()
-            debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": _ex.get("cid_ok")}
-            if _ex.get("stale"):
-                logger.info("%s STALE PEERS: still hands out a peer after it sent stopped", self.url)
-            if _ex.get("cid_ok") is False:
-                logger.info("%s CONNID NOT ENFORCED: accepted an announce with a made-up connection ID", self.url)
-            if _ex.get("foreign") is not None:
-                _fake_hist_add(self.url, _ex["foreign"] > 0)
-                if _ex["foreign"]:
-                    logger.info("%s FAKE PEERS: %d fake peer(s) on a random hash", self.url, _ex["foreign"])
-            if _ex.get("inflated"):
-                logger.info("%s INFLATED COUNTS: %s seeders / %s leechers on a random hash", self.url, *_ex["inflated"])
-            if self.peer_ok is not None:
-                _split_add(self.url, _ex.get("split"))
-            if self.peer_ok is True:
-                _peer_hist_add(self.url, True, _ex.get("fam"))
-            elif self.peer_ok is False:
-                _peer_hist_add(self.url, False, _ex.get("fam"))
-            if self.peer_ok is not None:
-                _nat_seen_set(self.url, _ex.get("fam"), _ex.get("nat_ip"))
-                _peer_seen_set(self.url, _ex.get("fam"), _ex.get("seen"), self.peer_ok)
-            # a test that couldn't run because the VPN exits got no answer is a limit of the test, not the tracker's fault:
-            # it doesn't count towards the 7-day "never conclusive" rule
-            _peer_conclusive(self.url, "exit_blocked" if (self.peer_ok is None and _ex.get("exit_blocked")) else self.peer_ok)
-            # the other published family gets its own peer test, so one family's result can't stand for both
-            _main = _ex.get("fam")
-            _other = {"v4": "v6", "v6": "v4"}.get(_main)
-            if _other and len(_fr) == 2 and _fr.get(_other):
-                _ok2 = scraper.peer_probe_family(self.url, _other)
-                if _ok2 is not None:
-                    _split_add(self.url, (getattr(scraper.rtt, "family_extra", None) or {}).get("split"))
-                    _peer_hist_add(self.url, _ok2, _other)
-                    _fx = getattr(scraper.rtt, "family_extra", None) or {}
-                    _nat_seen_set(self.url, _other, _fx.get("nat_ip"))
-                    _peer_seen_set(self.url, _other, _fx.get("seen"), _ok2)
-            else:
-                _ok2 = None
-            # once a day, on a family that just passed the instant peer test: the delayed one (watch-only)
-            try:
-                if not (self.peer_ok is True and _delayed_maybe_start(self.url, _main)) and _ok2 is True:
-                    _delayed_maybe_start(self.url, _other)
-            except Exception:
-                logger.exception("delayed peer test failed to start for %s", self.url)
-            logger.info("%s peer test: %s%s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[self.peer_ok], " (inconclusive: only a same-IP client was answered, and the peer outlives stopped)" if _ex.get("inconclusive") else "")
+                logger.exception("%s: our own bookkeeping after its answer failed (the check still counts as up)", self.url)
             self.is_up()
             _FAILSTREAK[0] = 0  # a success: not an outage
             logger.info("%s status is UP", self.url)
@@ -277,6 +299,7 @@ class Tracker:
             return
         if not bep_34_info:
             logger.info("Hostname denies connection via BEP34, removing tracker %s", self.url)
+            _NT_DEL_REASON[self.url] = "its own DNS records (BEP 34) say it doesn't accept connections"
             self.to_be_deleted = True
             raise RuntimeError("Host denied connection according to BEP34, removed")
 
@@ -369,6 +392,8 @@ class Tracker:
             self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
         if PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # failed the peer test N times in a row
             self.uptime = 0  # no peers handed out = effectively down
+        if getattr(self, "_nt_no_removal", False):
+            return  # being accepted (ingest): no removal or ban before its first real check
         # Evict trackers that are dead, or too flaky to be of use as measured from Wellington:
         #   - listed 3+ days, AND
         #   - no successful check in 5 days, OR (144+ checks, i.e. 3+ days, and availability x stability under 15%:
@@ -377,8 +402,14 @@ class Tracker:
         now_ts = int(time())
         # Private or whitelist-only: its own replies said so CLOSED_LIMIT checks in a row, and it fails the peer test (or is
         # down). It can never work as a public tracker: removed and banned like any other removal, whatever its age.
+        # "still failing" for a removal also needs its latest test to show the same fault: on its last 6 alone, a tracker
+        # fixed a check or two before its 5 days were up was removed on the failures from before the fix, and one that had
+        # stopped handing out fake peers was removed for fake peers when its latest test failed for another reason
+        nopeers_now = PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and self.status == 1 and (
+            PEER_OK.get(self.url) is False or (PEER_OK.get(self.url) is None and _peer_na_failing(self.url, now_ts)))
+        fake_now = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and self.status == 1 and bool(FAKE_N.get(self.url))
         cl = CLOSED.get(self.url) or {}
-        if cl.get("n", 0) >= CLOSED_LIMIT and (self.status == 0 or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT):
+        if cl.get("n", 0) >= CLOSED_LIMIT and (self.status == 0 or nopeers_now):
             _NT_DEL_REASON[self.url] = cl["why"]
             logger.info("Evicting %s (%s, %d checks in a row)", self.url, cl["why"], cl["n"])
             self.to_be_deleted = True
@@ -386,8 +417,8 @@ class Tracker:
             return
         # Up/Bad (no peers or fake peers, not a dead address) for UPBAD_DAYS in a row, and still failing now: fixed or gone.
         ub = _nt_upbad_days(self.url, now_ts)
-        fake = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
-        failing = fake or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
+        fake = fake_now
+        failing = fake_now or nopeers_now
         share = _nt_bad_share(self.url, now_ts) if ub is not None else 0.0
         listed_days = (now_ts - int(self.added or now_ts)) / 86400.0
         why = None
@@ -436,7 +467,11 @@ class Tracker:
         if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and availability * stability < 0.15)):
             # the event, the removed page and the ban list say which of the two it was
             _dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(self.url)))
-            _NT_DEL_REASON[self.url] = ("no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else "") if dead_days >= REMOVE_DAYS else
+            _else = _answers_elsewhere(self, dead_days)
+            _NT_DEL_REASON[self.url] = (("no answer from this site's server for %d days%s, though it answers our test clients in other "
+                                         "countries: it may be blocking this site" % (int(dead_days), " (%s)" % _dw if _dw else ""))
+                                        if dead_days >= REMOVE_DAYS and _else else
+                                        "no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else "") if dead_days >= REMOVE_DAYS else
                                         "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * availability * stability))
             logger.info(
                 "Evicting %s (score=%.2f%%, availability=%.1f%%, no success for %.1f days, samples=%s, age_days=%.1f)",
@@ -458,7 +493,7 @@ class Tracker:
             if not host or _nt_banned(host):
                 return
             r = REMOVED.get(host)
-            prior = int(r.get("count", 1)) if r else 0  # removals before this one
+            prior = _nt_removals(r) if r else 0  # removals before this one
             # earlier removals of other names on the same server count too, so a new name doesn't start the ladder again;
             # but only once that name's ban had run out when this one was listed: a sister tracker listed alongside it
             # (tracker.dler.org and tracker2.dler.org) going down with the same fault is one problem, not a repeat
@@ -466,13 +501,13 @@ class Tracker:
             # when it was first listed: for a tracker back after its own ban, its earlier listing (its sister's removal
             # from that first time mustn't count again now)
             listed = min([int(x) for x in (getattr(self, "added", None), (r or {}).get("added")) if x] or [0])
-            prior += sum(int(o.get("count", 1)) for h, o in REMOVED.items()
+            prior += sum(_nt_removals(o) for h, o in REMOVED.items()
                          if h != host and mine & _nt_ip_keys(o.get("ips")) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS)
                          and (_nt_ban_end(h, o) <= listed
                               # banned for good, so its ban never runs out: it counts if that came before this name was listed
                               or (_nt_ban_end(h, o) == float("inf") and int(o.get("t") or 0) <= listed)))
             days = BAN_STEPS[min(prior, len(BAN_STEPS) - 1)]
-            with open(_DENY_FILE, "a", encoding="utf-8") as fh:
+            with _DENY_LOCK, open(_DENY_FILE, "a", encoding="utf-8") as fh:
                 fh.write(f"{host}\n" if days is None else (f"{host} {int(time())}\n" if days == 30 else f"{host} {int(time())} {days}\n"))
         except OSError:
             logger.exception("failed to append denylist for %s", self.url)
@@ -496,7 +531,7 @@ class Tracker:
                     pub = _nt_public_ips(self.host)
                     if pub is None or any(_nt_ip_public(x) for x in pub):
                         self.ips = None
-                        raise RuntimeError(f"IP {ip} is not globally routable, but the cross-check says {sorted(pub) if pub else 'no resolver answered'}: check skipped, tracker kept")
+                        raise _NtOurDNS(f"our resolver gave {ip}, not a public address, but public DNS gives {sorted(pub) if pub else 'no answer'}")
                     self.ips = None
                     self.to_be_deleted = True
                     if len(_NT_DEL_REASON) > 200:
@@ -735,11 +770,7 @@ import json as _json, os as _os
 PEER_FAIL_LIMIT = 3      # this many FAILs in a row ...
 PEER_FAIL_CAP = 50.0     # ... caps the score here (1 star, red, out of every score-based API list)
 _PEER_FAILS_FILE = "data/peer_fails.json"
-try:
-    with open(_PEER_FAILS_FILE) as _f:
-        PEER_FAILS: dict = _json.load(_f)
-except Exception:
-    PEER_FAILS = {}
+PEER_FAILS: dict = __import__("newtrackon.store", fromlist=["load"]).load(_PEER_FAILS_FILE)
 
 
 def _peer_fail_set(url, n):
@@ -749,34 +780,20 @@ def _peer_fail_set(url, n):
         PEER_FAILS[url] = n
     else:
         PEER_FAILS.pop(url, None)
-    try:
-        tmp = _PEER_FAILS_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(PEER_FAILS, f)
-        _os.replace(tmp, _PEER_FAILS_FILE)
-    except OSError:
-        pass
+    _jsave(PEER_FAILS, _PEER_FAILS_FILE)
 
 
 # Fake-peer / inflated-count checks (random-hash authenticity tests).
 FAKE_N: dict = {}      # url -> fake peers seen at latest test
 INFLATED: dict = {}    # url -> (seeders, leechers) reported when the truth is 1/1
 _FAKE_FAILS_FILE = "data/fake_fails.json"
-try:
-    with open(_FAKE_FAILS_FILE) as _f:
-        FAKE_FAILS: dict = _json.load(_f)
-except Exception:
-    FAKE_FAILS = {}
+FAKE_FAILS: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_FAILS_FILE)
 
 
 # Fake peers: judged over the last PEER_WINDOW probe results like the peer test, not a streak, so returning
 # fake peers every other check can't dodge it. FAKE_FAILS[url] = fakes in that window (consumers unchanged).
 _FAKE_HIST_FILE = "data/fake_hist.json"
-try:
-    with open(_FAKE_HIST_FILE) as _f:
-        FAKE_HIST: dict = _json.load(_f)
-except Exception:
-    FAKE_HIST = {}
+FAKE_HIST: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_HIST_FILE)
 
 
 def _fake_hist_add(url, fake):
@@ -785,13 +802,7 @@ def _fake_hist_add(url, fake):
         h = [1] * min(FAKE_FAILS.get(url, 0), PEER_WINDOW)
     h = (h + [1 if fake else 0])[-PEER_WINDOW:]
     FAKE_HIST[url] = h
-    try:
-        tmp = _FAKE_HIST_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(FAKE_HIST, f)
-        _os.replace(tmp, _FAKE_HIST_FILE)
-    except OSError:
-        pass
+    _jsave(FAKE_HIST, _FAKE_HIST_FILE)
     _ctr_set(FAKE_FAILS, _FAKE_FAILS_FILE, url, h.count(1))
 
 
@@ -802,13 +813,7 @@ def _ctr_set(d, path, url, n):
         d[url] = n
     else:
         d.pop(url, None)
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(d, f)
-        _os.replace(tmp, path)
-    except OSError:
-        pass
+    _jsave(d, path)
 
 
 # Informational tracker-hygiene checks (no score effect).
@@ -821,18 +826,11 @@ _PROBE_FILE = "data/probe_state.json"
 
 
 def _probe_save():
-    try:
-        tmp = _PROBE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump({"peer_ok": PEER_OK, "fake_n": FAKE_N, "inflated": INFLATED, "stale": STALE, "cid_ok": CID_OK}, f)
-        _os.replace(tmp, _PROBE_FILE)
-    except OSError:
-        pass
+    _jsave({"peer_ok": PEER_OK, "fake_n": FAKE_N, "inflated": INFLATED, "stale": STALE, "cid_ok": CID_OK}, _PROBE_FILE)
 
 
 try:
-    with open(_PROBE_FILE) as _f:
-        _st = _json.load(_f)
+    _st = __import__("newtrackon.store", fromlist=["load"]).load(_PROBE_FILE)
     PEER_OK.update(_st.get("peer_ok", {}))
     FAKE_N.update(_st.get("fake_n", {}))
     INFLATED.update({k: (tuple(v) if v else v) for k, v in _st.get("inflated", {}).items()})
@@ -848,21 +846,13 @@ _FAMS_FILE = "data/fams.json"
 
 
 def _jload(path):
-    try:
-        with open(path) as f:
-            return _json.load(f)
-    except Exception:
-        return {}
+    from newtrackon import store
+    return store.load(path)
 
 
 def _jsave(d, path):
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(d, f)
-        _os.replace(tmp, path)
-    except OSError:
-        pass
+    from newtrackon import store
+    store.save(d, path)
 
 
 FAM_FAILS: dict = _jload(_FAM_FAILS_FILE)
@@ -920,10 +910,16 @@ def _nt_fix_for_event(ev):
         return "dead-address" if "dead" in low else None
     if kind == "up" and "but" not in low:
         return None
+    if kind == "removed":
+        return "removed"
     if kind not in ("bad", "up"):
         return None
     if "fake peers" in low:
         return "fake-peers"
+    if "separate servers" in low:
+        return "split-swarm"
+    if ("no peers" in low or "side doesn't share peers" in low) and NAT_SEEN.get(ev.get("url")):
+        return "hidden-address"  # it hands out an address nobody can reach: that's the fault to fix
     if "no peers" in low:
         return "no-peers"
     if "address is dead" in low or "side doesn't share peers" in low:
@@ -984,11 +980,7 @@ def _fam_set(url, fam, res=None):
 # PEER_FAILS[url] = fails within that window, so every existing consumer (>= 3 -> Junk / score 0) is unchanged.
 PEER_WINDOW = 6
 _PEER_HIST_FILE = "data/peer_hist.json"
-try:
-    with open(_PEER_HIST_FILE) as _f:
-        PEER_HIST: dict = _json.load(_f)
-except Exception:
-    PEER_HIST = {}
+PEER_HIST: dict = _jload(_PEER_HIST_FILE)
 
 
 # Peer results are also kept per family ("v4"/"v6"), since a tracker can share peers on one and not the other.
@@ -1267,6 +1259,14 @@ def _removal_detail(rec, before=None):
     # records from before 2026-10-12 didn't say which of the two it was ("down, or answering without handing out peers"):
     # a failed peer test is shown only if one was recorded
     peers = upbad or (useless and "without usable peers" in low) or (useless and "or answering without" in low and _peer_evidence(url, before))
+    if "no conclusive peer test" in low:  # its failures were the 7-day rule's, not failed tests: say what it was
+        out.append("No conclusive peer test for 7 days or more: our second test client was never told anything about the first "
+                   "(only the first one ever got an answer), so it couldn't show that it shares peers. From then on each "
+                   "check counted as a failed test.")
+        return out, "no-peers"
+    if "may be blocking this site" in low:
+        out.append("This site's server got no answer from it, while our test clients in other countries did: it may be "
+                   "blocking this server, for example after limiting announces from one address.")
     if peers:
         fake = "fake peers" in low
         for fam, s in _peer_evidence(url, before):
@@ -1328,13 +1328,7 @@ def _peer_hist_add(url, ok, fam=None):
     keys = [fam] if fam in ("v4", "v6") else ([k for k in _peer_fams(url) if k != "?"] or ["?"]) if fam == "*" else ["?"]
     for key in keys:
         hf[key] = (hf.get(key, []) + [1 if ok else 0])[-PEER_WINDOW:]
-    try:
-        tmp = _PEER_HIST_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(PEER_HIST, f)
-        _os.replace(tmp, _PEER_HIST_FILE)
-    except OSError:
-        pass
+    _jsave(PEER_HIST, _PEER_HIST_FILE)
     _jsave(PEER_HIST_FAM, _PEER_HIST_FAM_FILE)
     # "hands out no peers" (Up/Bad) only when every family that counts fails; one failing family is _peer_fam_bad
     fams = _peer_fams(url)
@@ -1347,12 +1341,14 @@ def _peer_hist_add(url, ok, fam=None):
 # as a failure: it can't show that it shares peers.
 PEER_NA_DAYS = 7
 _PEER_LAST_FILE = "data/peer_last.json"
-try:
-    with open(_PEER_LAST_FILE) as _f:
-        PEER_LAST: dict = _json.load(_f)  # url -> last conclusive peer test (or when we started waiting for one)
-except Exception:
-    PEER_LAST = {}
+PEER_LAST: dict = _jload(_PEER_LAST_FILE)  # url -> last conclusive peer test (or when we started waiting for one)
 _PEER_ANY = [0.0]  # last conclusive peer test for any tracker: the test itself works
+
+
+def _peer_na_failing(url, now=None):
+    """No conclusive peer test for PEER_NA_DAYS while the test works for others: each check counts as a failure (below)."""
+    now = now or time()
+    return url in PEER_LAST and now - PEER_LAST[url] >= PEER_NA_DAYS * 86400 and now - _PEER_ANY[0] < 3600
 
 
 def _peer_conclusive(url, ok, now=None):
@@ -1365,19 +1361,13 @@ def _peer_conclusive(url, ok, now=None):
         PEER_LAST[url] = int(now)
     elif url not in PEER_LAST:
         PEER_LAST[url] = int(now)  # start waiting from now
-    elif now - PEER_LAST[url] >= PEER_NA_DAYS * 86400 and now - _PEER_ANY[0] < 3600:
+    elif _peer_na_failing(url, now):
         logger.info("%s peer test inconclusive for %d+ days: counted as a failure", url, PEER_NA_DAYS)
         _peer_hist_add(url, False, "*")
         return
     else:
         return
-    try:
-        tmp = _PEER_LAST_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(PEER_LAST, f)
-        _os.replace(tmp, _PEER_LAST_FILE)
-    except OSError:
-        pass
+    _jsave(PEER_LAST, _PEER_LAST_FILE)
 
 
 _ONLINE = [0.0, True]
@@ -1474,6 +1464,7 @@ REMOVE_DAYS = 5  # Down (no answer) or Up/Bad (no or fake peers) this long and i
 UPBAD_DAYS = REMOVE_DAYS  # one clock for both
 BAN_STEPS = (30, 90, None)  # ban days for a host's 1st, 2nd and 3rd+ removal (None: for good)
 _DENY_FILE = "data/denylist.txt"
+_DENY_LOCK = __import__("threading").Lock()  # the check loop adds bans while ingest lifts them: one change at a time
 
 
 def _nt_ban_entries():
@@ -1542,6 +1533,10 @@ def _nt_useless_days(url, now=None):
 def _upbad_reason(url, fake, span):
     """The removal reason for Up/Bad, worded from what the peer tests saw. It must keep "(Up/Bad)" and "fake peers":
     ingest._keep_upbad_clock reads them when a banned tracker comes back."""
+    if not fake and PEER_OK.get(url) is None and _peer_na_failing(url):
+        days = int((time() - PEER_LAST.get(url, time())) // 86400)
+        return ("showed no peer sharing %s (Up/Bad): no conclusive peer test for %d days, only our first test client is ever "
+                "answered" % (span, days))
     try:
         cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(url)
     except Exception:
@@ -1569,19 +1564,32 @@ def _junk_broken_now(t):
     return None
 
 
+def _answers_elsewhere(t, days):
+    """Most of its missed checks over these days were half slots: no answer from this server, but answers from the VPN
+    exits (it blocks this site, or the route from here is broken)."""
+    n = max(1, int(days * 86400 // Tracker.SLOT))
+    h = [float(x) for x in list(getattr(t, "historic", None) or [])][-n:]
+    missed = [x for x in h if x < 1]
+    return bool(missed) and sum(1 for x in missed if x > 0) * 2 >= len(missed)
+
+
 def _useless_reason(t, days):
     """The removal reason for a tracker that wasn't working for REMOVE_DAYS (down and Up/Bad on one clock): how much of
     it was down, and whether it was handing out usable peers when it answered. Peer tests don't run while it's down, so
     its peer record is still the one from before."""
     n = max(1, int(days * 86400 // Tracker.SLOT))
     h = [float(x) for x in list(getattr(t, "historic", None) or [])][-n:]
-    down = round(100 * sum(1 for x in h if x <= 0) / len(h)) if h else 0
+    down = round(100 * sum(1 for x in h if x < 1) / len(h)) if h else 0  # half slots: no answer here, only from elsewhere
     head = "not working for %d days" % int(days)
+    if _answers_elsewhere(t, days):
+        head += ", for this site's server"
     fake = FAKE_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT
     no_peers = fake or PEER_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT
     dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(t.url))) if t.status == 0 else None
     if not no_peers:
-        return "%s: no answer in %d%% of checks, and never back for 12 hours in a row%s" % (head, down, " (%s)" % dw if dw else "")
+        return "%s: no answer in %d%% of checks, and never back for 12 hours in a row%s%s" % (
+            head, down, " (%s)" % dw if dw else "",
+            "; it answers our test clients in other countries: it may be blocking this site" if _answers_elsewhere(t, days) else "")
     try:
         cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(t.url)
     except Exception:
@@ -2083,6 +2091,13 @@ _rm = _jload(_REMOVED_FILE)
 REMOVED: dict = _rm if isinstance(_rm, dict) else {}
 
 
+def _nt_removals(rec):
+    """Removals that count towards a longer ban. One marked as our own fault (nt-admin reinstate) doesn't, for this host
+    or for its sister names, until the record is deleted when it's listed again."""
+    rec = rec or {}
+    return max(0, int(rec.get("count", 1) or 0) - (1 if rec.get("fault") else 0))
+
+
 def _removed_add(t, reason, now=None):
     host = (t.host or "").lower()
     if not host:
@@ -2093,7 +2108,7 @@ def _removed_add(t, reason, now=None):
     hist = "".join("1" if float(x) >= 1 else ("h" if float(x) > 0 else "0") for x in list(getattr(t, "historic", None) or [])[-336:])
     REMOVED[host] = {"url": t.url, "t": int(now or time()), "reason": reason, "added": int(t.added or 0),
                      "country": (t.countries or [""])[0], "network": (t.networks or [""])[0],
-                     "count": (int(prev.get("count", 1)) if prev else 0) + 1,  # removals so far, for longer bans
+                     "count": (_nt_removals(prev) if prev else 0) + 1,  # removals so far, for longer bans
                      "ips": sorted(set(getattr(t, "ips", None) or []) | set((getattr(t, "recent_ips", None) or {}).keys())),
                      "hist": hist}  # its last week of uptime, restored if it's reinstated
     if getattr(t, "last_uptime", None):
@@ -2316,7 +2331,7 @@ def _nt_ban_ips(ips, skip_host=None, listed_ips=()):
     if not ips:
         return None
     for host, r in REMOVED.items():
-        if host == skip_host or not r.get("ips"):
+        if host == skip_host or not r.get("ips") or r.get("fault"):  # our own fault: no ban to share
             continue
         if any(w in str(r.get("network") or "").lower() for w in _CDN_WORDS):
             continue

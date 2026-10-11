@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
 from collections import deque
-from os import path, replace
-from threading import get_ident
 from typing import TypedDict, cast
 
 
@@ -20,10 +17,10 @@ submitted_history_file = "data/submitted_data.json"
 
 
 def load_history(filename: str) -> list[HistoryData]:
-    if not path.exists(filename):
-        return []
-    with open(filename) as history_file:
-        return cast("list[HistoryData]", json.load(history_file))
+    """An unreadable file is moved aside and logged (newtrackon.store), never a crash at start."""
+    from newtrackon import store
+    d = store.load(filename, default=[])
+    return cast("list[HistoryData]", d if isinstance(d, list) else [])
 
 
 raw_data: deque[HistoryData] = deque(load_history(raw_history_file), maxlen=600)
@@ -31,8 +28,5 @@ submitted_data: deque[HistoryData] = deque(load_history(submitted_history_file),
 
 
 def save_deque_to_disk(obj: deque[HistoryData], filename: str) -> None:
-    # write a temp file then rename, so a kill mid-write can't leave a truncated file that breaks startup
-    tmp = f"{filename}.{get_ident()}.tmp"
-    with open(tmp, "w") as history_file:
-        json.dump(list(obj), history_file)
-    replace(tmp, filename)
+    from newtrackon import store
+    store.save(list(obj), filename)  # atomic and thread-safe; never raises

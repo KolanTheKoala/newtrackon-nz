@@ -1,0 +1,536 @@
+"""Simulation: the real per-check code (Tracker.update_status and everything it calls) driven through scripted timelines,
+with the network replaced by a scripted tracker and the clock by a variable. The outcomes are checked against what the
+rules say should happen, not against the code's own clocks."""
+
+from __future__ import annotations
+
+from collections import deque
+
+import pytest
+
+from newtrackon import scraper
+from newtrackon import tracker as T
+from newtrackon.tracker import Tracker
+
+DAY, HOUR = 86400, 3600
+START = 1_800_000_000 - 1_800_000_000 % 1800
+SIM_IP = "93.184.216.34"
+SEEN_OK = {"a": "ok", "a_ip": None, "self": False, "foreign": 0, "seeds": 1, "leech": 1}
+
+
+def _probe_result(mode, fam, n):
+    """What the peer test sees on one family: (ok, probe_extra)."""
+    if mode == "ok":
+        return True, {"fam": fam, "foreign": 0, "seen": dict(SEEN_OK), "split": False}
+    if mode == "none":
+        return False, {"fam": fam, "foreign": 0, "split": False,
+                       "seen": {"a": None, "a_ip": None, "self": False, "foreign": 0, "seeds": 0, "leech": 1}}
+    if mode == "split":  # separate servers: every other test reaches the one that saw client A
+        if n % 2 == 0:
+            return True, {"fam": fam, "foreign": 0, "seen": dict(SEEN_OK), "split": False}
+        return False, {"fam": fam, "foreign": 0, "split": True,
+                       "seen": {"a": None, "a_ip": None, "self": True, "foreign": 0, "seeds": 0, "leech": 1}}
+    if mode == "rare":  # separate servers that rarely meet: 1 test in 4 passes
+        if n % 4 == 0:
+            return True, {"fam": fam, "foreign": 0, "seen": dict(SEEN_OK), "split": False}
+        return False, {"fam": fam, "foreign": 0, "split": True,
+                       "seen": {"a": None, "a_ip": None, "self": True, "foreign": 0, "seeds": 0, "leech": 1}}
+    if mode == "nat":
+        return False, {"fam": fam, "foreign": 0, "split": False, "nat_ip": "172.17.0.1",
+                       "seen": {"a": "private", "a_ip": "172.17.0.1", "self": False, "foreign": 0, "seeds": 1, "leech": 1}}
+    if mode == "fake":
+        return True, {"fam": fam, "foreign": 2, "split": False, "seen": dict(SEEN_OK, foreign=2)}
+    if mode == "na":  # no VPN exit got an answer: a limit of the test
+        return None, {"fam": fam, "exit_blocked": True}
+    if mode == "inconclusive":  # only our first client is ever answered: the test can't show it shares peers
+        return None, {"fam": fam}
+    raise ValueError(mode)
+
+
+_REAL_LOCAL_FAULT = T._nt_local_fault
+
+
+class Sim:
+    """One simulated tracker. world(day) -> {"answers": bool, "peers": mode, "peers_v6": mode, "dead": {"v6"}}."""
+
+    def __init__(self, monkeypatch, world, fams=("v4",), url="udp://sim.example:6969/announce", added_days=30):
+        self.world, self.fams, self.now, self.n = world, fams, START, {}
+        self.mp = monkeypatch
+        self.tr = self._tracker(url, added_days)
+        self.log: list = []  # (time, state, codes) at every check
+        self.removed = None  # (time, reason)
+        mp = monkeypatch
+        mp.setattr(T, "time", lambda: self.now)
+        from newtrackon import ingest
+        mp.setattr(ingest, "time", lambda: self.now)
+        mp.setattr(scraper, "get_bep_34", lambda host: (False, None))
+        mp.setattr(Tracker, "update_ips", lambda tr: setattr(tr, "ips", [SIM_IP]))
+        mp.setattr(Tracker, "update_ipapi_data", lambda tr: None)
+        mp.setattr(scraper, "announce_udp", lambda u: (self._announce(), SIM_IP))
+        mp.setattr(scraper, "announce_http", lambda u: self._announce())
+        mp.setattr(scraper, "peer_probe", self._peer_probe)
+        mp.setattr(scraper, "peer_probe_family", self._peer_probe_family)
+        mp.setattr(scraper, "family_probe", lambda u: {f: f not in (self.state().get("dead") or ()) for f in self.fams})
+        mp.setattr(scraper, "region_latency", lambda u, fams=None: {"Oceania": 30, "Asia": 60, "Europe": 90, "North America": 80})
+        mp.setattr(T, "_delayed_maybe_start", lambda u, f: False)
+        mp.setattr(T, "_monitor_online", lambda: True)
+        mp.setattr(T, "_nt_local_fault", lambda t, e: False)
+
+    def _tracker(self, url, added_days):
+        from urllib.parse import urlparse
+        return Tracker(url=url, host=urlparse(url).hostname, ips=[SIM_IP], latency=30, last_checked=self.now - HOUR,
+                       interval=1800, status=1, uptime=100.0, countries=["Sim"], country_codes=["xx"], networks=["Sim ISP"],
+                       historic=deque([1] * 1440, maxlen=1440), added=self.now - added_days * DAY,
+                       last_downtime=self.now - 40 * DAY, last_uptime=self.now - HOUR)
+
+    def day(self):
+        return (self.now - START) / DAY
+
+    def state(self):
+        s = {"answers": True, "peers": "ok"}
+        s.update(self.world(self.day()))
+        return s
+
+    def _main_fam(self):
+        dead = self.state().get("dead") or ()
+        return next((f for f in self.fams if f not in dead), self.fams[0])
+
+    def _announce(self):
+        s = self.state()
+        if not s["answers"] or all(f in (s.get("dead") or ()) for f in self.fams):
+            raise RuntimeError("UDP timeout")
+        return {"interval": 1800, "leechers": 0, "seeds": 1, "peers": []}
+
+    def _fam_mode(self, fam):
+        s = self.state()
+        return s.get("peers_" + fam, s["peers"])
+
+    def _result(self, fam):
+        k = self.n[fam] = self.n.get(fam, -1) + 1
+        return _probe_result(self._fam_mode(fam), fam, k)
+
+    def _peer_probe(self, only_family=None):
+        ok, extra = self._result(self._main_fam())
+        scraper.rtt.probe_extra = extra
+        self.latest = (ok, extra)
+        return ok
+
+    def _peer_probe_family(self, url, fam):
+        if fam in (self.state().get("dead") or ()):
+            scraper.rtt.family_extra = {}
+            return None
+        ok, extra = self._result(fam)
+        scraper.rtt.family_extra = extra
+        return ok
+
+    def check(self):
+        self.latest = (None, {})  # this check's main peer test, if it runs (not while it's down)
+        self.tr.update_status()
+        st, codes = T.status_rule(self.tr)
+        self.log.append((self.now, st, codes))
+        if self.tr.to_be_deleted:
+            self.removed = (self.now, T.REMOVED[self.tr.host]["reason"])
+
+    def run(self, days, step=300):
+        end = self.now + int(days * DAY)
+        while self.now < end and not self.removed:
+            if self.now - self.tr.last_checked > self.tr.interval:
+                self.check()
+            self.now += step
+        return self
+
+    def resubmit(self, reinstating, url=None, listed=()):
+        """Its URL is accepted again through the real ingest.process_new_tracker: 'Check again now' or a plain submission."""
+        from unittest.mock import patch
+        from newtrackon import ingest
+        url = url or self.tr.url
+        self.mp.setattr(ingest, "time", lambda: self.now)
+        cand = Tracker.from_url(url)
+        if reinstating:
+            ingest.REINSTATE[cand.host] = self.now
+        with patch("newtrackon.ingest.db.get_all_data", return_value=list(listed)), \
+                patch("newtrackon.ingest.attempt_submitted", return_value=(1800, url, 30)), \
+                patch("newtrackon.ingest.db.insert_new_tracker") as ins, patch("newtrackon.ingest.db.delete_tracker"):
+            ingest.process_new_tracker(cand)
+        assert ins.called, "not accepted"
+        self.tr, self.removed, self.n = cand, None, {}
+        return cand
+
+    def restart(self):
+        """The app restarts: every store is read back from the files it wrote; what's only in memory is gone."""
+        import copy
+        url = self.tr.url
+        before = {n: copy.deepcopy(getattr(T, n).get(url)) for n, _ in T._URL_STORES}
+        for name, var in T._URL_STORES:
+            self.mp.setattr(T, name, T._jload(getattr(T, var)))
+        self.mp.setattr(T, "REMOVED", T._jload(T._REMOVED_FILE))
+        for name in T._URL_MEMORY:
+            self.mp.setattr(T, name, {})
+        st = T._jload(T._PROBE_FILE)
+        T.PEER_OK.update(st.get("peer_ok", {}))
+        T.FAKE_N.update(st.get("fake_n", {}))
+        self.mp.setattr(T, "_PEER_ANY", [0.0])
+        after = {n: getattr(T, n).get(url) for n, _ in T._URL_STORES}
+        assert after == before, {n: (before[n], after[n]) for n in before if before[n] != after[n]}
+
+    def first(self, state):
+        """When it was first in that state."""
+        return next((t for t, st, _ in self.log if st == state), None)
+
+
+def _days(t):
+    return (t - START) / DAY
+
+
+class TestTimelines:
+    def test_healthy_for_40_days(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {}).run(40)
+        assert s.removed is None
+        assert {st for _, st, _ in s.log[3:]} == {"up_good"}
+        assert not [e for e in T.EVENTS if e["type"] in ("bad", "down", "removed")]
+        assert T._nt_bad_share(s.tr.url, s.now) == 0.0
+
+    def test_no_peers_from_day_2_removed_5_days_after_up_bad(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if d >= 2 else "ok"}).run(15)
+        bad = s.first("up_bad")
+        third = [t for t, _, _ in s.log if _days(t) >= 2][2]
+        assert bad == third  # Up/Bad at its 3rd failed test
+        assert s.removed is not None
+        assert 5 * DAY <= s.removed[0] - bad <= 5 * DAY + 2 * HOUR, (_days(bad), _days(s.removed[0]))
+        assert s.removed[1].startswith("handed out no peers for 5 days (Up/Bad)")
+
+    def test_unusable_address_says_so(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "nat" if d >= 1 else "ok"}).run(10)
+        assert s.removed and s.removed[1].startswith("handed out unusable peers for 5 days (Up/Bad): over IPv4 it gave out every client's address as 172.17.0.1")
+
+    def test_down_from_day_2_removed_about_5_days_later(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 2}).run(15)
+        last_up = max(t for t, st, _ in s.log if st != "down" and _days(t) < 2)
+        assert s.removed is not None
+        assert 5 * DAY <= s.removed[0] - last_up <= 5 * DAY + 5 * HOUR, (_days(last_up), _days(s.removed[0]))  # 5 days from its last answer
+
+    def test_fixed_after_3_days_is_kept(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if 1 <= d < 4 else "ok"}).run(20)
+        assert s.removed is None and s.log[-1][1] == "up_good"
+
+    def test_good_spells_under_12_hours_dont_reset_the_clock(self, monkeypatch) -> None:
+        # Up/Bad for 20 h, then passing for 4 h, over and over: one stretch, removed after 5 days
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if d >= 1 and (d - 1) % 1.0 < 20 / 24 else "ok"}).run(15)
+        assert s.removed is not None and s.removed[0] - START <= 7.5 * DAY, _days(s.removed[0])
+
+    def test_good_spells_over_12_hours_reset_it(self, monkeypatch) -> None:
+        # Up/Bad for 2.5 days, then passing for a day, over and over: never 5 days in a row (but 70% of the week: kept)
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if (d % 3.5) < 2.5 else "ok"}).run(20)
+        assert s.removed is None, s.removed
+
+    def test_up_bad_80_percent_of_the_week_is_removed(self, monkeypatch) -> None:
+        # Up/Bad 4 days, then a day passing, over and over: 80% of a week, never 5 days in a row
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if (d % 5) < 4.2 else "ok"}).run(30)
+        assert s.removed is not None and "of the last 7 days (Up/Bad)" in s.removed[1], s.removed
+
+    @pytest.mark.parametrize(("world", "fams", "now"), [
+        (lambda d: {"dead": {"v6"}}, ("v4", "v6"), "its IPv6 address is dead"),
+        (lambda d: {"peers_v6": "none"}, ("v4", "v6"), "its IPv6 side doesn't share peers"),
+        (lambda d: {"peers": "split"}, ("v4",), "its servers don't share swarms")])
+    def test_up_broken_only_after_30_days(self, monkeypatch, world, fams, now) -> None:
+        s = Sim(monkeypatch, world, fams=fams).run(33)
+        broken = s.first("up_broken")
+        assert broken is not None and s.removed is not None
+        assert 30 * DAY <= s.removed[0] - broken <= 30 * DAY + 2 * HOUR, (_days(broken), _days(s.removed[0]))
+        assert s.removed[1] == "Up/Junk or Up/Broken for 30 days in a row; now " + now
+        assert not [st for _, st, _ in s.log if st == "up_bad"]
+
+    def test_rare_meeting_split_is_up_bad(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "rare" if d >= 1 else "ok"}).run(10)
+        assert s.removed is not None and "(Up/Bad)" in s.removed[1] and "its servers don't share swarms" in s.removed[1]
+
+    def test_down_then_up_bad_one_clock(self, monkeypatch) -> None:
+        # 3 days down, then 3 days answering without peers: not working for 6 days in one stretch
+        s = Sim(monkeypatch, lambda d: {"answers": not (1 <= d < 4), "peers": "none" if d >= 4 else "ok"}).run(12)
+        assert s.removed is not None and s.removed[0] - START <= 6.5 * DAY, (_days(s.removed[0]), s.removed[1])
+        assert s.removed[1].startswith("not working for")
+
+    def test_peer_test_blocked_by_our_exits_is_never_held_against_it(self, monkeypatch) -> None:
+        monkeypatch.setattr(T, "_PEER_ANY", [START])
+        s = Sim(monkeypatch, lambda d: {"peers": "na" if d >= 1 else "ok"})
+        s.run(20)
+        assert s.removed is None and s.log[-1][1] != "up_bad"
+
+
+def _ban_line(host):
+    return [ln for ln in open("data/denylist.txt").read().splitlines() if ln.split()[:1] == [host]][-1]
+
+
+@pytest.mark.usefixtures("empty_queues", "mock_db_connection")
+class TestLifecycle:
+    def _no_peers(self, mp, fixed_at, **kw):
+        s = Sim(mp, lambda d: {"peers": "none" if 1 <= d < fixed_at else "ok"}, **kw).run(10)
+        assert s.removed and "(Up/Bad)" in s.removed[1], s.removed
+        return s
+
+    def test_fixed_then_check_again_now(self, monkeypatch) -> None:
+        s = self._no_peers(monkeypatch, fixed_at=7)
+        s.now = START + 8 * DAY
+        s.resubmit(reinstating=True)
+        n = len(T.EVENTS)
+        s.run(12)
+        assert s.removed is None and s.log[-1][1] == "up_good" and not T._nt_banned(s.tr.host)
+        assert [e["type"] for e in T.EVENTS[n:]] in ([], ["good"]), T.EVENTS[n:]
+
+    def test_still_broken_after_check_again_now(self, monkeypatch) -> None:
+        s = self._no_peers(monkeypatch, fixed_at=999)
+        back = s.now = s.removed[0] + DAY
+        s.resubmit(reinstating=True)
+        s.run(3)
+        assert s.removed is not None and s.removed[0] - back <= 8 * HOUR, (s.removed[0] - back) / HOUR
+        assert _ban_line(s.tr.host).split()[2] == "90"  # its second removal
+        assert not [e for e in T.EVENTS if "Up/Good" in e["text"]]
+
+    def test_ban_runs_out_then_resubmitted_fixed(self, monkeypatch) -> None:
+        from newtrackon import ingest
+        s = self._no_peers(monkeypatch, fixed_at=20)
+        s.now = s.removed[0] + DAY
+        assert s.tr.host in ingest._denylist_hosts()  # refused while banned
+        s.now = s.removed[0] + 31 * DAY
+        assert s.tr.host not in ingest._denylist_hosts()
+        s.resubmit(reinstating=False)
+        assert T.status_rule(s.tr)[0] != "up_bad"  # listed clean, not on its old failures
+        n = len(T.EVENTS)
+        s.run(10)
+        assert s.removed is None and not [e for e in T.EVENTS[n:] if e["type"] in ("bad", "down", "removed")], T.EVENTS[n:]
+
+    def test_ban_runs_out_resubmitted_still_broken(self, monkeypatch) -> None:
+        s = self._no_peers(monkeypatch, fixed_at=999)
+        back = s.now = s.removed[0] + 31 * DAY
+        s.resubmit(reinstating=False)
+        s.run(10)
+        assert s.removed is not None and s.removed[0] - back >= 5 * DAY  # a fresh 5 days: it wasn't reinstated
+        assert _ban_line(s.tr.host).split()[2] == "90"
+
+    def test_udp_version_replaces_an_up_bad_http_tracker(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if 1 <= d < 5.2 else "ok"}, url="http://sim.example:6969/announce").run(5.2)
+        assert s.removed is None and s.log[-1][1] == "up_bad"
+        old = s.tr
+        s.resubmit(reinstating=False, url="udp://sim.example:6969/announce", listed=[old])
+        assert s.tr.url.startswith("udp://") and T.LAST_STATE[s.tr.url]["st"] == "up_bad"  # its clock carried over
+        s.run(10)
+        assert s.removed is None and s.log[-1][1] == "up_good"
+
+    def test_udp_version_with_the_same_fault_goes_soon(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if d >= 1 else "ok"}, url="http://sim.example:6969/announce").run(5.2)
+        old, bad = s.tr, s.first("up_bad")
+        s.resubmit(reinstating=False, url="udp://sim.example:6969/announce", listed=[old])
+        s.run(5)
+        # its clock carried over: removed when the stretch that began on HTTP reaches 5 days
+        assert s.removed is not None and 5 * DAY <= s.removed[0] - bad <= 5 * DAY + 4 * HOUR, (_days(bad), _days(s.removed[0]))
+
+    def test_restart_mid_stretch_changes_nothing(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"peers": "none" if d >= 1 else "ok"}).run(4)
+        bad = s.first("up_bad")
+        s.restart()
+        s.run(10)
+        assert s.removed is not None and 5 * DAY <= s.removed[0] - bad <= 5 * DAY + 2 * HOUR, (_days(bad), _days(s.removed[0]))
+
+    def test_restart_in_up_broken_changes_nothing(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"dead": {"v6"}}, fams=("v4", "v6")).run(12)
+        broken = s.first("up_broken")
+        s.restart()
+        s.run(25)
+        assert s.removed is not None and 30 * DAY <= s.removed[0] - broken <= 30 * DAY + 2 * HOUR
+
+    def test_flaky_removed_then_fixed_and_reinstated(self, monkeypatch) -> None:
+        # answers 1 check in 8 (dropping out), removed by the 15% rule, then fixed
+        s = Sim(monkeypatch, lambda d: {"answers": d >= 9 or int(d * 48) % 8 == 0}).run(9)
+        assert s.removed is not None and s.removed[1].startswith(("too unreliable", "no answer", "not working")), s.removed
+        s.now = START + 9.5 * DAY
+        s.resubmit(reinstating=True)
+        s.run(10)
+        assert s.removed is None, s.removed
+
+
+@pytest.mark.usefixtures("empty_queues", "mock_db_connection")
+def test_accepting_a_protocol_upgrade_never_writes_a_ban(monkeypatch) -> None:
+    # a flaky HTTP tracker (answers 1 check in 8) whose UDP version is submitted while it's still listed
+    s = Sim(monkeypatch, lambda d: {"answers": int(d * 48) % 8 == 0}, url="http://sim.example:6969/announce", added_days=40)
+    s.tr.historic = deque(([1] + [0] * 7) * 180, maxlen=1440)
+    s.tr.last_uptime = s.now - 600
+    old = s.tr
+    s.resubmit(reinstating=False, url="udp://sim.example:6969/announce", listed=[old])
+    assert not [ln for ln in open("data/denylist.txt").read().splitlines() if ln.split()[:1] == ["sim.example"]] if __import__("os").path.exists("data/denylist.txt") else True
+
+
+# ---- randomized timelines: whatever the tracker does, it's never removed earlier than the rules allow, and the reason
+# matches what it was doing. The bounds come from the per-check record of what the world was doing, not from the code.
+MODES = ["ok", "ok", "ok", "none", "nat", "split", "rare", "fake", "down", "flap", "dead6", "nopeers6", "inconclusive", "na"]
+
+
+def _random_world(rng):
+    segs, t = [], 0.0
+    while t < 40:
+        t += rng.choice([0.05, 0.2, 0.4, 0.6, 1, 2, 3, 5, 8])
+        segs.append((t, rng.choice(MODES)))
+
+    def world(d):
+        mode = next((m for end, m in segs if d < end), "ok")
+        if mode == "down":
+            return {"answers": False}
+        if mode == "flap":
+            return {"answers": int(d * 48) % 3 != 0}
+        if mode == "dead6":
+            return {"dead": {"v6"}}
+        if mode == "nopeers6":
+            return {"peers_v6": "none"}
+        return {"peers": mode}
+    return world
+
+
+def _peer_bad_world(s):
+    return s["answers"] and s.get("peers") in ("none", "nat", "fake", "rare", "inconclusive")
+
+
+def _stretches(times, flags, bridge):
+    """[(start, end)] of times flagged True, a gap shorter than `bridge` (from leaving to coming back) not breaking one."""
+    out, start, left = [], None, None
+    for t, f in zip(times, flags):
+        if f:
+            if start is None or (left is not None and t - left >= bridge):
+                if start is not None:
+                    out.append((start, left))
+                start = t
+            left = None
+        elif start is not None and left is None:
+            left = t
+    if start is not None:
+        out.append((start, left))
+    return out
+
+
+def _peer_bad_codes(codes):
+    return any(c in ("no_peers", "fake_peers") for c in codes)
+
+
+@pytest.mark.parametrize("seed", range(int(__import__("os").environ.get("NT_SIM_SEEDS", "10"))))
+def test_random_timelines_never_remove_early(monkeypatch, seed) -> None:
+    """The rules run on each check's status (3 failed peer tests of the last 6 make Up/Bad, so it lags the tracker by a
+    few checks on purpose): the bounds are worked out here from that record, independently of the code's clocks, and the
+    reason is checked against what the tracker was really doing."""
+    import random
+    rng = random.Random(seed)
+    world = _random_world(rng)
+    fams = ("v4", "v6") if seed % 2 else ("v4",)
+    s = Sim(monkeypatch, world, fams=fams)
+    seen = []  # world state at every check
+
+    orig = s.check
+
+    def check():
+        seen.append(s.state())
+        T._PEER_ANY[0] = s.now  # other trackers' peer tests keep working meanwhile
+        orig()
+    s.check = check
+    s.run(40)
+    times = [t for t, _, _ in s.log]
+    # the status catches up with a fixed tracker within a few checks
+    for k in range(len(s.log) - 6):
+        if all(st["answers"] and st.get("peers", "ok") == "ok" and not st.get("dead") and "peers_v6" not in st for st in seen[k:k + 6]):
+            assert s.log[k + 5][1] in ("up_good", "up_new", "up_slow", "up_unreliable", "up_junk"), (seed, _days(times[k + 5]), s.log[k + 5])
+    if not s.removed:
+        return
+    t_rm, why = s.removed
+    down = [st == "down" for _, st, _ in s.log]
+    pbad = [st == "up_bad" and _peer_bad_codes(c) for _, st, c in s.log]
+    world_now = seen[-1]
+    if why.startswith("no answer for"):
+        last_answer = max((t for t, st, _ in s.log if st != "down"), default=None)
+        assert not world_now["answers"] and (last_answer is None or t_rm - last_answer >= 5 * DAY), (seed, why)
+    elif "(Up/Bad)" in why:
+        ok, extra = s.latest  # its latest test showed the fault it's removed for
+        if "no conclusive peer test" in why:
+            assert ok is None and not extra.get("exit_blocked"), (seed, why, s.latest)  # never for a limit of ours
+        else:
+            assert (extra.get("foreign") if "fake peers" in why else ok is False), (seed, why, s.latest)
+        # the decision uses the state stored at the check before: the stretch ends at the previous check
+        runs = _stretches(times[:-1], pbad[:-1], 12 * HOUR)
+        last = runs[-1] if runs else None
+        if "of the last 7 days" in why:
+            week = [(t, f) for t, f in zip(times[:-1], pbad[:-1]) if t_rm - t <= 7 * DAY]
+            span = sum(t2 - t1 for (t1, f), (t2, _) in zip(week, week[1:] + [(t_rm, False)]) if f)
+            assert span >= 0.8 * 7 * DAY - 2 * HOUR, (seed, why, span / DAY)
+        else:
+            assert last and last[1] is None and t_rm - last[0] >= 5 * DAY, (seed, why, [(_days(b), _days(e or t_rm)) for b, e in runs])
+    elif why.startswith("not working for"):
+        ok, extra = s.latest
+        assert not world_now["answers"] or (extra.get("foreign") if "can't exist" in why else
+                                            ok is False or (ok is None and not extra.get("exit_blocked"))), (seed, why, world_now, s.latest)
+        runs = _stretches(times[:-1], [d or p for d, p in zip(down[:-1], pbad[:-1])], 12 * HOUR)
+        last = runs[-1] if runs else None
+        assert last and last[1] is None and t_rm - last[0] >= 5 * DAY, (seed, why, [(_days(b), _days(e or t_rm)) for b, e in runs])
+    elif why.startswith("too unreliable"):
+        recent = [d for t, d in zip(times, down) if t_rm - t <= 7 * DAY]
+        assert sum(recent) / len(recent) > 0.3, (seed, why, sum(recent) / len(recent))
+    else:
+        assert False, (seed, why)  # nothing here is Up/Junk or Up/Broken for 30 days, private or moved
+
+
+def _fresh_state(monkeypatch) -> None:
+    """Forget everything between two runs in one test: every store, in memory and on disk."""
+    import glob
+    import os
+    for name, _ in T._URL_STORES:
+        monkeypatch.setattr(T, name, {})
+    for name in T._URL_MEMORY + ("REMOVED", "REINSTATED"):
+        monkeypatch.setattr(T, name, {})
+    monkeypatch.setattr(T, "EVENTS", [])
+    monkeypatch.setattr(T, "_PEER_ANY", [0.0])
+    for f in glob.glob("data/*"):
+        if os.path.isfile(f):
+            os.remove(f)
+
+
+@pytest.mark.parametrize("seed", range(int(__import__("os").environ.get("NT_SIM_SEEDS", "10"))))
+def test_random_restart_changes_nothing(monkeypatch, seed) -> None:
+    import random
+    rng = random.Random(1000 + seed)
+    world = _random_world(rng)
+    fams = ("v4", "v6") if seed % 2 else ("v4",)
+    at = rng.uniform(1, 25)
+    _fresh_state(monkeypatch)
+    a = Sim(monkeypatch, world, fams=fams).run(30)
+    ref = (a.removed, [(t, st) for t, st, _ in a.log])
+    _fresh_state(monkeypatch)
+    b = Sim(monkeypatch, world, fams=fams).run(at)
+    if not b.removed:
+        b.restart()
+        b.run(30 - (b.now - START) / DAY)
+    assert (b.removed, [(t, st) for t, st, _ in b.log]) == ref, (seed, at, a.removed, b.removed)
+
+
+def test_blocking_only_this_server_says_so(monkeypatch) -> None:
+    """Wellington times out but the VPN exits get answers (it blocks this server): half-down slots, and the reason must
+    say what happened, not 'no answer in 0% of checks'."""
+    s = Sim(monkeypatch, lambda d: {"answers": d < 1})
+    monkeypatch.setattr(T, "_nt_local_fault", T.__dict__["_nt_local_fault"].__wrapped__ if hasattr(T._nt_local_fault, "__wrapped__") else _REAL_LOCAL_FAULT)
+    monkeypatch.setattr(T, "_nt_vps_retry_ok", lambda u: False)
+    monkeypatch.setattr(T, "_nt_reachable_elsewhere", lambda u: True)
+    monkeypatch.setattr(T, "_nt_signal", lambda kind, host: None)
+    s.run(10)
+    assert s.removed is not None, "removed?"
+    assert "though it answers our test clients in other countries" in s.removed[1] and "0% of checks" not in s.removed[1], s.removed[1]
+    assert any("may be blocking this server" in x for x in T.REMOVED[s.tr.host]["detail"])
+
+
+def test_inconclusive_for_7_days_end_to_end(monkeypatch) -> None:
+    s = Sim(monkeypatch, lambda d: {"peers": "inconclusive" if d >= 1 else "ok"})
+    orig = s.check
+
+    def check():  # other trackers' tests keep working meanwhile
+        T._PEER_ANY[0] = s.now
+        orig()
+    s.check = check
+    s.run(25)
+    bad = s.first("up_bad")
+    assert bad is not None and 8 <= _days(bad) <= 8.6, _days(bad) if bad else None  # 7 days after its last conclusive test
+    assert s.removed is not None and 5 * DAY <= s.removed[0] - bad <= 5 * DAY + 2 * HOUR, (_days(bad), _days(s.removed[0]))
+    assert "no conclusive peer test" in s.removed[1] and "(Up/Bad)" in s.removed[1], s.removed[1]
+    detail = T.REMOVED[s.tr.host]["detail"]
+    assert detail[0].startswith("No conclusive peer test for 7 days") and not [x for x in detail if x.startswith("Passed 0")]

@@ -825,6 +825,8 @@ def _bans(now=None):
     """Active bans on trackers this site removed, soonest to expire first."""
     out = []
     for host, r in T.REMOVED.items():
+        if r.get("fault"):
+            continue  # removed by a fault in our own checks: not a ban
         b = _ban(host, now)
         if b and b["active"]:
             out.append(dict(host=host, url=r.get("url"), removed=r.get("t"), reason=r.get("reason"), **b))

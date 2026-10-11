@@ -508,11 +508,7 @@ def check_peer_count(response: Mapping[str, object]) -> None:
 # ---- per-address health (UDP): which of a tracker's published addresses answer. Addresses that answered recently are
 # tried first; the tracker page lists the ones that don't (an old address left in DNS fails every client that picks it).
 _ADDR_FILE = "data/addr_health.json"
-try:
-    with open(_ADDR_FILE) as _af:
-        ADDR_HEALTH: dict = __import__("json").load(_af)  # "host:port" -> {ip: {"ok": last answer, "fails": in a row, "t": last try}}
-except Exception:
-    ADDR_HEALTH = {}
+ADDR_HEALTH: dict = __import__("newtrackon.store", fromlist=["load"]).load(_ADDR_FILE)  # "host:port" -> {ip: {"ok": last answer, "fails": in a row, "t": last try}}
 
 
 def _addr_key(host, port):
@@ -521,7 +517,6 @@ def _addr_key(host, port):
 
 def addr_record(host, port, ip, ok, published=None):
     """Note whether one address answered. `published`: the addresses DNS gives now (others are forgotten)."""
-    import json as _j
     k = _addr_key(host, port)
     h = ADDR_HEALTH.setdefault(k, {})
     if published is not None:
@@ -534,13 +529,8 @@ def addr_record(host, port, ip, ok, published=None):
     else:
         e["fails"] = int(e.get("fails", 0)) + 1
     e["t"] = now
-    try:
-        tmp = _ADDR_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            _j.dump(ADDR_HEALTH, f)
-        __import__("os").replace(tmp, _ADDR_FILE)
-    except OSError:
-        pass
+    from newtrackon import store
+    store.save(ADDR_HEALTH, _ADDR_FILE)  # never raises: a failed save mustn't look like the tracker failing
 
 
 def _addr_rank(host, port, ip):
@@ -852,11 +842,7 @@ def _probe_src(family):
 
 
 _PREF_FILE = "data/probe_pref.json"
-try:
-    with open(_PREF_FILE) as _pf:
-        _PREF = __import__("json").load(_pf)
-except Exception:
-    _PREF = {}
+_PREF: dict = __import__("newtrackon.store", fromlist=["load"]).load(_PREF_FILE)
 
 
 def _pref_set(key, src):
@@ -864,12 +850,8 @@ def _pref_set(key, src):
     if _PREF.get(key) == src:
         return
     _PREF[key] = src
-    try:
-        with open(_PREF_FILE + ".tmp", "w") as f:
-            __import__("json").dump(_PREF, f)
-        __import__("os").replace(_PREF_FILE + ".tmp", _PREF_FILE)
-    except OSError:
-        pass
+    from newtrackon import store
+    store.save(_PREF, _PREF_FILE)
 
 
 def _http_ann(url, src, thash, pid, left, port, event):
@@ -1142,23 +1124,29 @@ def peer_probe(only_family: int | None = None) -> bool | None:
 
     # A and B must share an address family: trackers only hand out peers of the asker's family.
     fam = sa_s = None
-    no_src = False
+    cant_run = False  # the test couldn't run on some family for a reason of ours (no exit) or its refusal of A
     for f in (socket.AF_INET, socket.AF_INET6):
         if only_family and f != only_family:
             continue
         if not _probe_src(f):
-            no_src = True  # no VPN exit for this family: a limit of our test, never the tracker's fault
+            cant_run = True  # no VPN exit for this family: a limit of our test, never the tracker's fault
             continue
         try:
             socket.getaddrinfo(host, hport, f)
+        except Exception:
+            continue  # no address in this family
+        try:
             s_try = hsess("0.0.0.0" if f == socket.AF_INET else "::")  # A = VPS, pinned to this family
             hann(s_try, pid_a, 0, want, "started")
         except Exception:
-            continue  # this family is dead: try the other
+            # this family is dead, or the tracker refused client A's announce straight after the main one (a minimum
+            # interval enforced): either way the test couldn't run here, which says nothing about sharing peers
+            cant_run = True
+            continue
         fam, sa_s = f, s_try
         break
     if fam is None:
-        if no_src:
+        if cant_run:
             extra["exit_blocked"] = True  # as when no exit gets an answer: doesn't count towards "7 days inconclusive"
         return None
     extra["fam"] = "v6" if fam == socket.AF_INET6 else "v4"  # the family this test ran over
@@ -1264,7 +1252,7 @@ def family_probe(url):
                         try:
                             s_, an = _udp_session(fam, a_, src)
                             try:
-                                an(generate_peer_id(), 1, 0x76FF, 0, urandom(20))
+                                an(generate_peer_id(), 1, probe_port(0x76FF), 0, urandom(20))  # a random port, like every test
                             finally:
                                 s_.close()
                             answered = True

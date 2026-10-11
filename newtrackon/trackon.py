@@ -38,7 +38,12 @@ _USELESS_SEEDED: list = []  # done once per start
 def update_outdated_trackers() -> NoReturn:
     while True:
         now = int(time())
-        trackers_all = db.get_all_data()
+        try:
+            trackers_all = db.get_all_data()
+        except Exception:  # the database was busy or broken: try again shortly, don't end the checks for good
+            logger.exception("could not read the tracker list")
+            sleep(30)
+            continue
         try:
             _T.daily_update(trackers_all, now)
         except Exception:
@@ -73,14 +78,16 @@ def update_outdated_trackers() -> NoReturn:
             _T.force_check_taken(forced)
         for tracker in trackers_outdated:
             logger.info("Updating %s", tracker.url)
-            tracker.update_status()
-
-            if tracker.to_be_deleted:
-                logger.info("Removing %s", tracker.url)
-                db.delete_tracker(tracker)
-                trackers_all.remove(tracker)
-            else:
-                db.update_tracker(tracker)
+            try:
+                tracker.update_status()
+                if tracker.to_be_deleted:
+                    logger.info("Removing %s", tracker.url)
+                    db.delete_tracker(tracker)
+                    trackers_all.remove(tracker)
+                else:
+                    db.update_tracker(tracker)
+            except Exception:  # one tracker's failure (a bug of ours) mustn't stop the checks of all the others
+                logger.exception("check of %s failed", tracker.url)
             save_deque_to_disk(raw_data, raw_history_file)
             try:  # between checks too, so a long batch doesn't stretch the delayed tests' wait
                 _T.delayed_due()

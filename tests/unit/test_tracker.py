@@ -1170,7 +1170,7 @@ class TestNZGuards:
         monkeypatch.setattr(T, "_nt_public_ips", lambda host: public_answer)
         mock_network["getaddrinfo"].return_value = [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("127.0.0.1", 6969))]
 
-        with pytest.raises(RuntimeError, match="tracker kept"):
+        with pytest.raises(T._NtOurDNS, match="not a public address, but public DNS gives"):  # our fault: not counted
             sample_tracker.update_ips()
 
         assert sample_tracker.ips is None

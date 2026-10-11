@@ -136,3 +136,9 @@ class TestShortenBan:
         self._setup(data, "gone.example %d 90" % (self.NOW - 86400), count=1)
         A.shorten_ban(A.Data(str(data), "shorten-ban", "gone.example"), now=self.NOW)
         assert _j(data, "removed.json")["gone.example"]["count"] == 1
+
+
+def test_reinstate_lifts_its_dated_ban(data) -> None:
+    # removed by our own fault: no ban (it would refuse its sister names' submissions and show on /bans meanwhile)
+    A.main(["--data", str(data), "reinstate", "gone.example"])
+    assert (data / "denylist.txt").read_text().splitlines() == ["forever.example"]

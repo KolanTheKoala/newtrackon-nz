@@ -25,6 +25,7 @@ def _remove_upbad(t, monkeypatch: pytest.MonkeyPatch) -> str:
     now = int(time())
     T.LAST_STATE[t.url] = {"st": "up_bad", "bad": NOPEERS, "dead": [], "since": now - int(5.1 * DAY)}
     monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+    monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
     t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
     t.update_uptime()
     assert t.to_be_deleted is True
@@ -94,6 +95,7 @@ class TestRemovalReason:
         t = sample_tracker  # Up/Bad for 4 days, then down for 1, removed while down
         t.status, t.historic = 0, deque([1] * 192 + [0] * 48, maxlen=1440)
         monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         _seen(t.url, "v6", a="private", a_ip="172.17.0.1")
         T._nt_down_why_set(t.url, "UDP timeout")
         why = T._useless_reason(t, 5.0)
@@ -106,6 +108,7 @@ class TestRemovalReason:
         t = sample_tracker
         t.status, t.historic = 1, deque([0] * 120 + [1] * 120, maxlen=1440)
         monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         _seen(t.url, "v4")
         assert T._useless_reason(t, 5.0) == ("not working for 5 days: no answer in 50% of checks, the rest answering without "
                                              "usable peers (a second client was never told about the first)")

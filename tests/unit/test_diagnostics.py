@@ -91,6 +91,7 @@ class TestClosedEviction:
         from time import time
         T.CLOSED[t.url] = {"why": "it only serves its own torrents (a whitelist)", "n": n}
         monkeypatch.setitem(T.PEER_FAILS, t.url, peer_fails)
+        monkeypatch.setitem(T.PEER_OK, t.url, not peer_fails)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status = int(time()) - 86400, int(time()), 1  # one day old, answering
         t.historic = deque([1] * 48, maxlen=1440)
         t.update_uptime()
@@ -154,6 +155,7 @@ class TestUpBadClock:
         from time import time
         self._state(t.url, days, self.NOPEERS)
         monkeypatch.setitem(T.PEER_FAILS, t.url, peer_fails)
+        monkeypatch.setitem(T.PEER_OK, t.url, not peer_fails)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status = int(time()) - 30 * 86400, int(time()), 1
         t.historic = deque([1] * 48, maxlen=1440)
         t.update_uptime()
@@ -499,6 +501,7 @@ class TestHttpPeerRulePaused:
         T.LAST_STATE[url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 6 * 86400),
                              "bad_since": int(time() - 6 * 86400), "useless_since": int(time() - 6 * 86400)}
         monkeypatch.setitem(T.PEER_FAILS, url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
 
@@ -536,6 +539,7 @@ class TestDualStackPeerRulePaused:
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 6 * 86400),
                                "bad_since": int(time() - 6 * 86400), "useless_since": int(time() - 6 * 86400)}
         monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         monkeypatch.setitem(T.FAMS, t.url, fams)
         t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
@@ -613,6 +617,7 @@ class TestDualStackNeedsEvidence:
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 6 * 86400),
                                "bad_since": int(time() - 6 * 86400), "useless_since": int(time() - 6 * 86400)}
         monkeypatch.setitem(T.PEER_FAILS, t.url, 6)
+        monkeypatch.setitem(T.PEER_OK, t.url, not 6)  # its latest test, as a check records it
         monkeypatch.setitem(T.FAMS, t.url, {"v4": True, "v6": True})
         T.PEER_HIST_FAM[t.url] = fam_hist
         t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 48, maxlen=1440)

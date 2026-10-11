@@ -36,6 +36,7 @@ def test_still_broken_goes_again_soon(reinstated) -> None:
     removed_at = None
     for i in range(5):  # each check: the peer test fails, then the removal rules, then the feed's state
         T._peer_hist_add(reinstated.url, False, "v4")
+        T.PEER_OK[reinstated.url] = False
         reinstated.update_uptime()
         if reinstated.to_be_deleted:
             removed_at = i + 1
@@ -176,6 +177,7 @@ def test_sister_banned_for_good_after_this_was_listed_doesnt_count(sample_tracke
 def test_fixed_after_reinstatement_posts_nothing_misleading(reinstated) -> None:
     for _ in range(3):
         T._peer_hist_add(reinstated.url, True, "v4")
+        T.PEER_OK[reinstated.url] = True
         reinstated.update_uptime()
         reinstated._emit_events()
     assert reinstated.to_be_deleted is False and T.EVENTS == [] and T.LAST_STATE[reinstated.url]["st"] in ("up_good", "up_unreliable", "up_slow")
