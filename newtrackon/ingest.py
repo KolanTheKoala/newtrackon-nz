@@ -308,8 +308,40 @@ def _mark_confirm_row(url: str) -> None:
         row = submitted_data[0]
         info = row.get("info")
         first = info[0] if isinstance(info, list) and info else info if isinstance(info, str) else ""
+        said = ("Answered our test client abroad, not this site's server." if row.get("abroad") else "Answered.")
         row.update({"status": 0, "confirm": True,
-                    "info": [first, "Answered. It's checked again in 30 minutes, and listed if it answers then too."]})
+                    "info": [first, said + " It's checked again in 30 minutes, and listed if it answers then too."]})
+
+
+def _attempt_abroad(url: str) -> tuple[int, str, int] | None:
+    """A tracker being reinstated that doesn't answer this server (it refuses it, or the route from here is broken) but
+    answers our test clients in other countries: it can be listed again, shown as Down from NZ, like a listed tracker
+    that does that (user's call, 2026-10-12). Only for reinstatements: a new submission is still checked from this
+    server. Not when its DNS sets where or whether to connect (BEP 34): the check from here follows that.
+    (interval, url, latency) from that answer, logged on the submitted page, or None."""
+    import pprint
+    from newtrackon import scraper
+    try:
+        bep_34, _ = scraper.get_bep_34(urlparse(url).hostname)
+    except Exception:
+        bep_34 = True
+    if bep_34:
+        return None
+    got = scraper.announce_via_exits(url)
+    if not got:
+        return None
+    resp, ms, where = got
+    interval = resp.get("interval")
+    if not isinstance(interval, int):
+        return None
+    # the peers it handed out are left out: for a fresh torrent that's our own test client abroad
+    shown = {k: v for k, v in resp.items() if k not in ("peers", "peers6", "external ip")}
+    pretty = scraper.redact_origin(pprint.PrettyPrinter(width=999999, compact=True).pformat(shown))
+    submitted_data.appendleft({"url": url, "time": int(time()), "ip": "", "status": 1, "abroad": True,
+                               "info": [pretty, "No answer from this site's server, but our test client in %s got this "
+                                                "one: it's listed as Down from NZ." % where]})
+    logger.info("Tracker %s doesn't answer this server, but answers our test client in %s", url, where)
+    return interval, url, ms
 
 
 def _reinstating(host: str) -> bool:
@@ -494,6 +526,7 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
 
     tracker_candidate.last_downtime = int(time())
     tracker_candidate.last_checked = int(time())
+    abroad = False  # answered only our test clients abroad (a reinstatement of a tracker that blocks this server)
     try:
         (
             tracker_candidate.interval,
@@ -501,9 +534,13 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
             tracker_candidate.latency,
         ) = attempt_submitted(tracker_candidate.url)
     except RuntimeError:  # no answer on any protocol
-        if _retry_later(submitted_url, second):
-            logger.info("Tracker %s didn't answer: one more try in %d min", submitted_url, RETRY_DELAY // 60)
-        return
+        got = _attempt_abroad(submitted_url) if _reinstating((cand_host or "").lower()) else None
+        if got is None:
+            if _retry_later(submitted_url, second):
+                logger.info("Tracker %s didn't answer: one more try in %d min", submitted_url, RETRY_DELAY // 60)
+            return
+        tracker_candidate.interval, tracker_candidate.url, tracker_candidate.latency = got
+        abroad = True
     except ValueError:
         return
     if not tracker_candidate.interval:
@@ -544,7 +581,11 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
                     setattr(tracker_candidate, a, getattr(old, a))
                 except Exception:
                     pass
-    tracker_candidate.is_up()
+    if abroad:  # no answer here, only from our test clients abroad: Down from NZ, as a listed tracker doing that is
+        tracker_candidate._nt_partial = True
+        tracker_candidate.is_down()
+    else:
+        tracker_candidate.is_up()
     tracker_candidate._nt_no_removal = True  # its score only: the removal rules wait for its first real check
     try:
         tracker_candidate.update_uptime()
@@ -566,8 +607,12 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         _reinstate_save()
         _lift_ban(host)
         _keep_upbad_clock(host, tracker_candidate.url)
+        if tracker_candidate.url not in _t.LAST_STATE:  # so its first check doesn't post "added to the list" as well
+            _t.LAST_STATE[tracker_candidate.url] = {"st": None, "bad": None, "dead": None, "since": int(time())}
+            _t._jsave(_t.LAST_STATE, _t._LAST_STATE_FILE)
         logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
-        _t._event(tracker_candidate.url, "added", "is back on the list at its operator's request")
+        _t._event(tracker_candidate.url, "added", "is back on the list at its operator's request" +
+                  (" (Down from NZ: it answers our test clients abroad, not this site's server)" if abroad else ""))
     if (_t.REMOVED.get(host) or {}).get("fault"):  # removed by a fault in our checks (scripts/nt_admin.py reinstate)
         _t.REMOVED.pop(host, None)  # listed again, however it was submitted: the record goes, so it never counts
         _t._jsave(_t.REMOVED, _t._REMOVED_FILE)

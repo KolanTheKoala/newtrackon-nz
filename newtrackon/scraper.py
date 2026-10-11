@@ -1,3 +1,4 @@
+import hashlib
 import pprint
 import random
 import socket
@@ -339,6 +340,22 @@ def generate_peer_id() -> bytes:
     return ((prof[0] if prof else PEER_ID_PREFIX) + "".join(random.choices(PEER_ID_CHARS, k=12))).encode()
 
 
+NUMWANT = {"-qB": 200, "-TR": 80}  # peers each client asks for (qBittorrent/libtorrent 200, Transmission 80)
+
+
+def numwant(peer_id: bytes, stopping: bool = False) -> int:
+    """How many peers this client asks for: what the real client sends (0 when it's leaving the swarm)."""
+    pid = peer_id if isinstance(peer_id, bytes) else str(peer_id).encode()
+    return 0 if stopping else next((n for p, n in NUMWANT.items() if pid.startswith(p.encode())), 50)
+
+
+def client_args(peer_id: bytes, event: str | None = None) -> dict[str, object]:
+    """The fields real clients send with every HTTP announce besides the basics: numwant, and their key (the same for all
+    of one client's announces). Without numwant a tracker may hand out no peers at all, which real clients never see."""
+    pid = peer_id if isinstance(peer_id, bytes) else str(peer_id).encode()
+    return {"numwant": numwant(pid, event == "stopped"), "key": hashlib.sha1(pid).hexdigest()[:8].upper()}
+
+
 def parse_http_tracker_response(data: bytes) -> HTTPAnnounceResponse:
     """Decode and interpret a bencoded HTTP tracker response."""
     bdecoded_response = bdecode(data)
@@ -409,14 +426,16 @@ def _announce_http_once(url: str) -> HTTPAnnounceResponse:
     new_client()
     thash = urandom(20)
 
+    _pid = generate_peer_id()
     args_dict = {
         "info_hash": thash,
-        "peer_id": (_pid := generate_peer_id()),
+        "peer_id": _pid,
         "port": probe_port(HTTP_PORT),
         "uploaded": 0,
         "downloaded": 0,
         "left": 0,
         "compact": 1,
+        **client_args(_pid),
         "ipv6": my_ipv6,
         "ipv4": my_ipv4,
     }
@@ -702,7 +721,8 @@ def udp_error_text(buf: bytes) -> str:
     return buf[8:208].decode("utf-8", "replace").strip("\x00 \r\n") or "(no message)"
 
 
-def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id: bytes, left: int = 0, port: int = 0x76FD, event: int = 2) -> tuple[bytes, int]:
+def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id: bytes, left: int = 0, port: int = 0x76FD, event: int = 2,
+                                num_want: int | None = None) -> tuple[bytes, int]:
     action = 0x1  # action (1 = announce)
     transaction_id = udp_get_transaction_id()
     buf = struct.pack("!q", connection_id)  # first 8 bytes is connection id
@@ -715,9 +735,10 @@ def udp_create_announce_request(connection_id: int | None, thash: bytes, peer_id
     buf += struct.pack("!q", 0x0)  # number of bytes uploaded
     buf += struct.pack("!i", event)  # event: 0 none, 1 completed, 2 started, 3 stopped
     buf += struct.pack("!i", 0x0)  # IP address set to 0. Response received to the sender of this packet
-    key = udp_get_transaction_id()  # Unique key randomized by client
+    key = struct.unpack("!i", hashlib.sha1(peer_id).digest()[:4])[0]  # the client's key: the same for all its announces
     buf += struct.pack("!i", key)
-    buf += struct.pack("!i", -1)  # Number of peers required. Set to -1 for default
+    # peers wanted: what the real client asks for (BEP 15 allows -1 for the tracker's default; real clients send a number)
+    buf += struct.pack("!i", numwant(peer_id, event == 3) if num_want is None else num_want)
     buf += struct.pack("!H", port)  # port on which response will be sent
     return buf, transaction_id
 
@@ -862,7 +883,8 @@ def _http_ann(url, src, thash, pid, left, port, event):
     ad = _SrcAdapter(src)
     s_.mount("http://", ad)
     s_.mount("https://", ad)
-    args = {"info_hash": thash, "peer_id": pid, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1}
+    args = {"info_hash": thash, "peer_id": pid, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1,
+            **client_args(pid, event)}
     if event:
         args["event"] = event
     r = s_.get(url + "?" + urlencode(args), headers=headers(), timeout=10, allow_redirects=False)
@@ -1112,7 +1134,8 @@ def peer_probe(only_family: int | None = None) -> bool | None:
         return s_
 
     def hann(sess, peer_id, left, port, event):
-        args = {"info_hash": thash, "peer_id": peer_id, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1}
+        args = {"info_hash": thash, "peer_id": peer_id, "port": port, "uploaded": 0, "downloaded": 0, "left": left, "compact": 1,
+                **client_args(peer_id, event)}
         if event:
             args["event"] = event
         response = sess.get(a + "?" + urlencode(args), headers=headers(), timeout=10, allow_redirects=False)
@@ -1185,7 +1208,8 @@ def peer_probe(only_family: int | None = None) -> bool | None:
             hann(sa_s, pid_a, 0, want, "stopped")
             try:  # also retire the main check's own registration (other family / ipv4+ipv6 params)
                 memory_limited_get(a + "?" + urlencode({"info_hash": thash, "peer_id": pid_a, "port": want, "uploaded": 0,
-                    "downloaded": 0, "left": 0, "compact": 1, "event": "stopped", "ipv6": my_ipv6, "ipv4": my_ipv4}))
+                    "downloaded": 0, "left": 0, "compact": 1, **client_args(pid_a, "stopped"), "event": "stopped",
+                    "ipv6": my_ipv6, "ipv4": my_ipv4}))
             except Exception:
                 pass
             extra["stale"] = any(x.get("port") == want for x in _probe_peers(hann(sb_s, pid_b, 1, want + 1, "")))
@@ -1306,7 +1330,7 @@ def peer_probe_exits(url):
                         ss.mount("http://", ad)
                         ss.mount("https://", ad)
                         q = {"info_hash": thash, "peer_id": pid, "port": prt, "uploaded": 0, "downloaded": 0, "left": left,
-                             "compact": 1, "event": event}
+                             "compact": 1, **client_args(pid, event), "event": event}
                         r = ss.get(url + "?" + urlencode(q), headers=headers(), timeout=10, allow_redirects=False)
                         if r.status_code != 200 or not r.content:
                             raise RuntimeError("probe: HTTP error")
@@ -1335,6 +1359,54 @@ def peer_probe_exits(url):
                 return None
             return ok
     extra["exit_blocked"] = True  # couldn't run here: our limit
+    return None
+
+
+def announce_via_exits(url):
+    """One announce of a fresh random torrent through each VPN exit in turn, for a tracker that doesn't answer this server
+    (it refuses it, or the route from here is broken): (response, ms, where) from the first exit that gets a genuine
+    tracker answer, else None. Its own error message isn't an answer (a whitelist tracker's refusal would look like one).
+    IPv4 if it has an IPv4 address, else IPv6. Client A leaves again at once ('stopped')."""
+    p = urlparse(url)
+    port = p.port or (443 if p.scheme == "https" else 80)
+    udp = p.scheme == "udp"
+    try:
+        socket.getaddrinfo(p.hostname, port, socket.AF_INET)
+        fam, key = socket.AF_INET, "src4"
+    except OSError:
+        fam, key = socket.AF_INET6, "src6"
+    for name, e in (_exits() or {}).items():
+        src = e.get(key)
+        if not src:
+            continue
+        new_client()
+        thash, pid, prt = urandom(20), generate_peer_id(), probe_port(0x76FD if udp else HTTP_PORT)
+        t0 = time()
+        try:
+            if udp:
+                s_, ann = _udp_session(fam, ordered_addrs(p.hostname, port, fam, socket.SOCK_DGRAM)[0][4], src)
+                try:
+                    resp = ann(pid, 0, prt, 2, thash)
+                    ms = int((time() - t0) * 1000)
+                    try:
+                        ann(pid, 0, prt, 3, thash)
+                    except Exception:
+                        pass
+                finally:
+                    s_.close()
+            else:
+                resp = _http_ann(url, src, thash, pid, 0, prt, "started")
+                ms = int((time() - t0) * 1000)
+                if "peers" not in resp and "peers6" not in resp:
+                    continue  # not a tracker's answer
+                try:
+                    _http_ann(url, src, thash, pid, 0, prt, "stopped")
+                except Exception:
+                    pass
+            check_peer_count(resp)  # as for an answer here: a crowd for a random torrent is made up
+        except Exception:
+            continue  # no answer through that exit
+        return resp, ms, _lbl(e, name)
     return None
 
 
@@ -1414,8 +1486,9 @@ def family_probe(url):
                     ss.mount("http://", ad)
                     ss.mount("https://", ad)
                     new_client()
-                    q = {"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": probe_port(0x76FF), "uploaded": 0,
-                         "downloaded": 0, "left": 1, "compact": 1}
+                    pid = generate_peer_id()
+                    q = {"info_hash": urandom(20), "peer_id": pid, "port": probe_port(0x76FF), "uploaded": 0,
+                         "downloaded": 0, "left": 1, "compact": 1, **client_args(pid)}
                     r = ss.get(url + "?" + urlencode(q), headers=headers(), timeout=6, allow_redirects=False)
                     parse_http_tracker_response(r.content[:65536])
                 ok = True
@@ -1509,8 +1582,9 @@ def _http_rtt(url, p, addr, src):
     no handshakes, whether or not the server keeps connections alive. Best of 2 samples, like UDP."""
     import ssl
     new_client()
-    q = urlencode({"info_hash": urandom(20), "peer_id": generate_peer_id(), "port": probe_port(0x76FF), "uploaded": 0,
-                   "downloaded": 0, "left": 1, "compact": 1})
+    pid = generate_peer_id()
+    q = urlencode({"info_hash": urandom(20), "peer_id": pid, "port": probe_port(0x76FF), "uploaded": 0,
+                   "downloaded": 0, "left": 1, "compact": 1, **client_args(pid)})
     host = p.hostname if not p.port else f"{p.hostname}:{p.port}"
     ua = headers().get("User-Agent", "newTrackon")
     req = (f"GET {p.path or '/'}?{q} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\n"

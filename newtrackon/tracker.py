@@ -124,7 +124,8 @@ class Tracker:
     def update_status(self) -> None:
         try:
             now = int(time())
-            if self.last_uptime < (now - max_downtime):
+            # its last answer anywhere: one reinstated from our test clients abroad has never answered this server
+            if _last_answer(self) < (now - max_downtime):
                 self.to_be_deleted = True
                 raise RuntimeError("Tracker unresponsive for too long, removed")
 
@@ -905,7 +906,8 @@ def _nt_down_label(raw):
         return "DNS"
     if "timeout" in r or "timed out" in r:
         return "Timeout"
-    if "refused" in r or "connection failed" in r or "unreachable" in r or "reset" in r:
+    # "no route to host": what a firewall's REJECT rule (icmp-host-prohibited) looks like from here
+    if "refused" in r or "connection failed" in r or "unreachable" in r or "reset" in r or "no route" in r:
         return "Refused"
     if "ssl" in r or "tls" in r or "certificate" in r:
         return "TLS"
@@ -1901,11 +1903,14 @@ LAT_HIST: dict = _lh if isinstance(_lh, dict) else {}
 
 def _lat_hist_add(url, now):
     per = LAT_HIST.get(url)
-    if per is None:  # first time: start from the recent samples
+    seeded = per is None
+    if seeded:  # first time: start from the recent samples
         per = LAT_HIST[url] = {reg: [[ts - ts % LAT_HIST_STEP, ms] for ts, ms in ss] for reg, ss in (REGION_SAMPLES.get(url) or {}).items()}
         for reg, ss in per.items():
             per[reg] = list({x[0]: x for x in ss}.values())
-    changed = False
+    # a new seed is saved too: kept only in memory until the next sample (2 h, or days for a tracker that's down), a
+    # restart lost it, and samples older than the 48 h REGION_SAMPLES keeps couldn't be seeded again
+    changed = seeded and bool(per)
     slot = now - now % LAT_HIST_STEP
     for reg, ms in (REGION_LAT.get(url) or {}).items():
         h = per.setdefault(reg, [])
@@ -2286,7 +2291,10 @@ def _retest(host, url, why):
             if _nt_reachable_elsewhere(url):
                 return {"detail": ["It doesn't answer this site's server, but it does answer our test clients in other "
                                    "countries: it may be blocking this site, or the route from here is broken. The error "
-                                   "here: %s" % err[:200]], "fix": fix, "works": False}
+                                   "here: %s" % err[:200],
+                                   "A tracker that answers them can be listed: press Check again now on this page. It's "
+                                   "shown as Down from NZ, and its peer test runs from those test clients."],
+                        "fix": fix, "works": False}
             return {"detail": ["It didn't answer: %s" % err[:200]], "fix": fix, "works": False}
         answered = {f: True for f in res}  # its main announce worked, though the family tests couldn't register
     detail, fixes = [], []
@@ -2760,16 +2768,30 @@ def _nt_public_dns_has(host):
     return False
 
 
-def _nt_reachable_elsewhere(url):
-    """Does the tracker answer through any of the VPN exits?"""
+def _nt_try_fam(url):
+    """The IP family to try a tracker on again, from here or from our test clients abroad: IPv4 if it has an IPv4
+    address, else IPv6 (an IPv6-only tracker was never tried abroad before 2026-10-12, so blocking this server removed it)."""
+    import socket as _s
+    p = parse.urlparse(url)
     try:
-        import socket as _s
-        for e in (scraper._exits() or {}).values():
-            src = e.get("src4")
-            if src and scraper._rtt_via(url, _s.AF_INET, src) is not None:
+        _s.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80), _s.AF_INET)
+        return _s.AF_INET
+    except OSError:
+        return _s.AF_INET6
+
+
+def _nt_reachable_elsewhere(url):
+    """Does the tracker answer through any of the VPN exits (a genuine tracker answer: a connection reply for UDP, HTTP
+    200 with a bencoded body for HTTP)?"""
+    import socket as _s
+    fam = _nt_try_fam(url)
+    for e in (scraper._exits() or {}).values():
+        src = e.get("src4" if fam == _s.AF_INET else "src6")
+        try:
+            if src and scraper._rtt_via(url, fam, src) is not None:
                 return True
-    except Exception:
-        pass
+        except Exception:
+            continue  # that exit got nothing: try the next
     return False
 
 
@@ -2784,7 +2806,10 @@ def _nt_local_fault(t, err):
     kind = None
     if "resolve" in msg and host and _nt_public_dns_has(host):
         kind = "dns"
-    elif "timeout" in msg and not _nt_vps_retry_ok(t.url) and _nt_reachable_elsewhere(t.url):  # still dead from here, alive elsewhere
+    # still no answer from here, but alive elsewhere: it times out or refuses this server (a block, or a broken route).
+    # Not its own error message ("Rejected"): a whitelist tracker's refusal of our test client abroad would count as an
+    # answer there, and its CLOSED rule needs it recorded as it is.
+    elif _nt_down_label(msg) in ("Timeout", "Refused") and not _nt_vps_retry_ok(t.url) and _nt_reachable_elsewhere(t.url):
         kind = "path"
     if not kind:
         _NT_SKIPS.pop(t.url, None)
@@ -2814,8 +2839,7 @@ def _nt_is_new(t, sc=None, ms=None):
 def _nt_vps_retry_ok(url):
     """Re-try from this server first: if it answers now, the failure was a blip, not our network path."""
     try:
-        import socket as _s
-        return scraper._rtt_via(url, _s.AF_INET, None) is not None
+        return scraper._rtt_via(url, _nt_try_fam(url), None) is not None
     except Exception:
         return False
 

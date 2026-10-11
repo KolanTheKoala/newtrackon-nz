@@ -78,6 +78,14 @@ class TestLatencyHistory:
         ts = [x[0] for x in T.LAT_HIST[self.URL]["Oceania"]]
         assert ts == sorted(set(ts)) and len(ts) >= 3 and all(t % T.LAT_HIST_STEP == 0 for t in ts)
 
+    def test_a_seed_is_saved_even_with_no_new_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # the seed already holds this 2 h slot, so nothing new is added: it must be on disk anyway, or a restart loses it
+        now = 1_800_000_000 - 1_800_000_000 % T.LAT_HIST_STEP
+        monkeypatch.setattr(T, "REGION_SAMPLES", {self.URL: {"Oceania": [[now - 3 * 86400, 30], [now + 60, 31]]}})
+        monkeypatch.setattr(T, "REGION_LAT", {self.URL: {"Oceania": 31}})
+        T._lat_hist_add(self.URL, now + 120)
+        assert T._jload("data/lat_hist.json") == T.LAT_HIST and T.LAT_HIST[self.URL]["Oceania"][0][1] == 30
+
     def test_old_samples_and_removed_trackers_pruned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         now = 1_800_000_000
         old = now - (T.LAT_HIST_DAYS + 1) * 86400

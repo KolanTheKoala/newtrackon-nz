@@ -492,9 +492,14 @@ class TestUDPBinaryEncoding:
         ip_addr = struct.unpack_from("!i", buf, 84)[0]
         assert ip_addr == 0
 
-        # Verify num_want is -1
+        # num_want: what qBittorrent asks for (not -1, the tracker's default: real clients send a number)
         num_want = struct.unpack_from("!i", buf, 92)[0]
-        assert num_want == -1
+        assert num_want == 200
+        assert struct.unpack_from("!i", udp_create_announce_request(connection_id, thash, b"-TR4060-abcdefghijkl")[0], 92)[0] == 80
+        assert struct.unpack_from("!i", udp_create_announce_request(connection_id, thash, peer_id, event=3)[0], 92)[0] == 0
+        # the key is the client's own: the same for all its announces
+        key = struct.unpack_from("!i", buf, 88)[0]
+        assert key == struct.unpack_from("!i", udp_create_announce_request(connection_id, thash, peer_id, event=3)[0], 88)[0]
 
         # Verify port (0x76FD = 30461)
         port = struct.unpack_from("!H", buf, 96)[0]

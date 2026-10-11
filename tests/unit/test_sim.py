@@ -106,8 +106,12 @@ class Sim:
 
     def _announce(self):
         s = self.state()
+        proto = "UDP" if self.tr.url.startswith("udp") else "HTTP"
+        if s.get("rejects"):  # its own error message to every client (a whitelist: "info hash is not authorized")
+            raise RuntimeError(("Error while announcing: %s" if proto == "UDP" else "Tracker error message: %s") % s["rejects"])
         if not s["answers"] or all(f in (s.get("dead") or ()) for f in self.fams):
-            raise RuntimeError("UDP timeout")
+            # world "refused": it refuses this server (a firewall REJECT) rather than ignoring it
+            raise RuntimeError("%s connection failed" % proto if s.get("refused") else "UDP timeout")
         return {"interval": 1800, "leechers": 0, "seeds": 1, "peers": []}
 
     def _fam_mode(self, fam):
@@ -160,8 +164,10 @@ class Sim:
             self.now += step
         return self
 
-    def resubmit(self, reinstating, url=None, listed=()):
-        """Its URL is accepted again through the real ingest.process_new_tracker: 'Check again now' or a plain submission."""
+    def resubmit(self, reinstating, url=None, listed=(), expect=True):
+        """Its URL is checked again through the real ingest.process_new_tracker: 'Check again now' or a plain submission.
+        The submission check from here gets an answer if the world gives this server one; our test clients abroad get
+        one in world 'elsewhere'. expect: whether it should be accepted."""
         from unittest.mock import patch
         from newtrackon import ingest
         url = url or self.tr.url
@@ -169,10 +175,17 @@ class Sim:
         cand = Tracker.from_url(url)
         if reinstating:
             ingest.REINSTATE[cand.host] = self.now
+        s = self.state()
+        here = {"return_value": (1800, url, 30)} if s["answers"] and not s.get("rejects") else {"side_effect": RuntimeError}
+        abroad = ({"interval": 1800, "leechers": 0, "seeds": 1, "peers": []}, 120, "Europe: Frankfurt") if s.get("elsewhere") else None
         with patch("newtrackon.ingest.db.get_all_data", return_value=list(listed)), \
-                patch("newtrackon.ingest.attempt_submitted", return_value=(1800, url, 30)), \
+                patch("newtrackon.ingest.attempt_submitted", **here), \
+                patch("newtrackon.scraper.announce_via_exits", return_value=abroad), \
                 patch("newtrackon.ingest.db.insert_new_tracker") as ins, patch("newtrackon.ingest.db.delete_tracker"):
             ingest.process_new_tracker(cand)
+        if not expect:
+            assert not ins.called, "accepted"
+            return None
         assert ins.called, "not accepted"
         self.tr, self.removed, self.n = cand, None, {}
         return cand
@@ -383,7 +396,7 @@ def test_accepting_a_protocol_upgrade_never_writes_a_ban(monkeypatch) -> None:
 # ---- randomized timelines: whatever the tracker does, it's never removed earlier than the rules allow, and the reason
 # matches what it was doing. The bounds come from the per-check record of what the world was doing, not from the code.
 MODES = ["ok", "ok", "ok", "none", "nat", "split", "rare", "fake", "down", "flap", "dead6", "nopeers6", "inconclusive", "na",
-         "abroad", "abroad_none"]
+         "abroad", "abroad_none", "abroad_refused", "down_refused"]
 
 
 def _random_world(rng):
@@ -400,6 +413,10 @@ def _random_world(rng):
             return {"answers": False, "elsewhere": True}
         if mode == "abroad_none":  # the same, and hands out no peers (its peer test runs from abroad)
             return {"answers": False, "elsewhere": True, "peers": "none"}
+        if mode == "abroad_refused":  # refuses this server (a firewall REJECT, not silence), answers abroad
+            return {"answers": False, "elsewhere": True, "refused": True}
+        if mode == "down_refused":  # refuses everyone: its port is closed
+            return {"answers": False, "refused": True}
         if mode == "flap":
             return {"answers": int(d * 48) % 3 != 0}
         if mode == "dead6":
@@ -665,3 +682,63 @@ def test_down_from_nz_on_the_pages(monkeypatch, flask_client) -> None:
     assert 'href="/fix#answers-elsewhere"' in page
     assert api["status"] == "down" and api["problems"] == ["answers_elsewhere"]
     assert "Down from NZ" in badge
+
+
+@pytest.mark.usefixtures("empty_queues", "mock_db_connection")
+class TestRefusingThisServer:
+    """It refuses this server ("connection failed": a firewall REJECT, not silence) but answers our test clients abroad:
+    the same as one that ignores this server. Before 2026-10-12 only a timeout counted, so a tracker refusing this
+    server (t.overflow.biz) was removed for no answer, and couldn't come back."""
+
+    @pytest.mark.parametrize("url", ["udp://sim.example:6969/announce", "http://sim.example:6969/announce"])
+    def test_stays_down_from_nz(self, monkeypatch, url) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1, "refused": True}, url=url).run(20)
+        assert s.removed is None, s.removed
+        assert T.status_rule(s.tr) == ("down", ["answers_elsewhere"])
+
+    def test_refusing_everyone_goes_after_5_days(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "refused": True}).run(10)
+        last_up = max(t for t, st, _ in s.log if st != "down")
+        assert s.removed is not None and s.removed[1].startswith("no answer for 5 days"), s.removed
+        assert 5 * DAY <= s.removed[0] - last_up <= 5 * DAY + 5 * HOUR, (_days(last_up), _days(s.removed[0]))
+
+    def test_its_own_error_message_is_never_answering_elsewhere(self, monkeypatch) -> None:
+        # a whitelist tracker refuses our test clients abroad too, and that refusal looks like an answer to the check
+        # from there: it's recorded as it is (down, then removed as whitelist-only), never as Down from NZ
+        s = Sim(monkeypatch, lambda d: {"rejects": "info hash is not authorized with this tracker" if d >= 1 else None,
+                                        "elsewhere": True}).run(5)
+        assert s.tr.url not in T.ELSEWHERE
+        assert s.removed is not None and "whitelist" in s.removed[1], s.removed
+
+    @pytest.mark.parametrize("record", ["as kept now", "like t.overflow.biz's"])
+    def test_reinstated_through_our_test_clients_abroad_stays(self, monkeypatch, record) -> None:
+        # removed for no answer (down everywhere for 5 days); fixed, but it still refuses this server; then its operator
+        # presses Check again now. Through its 3-day grace with the restored week (all down from here) and 5 days past it.
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "refused": True, "elsewhere": d >= 8}).run(8)
+        assert s.removed is not None and s.removed[1].startswith("no answer for"), s.removed
+        if record != "as kept now":  # from before records kept the listing date; nt-admin reinstate --clean-history
+            T.REMOVED[s.tr.host].update({"added": 0, "fault": True})
+            T.REMOVED[s.tr.host].pop("hist", None)
+        n = len(T.EVENTS)
+        s.now = START + 9 * DAY
+        s.resubmit(reinstating=True)
+        assert s.tr.status == 0 and s.tr.last_uptime == 0 and T._answers_elsewhere_now(s.tr) and not T._nt_banned(s.tr.host)
+        assert T.status_rule(s.tr) == ("down", ["answers_elsewhere"])  # Down from NZ from the start, never shown Up
+        s.run(10)
+        assert s.removed is None, s.removed
+        assert T.status_rule(s.tr) == ("down", ["answers_elsewhere"]) and T.PEER_OK[s.tr.url] is True  # its test ran abroad
+        new = [(e["type"], e["text"]) for e in T.EVENTS[n:]]
+        assert new == [("added", "is back on the list at its operator's request (Down from NZ: it answers our test clients "
+                                 "abroad, not this site's server)")], new
+
+    def test_reinstated_through_abroad_still_failing_its_peer_test_goes(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "refused": True, "elsewhere": d >= 8,
+                                        "peers": "none" if d >= 8 else "ok"}).run(8)
+        s.now = START + 9 * DAY
+        s.resubmit(reinstating=True)
+        s.run(10)
+        assert s.removed is not None and s.removed[1].startswith("handed out no peers for 5 days (Up/Bad)"), s.removed
+
+    def test_a_new_submission_still_needs_this_server(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": False, "refused": True, "elsewhere": True})
+        assert s.resubmit(reinstating=False, url="udp://other.example:6969/announce", expect=False) is None
