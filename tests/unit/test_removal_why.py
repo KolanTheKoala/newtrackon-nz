@@ -40,7 +40,10 @@ class TestWhatTheAddressSays:
         ("172.20.0.1", "a private address", "Docker"),
         ("10.0.0.5", "a private address", "NAT"),
         ("192.168.0.195", "a private address", "NAT"),
-        ("104.21.83.32", "a proxy or CDN's address", "Cloudflare")])
+        ("104.21.83.32", "a proxy or CDN's address", "Cloudflare"),
+        ("255.255.255.255", "an invalid address", "placeholder"),
+        ("0.0.0.0", "an invalid address", "IPv6 clients"),
+        ("100.64.0.1", "a private address", "NAT")])
     def test_cause(self, ip: str, what: str, words: str) -> None:
         w, cause = T._addr_cause(ip)
         assert w == what and words in cause

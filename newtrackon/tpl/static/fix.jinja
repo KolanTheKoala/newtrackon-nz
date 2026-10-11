@@ -176,6 +176,10 @@ EOF</pre>
         adds (<code>CF-Connecting-IP</code> or <code>X-Forwarded-For</code>; in opentracker, Chihaya and most others it's a
         setting, often called "real IP header"), and only from your proxy's addresses. Cloudflare doesn't carry UDP, so a UDP
         tracker behind it can't work at all.</p>
+    <p><b>Hands out 0.0.0.0, 255.255.255.255 or <code>::</code>.</b> Nothing sits in front of it: the tracker program itself
+        doesn't keep clients' real addresses and fills in a placeholder. It's most often IPv6 clients, with a tracker build or
+        setting that can't store IPv6 addresses. Update the tracker program, turn on its IPv6 support, or stop it answering
+        on IPv6 (remove the AAAA record) if it can't serve IPv6 clients properly.</p>
     <p>Then press <b>Check again now</b> on its page.</p>
 
     <h4 id="split-swarm">Separate servers that don't share swarms (Up/Broken)</h4>

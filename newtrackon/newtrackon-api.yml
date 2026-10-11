@@ -226,7 +226,8 @@ paths:
         "404":
           description: 'Not on the list. Body: {"error": "not listed", "host": "..."}, plus, for a tracker this site removed,
             "removed": {url, time, reason, details (what the checks saw, as sentences), fix (the /fix section for it, or
-            null), banned_until, banned_permanently} and "daily".'
+            null), retest (null, or the latest test after its removal, run once a day while banned: {time, details, fix,
+            works}), banned_until, banned_permanently} and "daily".'
           content:
             application/json:
               schema:

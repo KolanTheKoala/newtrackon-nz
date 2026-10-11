@@ -1139,8 +1139,8 @@ def _nat_seen_set(url, fam, ip):
 
 def _addr_cause(ip):
     """What the address client A came back as says about the tracker's setup: (what it is, the cause as a sentence).
-    127.0.0.1 is a proxy on its own machine, 172.16/12 is almost always Docker, other private ranges NAT or a LAN, and
-    someone else's public address a proxy or CDN in front of it."""
+    127.0.0.1 is a proxy on its own machine, 0.0.0.0 or 255.255.255.255 a placeholder from the tracker program itself,
+    172.16/12 almost always Docker, other private ranges NAT or a LAN, and someone else's public address a proxy or CDN."""
     import ipaddress
     try:
         a = ipaddress.ip_address(str(ip).split("%")[0].strip("[]"))
@@ -1151,6 +1151,9 @@ def _addr_cause(ip):
     if a is not None and a.is_loopback:
         return ("a loopback address", "Something on the tracker's own machine, such as a reverse proxy, a port forward or a "
                 "tunnel, passes every connection on to it without the client's real address")
+    if a is not None and (a.is_unspecified or a.is_multicast or a.is_reserved):  # 0.0.0.0, ::, 255.255.255.255, 240/4
+        return ("an invalid address", "The tracker doesn't keep clients' real addresses and hands out a placeholder instead: "
+                "a bug or a setting in the tracker program, often when it can't handle IPv6 clients")
     if a is not None and a.version == 4 and a in ipaddress.ip_network("172.16.0.0/12"):
         return ("a private address", "That almost always means Docker: traffic reaches the tracker through Docker's port "
                 "proxy, which replaces each client's address with the container's gateway")
@@ -2062,6 +2065,186 @@ def _removed_add(t, reason, now=None):
     except Exception:
         logger.exception("removal detail for %s", host)
     _jsave(REMOVED, _REMOVED_FILE)
+
+
+# ---- removed trackers tested again: once a day while the ban runs, the site's own checks are run on it and what they see
+# is kept as REMOVED[host]["retest"] for its Removed page, so its operator sees what's wrong now (and what to fix), also
+# for removals from before their evidence was kept. It never changes the ban, the record's reason or evidence, a listing,
+# or any tracker's check records. ----
+RETEST_EVERY = 24 * 3600  # each banned tracker at most once a day
+RETEST_GAP = 300  # one retest at a time, this far apart (each takes as long as a check)
+_RETEST_NEXT = [time() + 600]  # nothing in the first 10 minutes after a start: a deploy doesn't fire a burst
+_RTT_KEYS = ("profile", "probe_port", "probe", "probe_extra", "family_extra", "ms")
+
+
+def _retest_candidates(listed_hosts, now):
+    """Hosts due a retest: a dated ban still running, not listed now, not removed by our own fault. Those with no evidence
+    from their removal come first, then the longest untested."""
+    out = []
+    for host, rec in list(REMOVED.items()):
+        if not isinstance(rec, dict) or rec.get("fault") or host in listed_hosts or not rec.get("url"):
+            continue
+        end = _nt_ban_end(host, rec)
+        if end == float("inf") or end <= now:
+            continue
+        last = int((rec.get("retest") or {}).get("t") or 0)
+        if now - last < RETEST_EVERY:
+            continue
+        out.append((bool(rec.get("detail")), last, host))
+    return [h for _, _, h in sorted(out)]
+
+
+def removed_retest_due(trackers, now=None):
+    """From the check loop: retest the next banned tracker that's due, at most one per RETEST_GAP."""
+    now = int(now or time())
+    if now < _RETEST_NEXT[0]:
+        return
+    _RETEST_NEXT[0] = now + RETEST_GAP
+    due = _retest_candidates({(t.host or "").lower() for t in trackers}, now)
+    if not due:
+        return
+    host = due[0]
+    res = removed_retest(host)
+    rec = REMOVED.get(host)
+    if res is None or rec is None:  # our own fault (offline, our DNS): nothing kept, tried again later
+        logger.info("Retest of removed %s: no verdict (our side)", host)
+        return
+    rec["retest"] = res
+    _jsave(REMOVED, _REMOVED_FILE)
+    logger.info("Retested removed %s: %s", host, "works now" if res["works"] else (res["detail"] or ["-"])[0])
+
+
+def removed_retest(host, now=None):
+    """Run the site's checks on a removed tracker: {"t", "detail", "fix", "works"}, or None when the fault is ours. The
+    scraper's per-check state is put back afterwards, and none of the check records are written."""
+    rec = REMOVED.get(host) or {}
+    saved = {k: getattr(scraper.rtt, k, None) for k in _RTT_KEYS}
+    fs = _FAILSTREAK[0]
+    try:
+        scraper.new_client()
+        out = _retest(host, rec.get("url") or "", str(rec.get("reason") or "").lower())
+    except Exception:
+        logger.exception("retest of removed %s", host)
+        out = None
+    finally:
+        for k, v in saved.items():
+            setattr(scraper.rtt, k, v)
+        _FAILSTREAK[0] = fs
+    if out is not None:
+        out["t"] = int(now or time())
+    return out
+
+
+def _retest(host, url, why):
+    p = parse.urlparse(url)
+    udp = p.scheme == "udp"
+    port = p.port or (443 if p.scheme == "https" else 80)
+    fams = {}
+    for fam, name in ((socket.AF_INET, "v4"), (socket.AF_INET6, "v6")):
+        try:
+            ai = socket.getaddrinfo(p.hostname, port, fam, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM)
+        except OSError:
+            continue
+        ips = list(dict.fromkeys(a[4][0] for a in ai))
+        if ips:
+            fams[name] = ips
+    if not fams:
+        if _nt_public_dns_has(host) or not _monitor_online():
+            return None  # it resolves elsewhere, or we're offline: our fault
+        return {"detail": ["Its name doesn't resolve to any address: there's no A or AAAA record for %s." % host],
+                "fix": "down-dns", "works": False}
+    public = {f: [ip for ip in ips if scraper.ip_is_public(ip)] for f, ips in fams.items()}
+    if not any(public.values()):
+        return {"detail": ["Its name points only to private addresses (%s), which this site never connects to: it needs a "
+                           "public address." % ", ".join(ip for ips in fams.values() for ip in ips)],
+                "fix": "down-dns", "works": False}
+    res = {}
+    for f, ips in public.items():
+        if ips:
+            res[f] = []
+            for _ in range(2):
+                ok = scraper.peer_probe_family(url, f)
+                res[f].append((ok, dict(getattr(scraper.rtt, "family_extra", None) or {})))
+    answered = {f: any(ok is not None or ex.get("fam") or ex.get("exit_blocked") for ok, ex in r) for f, r in res.items()}
+    if not any(answered.values()):
+        try:
+            (scraper.announce_udp if udp else scraper.announce_http)(url)
+            err = None
+        except Exception as e:
+            err = str(e)
+        if err is not None:
+            if not _monitor_online():
+                return None
+            closed = _nt_closed_reason(err)
+            if closed:
+                return {"detail": ["Its reply: \u201c%s\u201d" % err[:200], "That means %s%s. A public list can only use "
+                                   "trackers that accept any torrent, so that's a choice, not a fault."
+                                   % ("it's " if closed.startswith("a ") else "", closed)],
+                        "fix": None, "works": False}
+            fix = FIX_DOWN.get(_nt_down_label(err), "down")
+            if _nt_reachable_elsewhere(url):
+                return {"detail": ["It doesn't answer this site's server, but it does answer our test clients in other "
+                                   "countries: it may be blocking this site, or the route from here is broken. The error "
+                                   "here: %s" % err[:200]], "fix": fix, "works": False}
+            return {"detail": ["It didn't answer: %s" % err[:200]], "fix": fix, "works": False}
+        answered = {f: True for f in res}  # its main announce worked, though the family tests couldn't register
+    detail, fixes = [], []
+    for f, r in res.items():
+        lab = "IPv%s" % f[-1]
+        if not answered.get(f):
+            detail.append("%s: its address%s %s didn't answer." % (lab, "es" if len(public[f]) > 1 else "", ", ".join(public[f])))
+            fixes.append("dead-address")
+            continue
+        oks = [ok for ok, _ in r if ok is not None]
+        if not oks:
+            if any(ex.get("exit_blocked") for _, ex in r):
+                detail.append("%s: it answers this site's server, but not our test clients in other countries, so the peer "
+                              "test couldn't run." % lab)
+            else:
+                detail.append("%s: it answered, but the peer test couldn't run." % lab)
+            continue
+        seen = next((ex.get("seen") for ok, ex in reversed(r) if ok is False and ex.get("seen")), None) or \
+            next((ex.get("seen") for ok, ex in reversed(r) if ex.get("seen")), None)
+        n_ok = sum(1 for ok in oks if ok)
+        verdict = ("passed %d of %d" if n_ok == len(oks) else "failed %d of %d" if n_ok == 0 else "passed only %d of %d") % (
+            n_ok if n_ok else len(oks), len(oks))
+        detail.append("%s, peer test %s%s." % (lab, verdict, ": " + _seen_sentence(seen) if seen else ""))
+        if seen and seen.get("a") in ("private", "other") and seen.get("a_ip"):
+            fixes.append("hidden-address")
+        elif seen and seen.get("foreign"):
+            fixes.append("fake-peers")
+        elif n_ok < len(oks):
+            fixes.append("split-swarm" if seen and seen.get("self") else "no-peers")
+    works = all(answered.get(f) for f in res) and all(
+        ok is True and not (ex.get("foreign") or (ex.get("seen") or {}).get("foreign")) for r in res.values() for ok, ex in r)
+    if works:
+        if why.startswith("too unreliable") or "don't share swarms" in why or "split" in why:
+            detail.append("It works right now, but it was removed for %s: one check can't show that's fixed." % (
+                "dropping out too often" if why.startswith("too unreliable") else "separate servers that rarely share peers"))
+        detail.append("It works now: press Check again now on this page to get it listed again.")
+    order = ("hidden-address", "fake-peers", "split-swarm", "no-peers", "dead-address")
+    fix = None if works else next((x for x in order if x in fixes), None)
+    if not works:  # what it says with its answers ("info hash is not authorized"...): often the whole story
+        msg = _retest_message(url, udp)
+        if msg:
+            detail.insert(0, "Its reply says: \u201c%s\u201d" % msg[:200])
+            closed = _nt_closed_reason(msg)
+            if closed:
+                detail.append("That means %s%s. A public list can only use trackers that accept any torrent, so that's a "
+                              "choice, not a fault." % ("it's " if closed.startswith("a ") else "", closed))
+                fix = None
+    return {"detail": detail, "fix": fix, "works": works}
+
+
+def _retest_message(url, udp):
+    """The 'warning message' in a plain announce's reply, or None."""
+    try:
+        r = (scraper.announce_udp if udp else scraper.announce_http)(url)
+    except Exception:
+        return None
+    r = r[0] if isinstance(r, tuple) else r
+    m = r.get("warning message") if isinstance(r, dict) else None
+    return (m.decode("utf8", "replace") if isinstance(m, bytes) else str(m)) if m else None
 
 
 _CDN_WORDS = ("cloudflare", "akamai", "fastly", "cloudfront", "amazon.com", "google", "microsoft", "incapsula", "imperva", "sucuri")

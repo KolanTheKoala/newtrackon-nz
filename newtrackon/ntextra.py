@@ -853,6 +853,15 @@ def _removed_detail(r):
         return [], None
 
 
+def _retest_api(r):
+    """The latest retest after removal, for the API: {time, details, fix, works}, or None."""
+    x = r.get("retest") if not r.get("fault") else None
+    if not isinstance(x, dict):
+        return None
+    return {"time": x.get("t"), "details": list(x.get("detail") or []), "fix": "/fix#" + x["fix"] if x.get("fix") else None,
+            "works": bool(x.get("works"))}
+
+
 def _removed_page(host, r):
     from flask import render_template
     import time
@@ -867,7 +876,7 @@ def _removed_page(host, r):
     desc = "%s is down: it was removed from the list on %s (%s). Its history, and whether it can be added again." % (host, when, r.get("reason") or "no reason recorded")
     return render_template(
         "tracker_removed.jinja", host=host, r=r, ban=ban, now=now, when=when, ago=_ago(r["t"]),
-        detail=detail, fix=fix, fix_title=FIX_TITLES.get(fix or ""),
+        detail=detail, fix=fix, fix_title=FIX_TITLES.get(fix or ""), retest=None if r.get("fault") else r.get("retest"),
         recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
         until=_date(ban["until"]) if ban and ban.get("until") else None,
         left=_ago(now - (ban["until"] - now)) if ban and ban.get("until") and ban["active"] else None,  # time left, via the "ago" formatter
@@ -911,6 +920,7 @@ def register(app):
                 detail, fix = _removed_detail(rm)
                 body["removed"] = {"url": rm.get("url"), "time": rm.get("t"), "reason": rm.get("reason"),
                                    "details": detail, "fix": "/fix#" + fix if fix else None,
+                                   "retest": _retest_api(rm),
                                    "banned_until": (ban or {}).get("until") if ban and ban["active"] else None,
                                    "banned_permanently": bool(ban and ban["active"] and ban["until"] is None)}
                 body["daily"] = _daily_rows(rm.get("url"))
