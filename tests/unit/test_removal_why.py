@@ -87,9 +87,22 @@ class TestRemovalReason:
         why = T._useless_reason(t, 5.0)
         assert why == "not working for 5 days: no answer in 96% of checks, and never back for 12 hours in a row (connection refused)"
 
-    def test_up_bad_says_peers(self, sample_tracker) -> None:
+    def test_up_bad_then_down_says_both(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
+        t = sample_tracker  # Up/Bad for 4 days, then down for 1, removed while down
+        t.status, t.historic = 0, deque([1] * 192 + [0] * 48, maxlen=1440)
+        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        _seen(t.url, "v6", a="private", a_ip="172.17.0.1")
+        T._nt_down_why_set(t.url, "UDP timeout")
+        why = T._useless_reason(t, 5.0)
+        assert why == ("not working for 5 days: no answer in 20% of checks, the rest answering without usable peers "
+                       "(over IPv6 it gave out every client's address as 172.17.0.1); down now (timed out)")
+        detail, fix = T._removal_detail({"url": t.url, "reason": why})
+        assert fix == "hidden-address" and "Last error: UDP timeout" in detail and "as 172.17.0.1" in detail[0]
+
+    def test_up_bad_says_peers(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
         t = sample_tracker
         t.status, t.historic = 1, deque([0] * 120 + [1] * 120, maxlen=1440)
+        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
         _seen(t.url, "v4")
         assert T._useless_reason(t, 5.0) == ("not working for 5 days: no answer in 50% of checks, the rest answering without "
                                              "usable peers (a second client was never told about the first)")

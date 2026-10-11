@@ -390,16 +390,13 @@ class Tracker:
         failing = fake or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
         share = _nt_bad_share(self.url, now_ts) if ub is not None else 0.0
         listed_days = (now_ts - int(self.added or now_ts)) / 86400.0
-        cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(self.url)
-        what = "returned fake peers" if fake else ("handed out unusable peers" if cause and cause.startswith("over IPv") else "handed out no peers")
-        cause = ": " + cause if cause else ""
         why = None
         if not _peer_rule_applies(self.url):
             ub = None  # paused for HTTP(S): see HTTP_PEER_TEST_TRUSTED
         if ub is not None and failing and ub >= UPBAD_DAYS:
-            why = "%s for %d days (Up/Bad)%s" % (what, int(ub), cause)
+            why = _upbad_reason(self.url, fake, "for %d days" % int(ub))
         elif ub is not None and failing and share >= BAD_SHARE and listed_days >= BAD_SHARE_DAYS:
-            why = "%s %d%% of the last %d days (Up/Bad)%s" % (what, round(100 * share), BAD_SHARE_DAYS, cause)
+            why = _upbad_reason(self.url, fake, "%d%% of the last %d days" % (round(100 * share), BAD_SHARE_DAYS))
         if why:
             _NT_DEL_REASON[self.url] = why
             logger.info("Evicting %s (Up/Bad: %.1f days in a row, %.0f%% of the last week)", self.url, ub, 100 * share)
@@ -1275,7 +1272,7 @@ def _removal_detail(rec, before=None):
         fix = _peer_fix(url, before, fake)
     if useless or low.startswith("no answer") or low.startswith("too unreliable"):
         why = DOWN_WHY.get(url)
-        if why and not (useless and peers):
+        if why and (low.startswith("no answer") or "no answer in" in low or "down now" in low or (useless and not peers)):
             out.append("Last error: %s" % why)
             fix = fix or FIX_DOWN.get(_nt_down_label(why), "down")
         elif low.startswith("no answer"):
@@ -1525,18 +1522,38 @@ def _nt_useless_days(url, now=None):
     return (now - int(now if start is None else start)) / 86400.0
 
 
+def _upbad_reason(url, fake, span):
+    """The removal reason for Up/Bad, worded from what the peer tests saw. It must keep "(Up/Bad)" and "fake peers":
+    ingest._keep_upbad_clock reads them when a banned tracker comes back."""
+    try:
+        cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(url)
+    except Exception:
+        logger.exception("peer cause for %s", url)
+        cause = None
+    what = "returned fake peers" if fake else ("handed out unusable peers" if cause and cause.startswith("over IPv") else "handed out no peers")
+    return "%s %s (Up/Bad)%s" % (what, span, ": " + cause if cause else "")
+
+
 def _useless_reason(t, days):
-    """The removal reason for a tracker that wasn't working for REMOVE_DAYS: which of the two it was, in numbers."""
+    """The removal reason for a tracker that wasn't working for REMOVE_DAYS (down and Up/Bad on one clock): how much of
+    it was down, and whether it was handing out usable peers when it answered. Peer tests don't run while it's down, so
+    its peer record is still the one from before."""
     n = max(1, int(days * 86400 // Tracker.SLOT))
     h = [float(x) for x in list(getattr(t, "historic", None) or [])][-n:]
     down = round(100 * sum(1 for x in h if x <= 0) / len(h)) if h else 0
     head = "not working for %d days" % int(days)
-    if t.status == 0:
-        dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(t.url)))
+    fake = FAKE_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT
+    no_peers = fake or PEER_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT
+    dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(t.url))) if t.status == 0 else None
+    if not no_peers:
         return "%s: no answer in %d%% of checks, and never back for 12 hours in a row%s" % (head, down, " (%s)" % dw if dw else "")
-    cause = _peer_cause(t.url)
-    return "%s: %sanswering without usable peers%s" % (head, "no answer in %d%% of checks, the rest " % down if down else "",
-                                                         " (%s)" % cause if cause else "")
+    try:
+        cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(t.url)
+    except Exception:
+        logger.exception("peer cause for %s", t.url)
+        cause = None
+    return "%s: %sanswering without usable peers%s%s" % (head, "no answer in %d%% of checks, the rest " % down if down else "",
+                                                           " (%s)" % cause if cause else "", "; down now (%s)" % dw if dw else "")
 
 
 def _useless_seed(trackers, now=None):
