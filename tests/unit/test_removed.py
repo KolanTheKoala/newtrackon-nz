@@ -407,8 +407,10 @@ class TestSameServerOnlyAfterItsBan:
         assert len(self._ban(sample_tracker, old, added=1_031 * self.D).split()) == 2  # still banned then
         assert self._ban(sample_tracker, old, added=1_091 * self.D).split()[2] == "90"
 
-    def test_banned_for_good_never_ran_out(self, sample_tracker) -> None:
-        assert len(self._ban(sample_tracker, "old-name.example\n", added=5_000 * self.D).split()) == 2
+    def test_banned_for_good_counts_for_a_name_listed_after_it(self, sample_tracker) -> None:
+        # its ban never runs out, so it counts once it came before this name was listed (user's call, 2026-10-12)
+        assert self._ban(sample_tracker, "old-name.example\n", added=5_000 * self.D).split()[2] == "90"
+        assert len(self._ban(sample_tracker, "old-name.example\n", added=999 * self.D).split()) == 2  # listed alongside it
 
     def test_no_ban_line_counts_from_its_removal(self, sample_tracker) -> None:
         assert self._ban(sample_tracker, "", added=1_000 * self.D + 1).split()[2] == "90"

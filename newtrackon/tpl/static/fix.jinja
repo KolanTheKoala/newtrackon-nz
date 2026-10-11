@@ -204,6 +204,7 @@ EOF</pre>
     <p>The tracker's page shows how many of our peer tests met a different server.</p>
     <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker runs on several servers behind one name, and they don't
         share peer lists, so clients often don't find each other. Can all instances use shared storage, or can we run just one?"</p></div>
+    <p>A tracker that stays Up/Broken (or Up/Junk) for <b>30 days</b> in a row is removed.</p>
 
     <h4 id="unreliable">Drops out (Up/Unreliable, Up/Junk)</h4>
     <div class="nt-plain">
@@ -488,8 +489,8 @@ bantime  = 1h</pre>
         <li>it stays <b>Up/Bad</b> (no peers or fake peers) for <b>5 days</b> (briefly passing for under 12 hours doesn't reset
             that count), or is Up/Bad for 80% of a week;</li>
         <li>it answers so rarely that it's no use (under 15% once dropouts are counted), or stays <b>Up/Junk</b> (score under 50)
-            or <b>Up/Broken</b> (a dead IPv4 or IPv6 address) for <b>30 days</b>, either or both (a day or so out of them doesn't
-            reset that count);</li>
+            or <b>Up/Broken</b> (a dead IPv4 or IPv6 address, one family not sharing peers, or separate servers not sharing
+            swarms) for <b>30 days</b>, any mix of them (a day or so out of them doesn't reset that count);</li>
         <li>its own answers say, 3 checks in a row, that it's <b>private</b> (asks for a passkey) or only serves <b>its own
             torrents</b> (a whitelist).</li>
     </ul>

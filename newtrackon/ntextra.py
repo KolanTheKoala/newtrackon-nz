@@ -490,10 +490,10 @@ def _evidence(t, d):
     if fix.startswith("down"):
         out.append("Last error: %s" % (T.DOWN_WHY.get(t.url) or "no answer"))
         out.append("Last successful check: %s." % (_ago(t.last_uptime) + " ago" if t.last_uptime else "none recorded"))
-    jd = T._nt_junk_days(t.url) if fix in ("unreliable", "dead-address") else None
+    jd = T._nt_junk_days(t.url) if fix in ("unreliable", "dead-address", "split-swarm") else None
     if jd is not None:
         left = T.JUNK_DAYS - jd
-        out.append("Up/Junk or Up/Broken for %s. Trackers that stay Up/Junk (score under 50) or Up/Broken (IPv4 or IPv6 broken) for %d days are removed and banned: %s."
+        out.append("Up/Junk or Up/Broken for %s. Trackers that stay Up/Junk (score under 50) or Up/Broken (a dead IPv4 or IPv6 address, one family not sharing peers, or separate servers not sharing swarms) for %d days in a row are removed and banned: %s."
                    % ("under a day" if jd < 1 else "%d day%s" % (int(jd), "" if int(jd) == 1 else "s"), T.JUNK_DAYS,
                       "it's due now" if left <= 0 else "about %d day%s left to fix it" % (max(1, int(left)), "" if int(left) == 1 else "s")))
     if fix == "unreliable":

@@ -414,18 +414,18 @@ class Tracker:
             self.to_be_deleted = True
             self._nt_ban()
             return
-        # Up/Junk for JUNK_DAYS and still Junk now (the same score the status rule uses: after latency, before interval points)
+        # Up/Junk or Up/Broken (any kind) for JUNK_DAYS in a row, and still one of them now: one rule for all of them. (Before
+        # 2026-10-12 a split swarm or one family not sharing peers was removed only if a latency penalty also put its capped
+        # score under 50, and then as "Up/Junk".) Junk is the score the status rule uses: after latency, before interval points.
         jd = _nt_junk_days(self.url, now_ts)
-        dead_fam = (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT
-        junk_now = float(self.uptime or 0) - _nt_lat_penalty(_nt_region_avg(self.url)) < 50
-        if jd is not None and jd >= JUNK_DAYS and (junk_now or dead_fam):
-            fam = str((FAM_FAILS.get(self.url) or {}).get("fam", "?"))[-1]
-            _NT_DEL_REASON[self.url] = ("its IPv%s address dead or its score under 50 (Up/Broken, Up/Junk) for %d days" % (fam, int(jd))
-                                        if dead_fam else "too unreliable: Up/Junk (score under 50) for %d days" % int(jd))
-            logger.info("Evicting %s (Up/Junk or Up/Broken for %.1f days)", self.url, jd)
-            self.to_be_deleted = True
-            self._nt_ban()
-            return
+        if jd is not None and jd >= JUNK_DAYS:
+            now_fault = _junk_broken_now(self)
+            if now_fault:
+                _NT_DEL_REASON[self.url] = "Up/Junk or Up/Broken for %d days in a row; now %s" % (int(jd), now_fault)
+                logger.info("Evicting %s (Up/Junk or Up/Broken for %.1f days)", self.url, jd)
+                self.to_be_deleted = True
+                self._nt_ban()
+                return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
         # a reinstated tracker gets its last week back but, like a new one, 3 days before the 15% rule judges it: judged at
@@ -468,7 +468,9 @@ class Tracker:
             listed = min([int(x) for x in (getattr(self, "added", None), (r or {}).get("added")) if x] or [0])
             prior += sum(int(o.get("count", 1)) for h, o in REMOVED.items()
                          if h != host and mine & _nt_ip_keys(o.get("ips")) and not any(w in str(o.get("network") or "").lower() for w in _CDN_WORDS)
-                         and _nt_ban_end(h, o) <= listed)
+                         and (_nt_ban_end(h, o) <= listed
+                              # banned for good, so its ban never runs out: it counts if that came before this name was listed
+                              or (_nt_ban_end(h, o) == float("inf") and int(o.get("t") or 0) <= listed)))
             days = BAN_STEPS[min(prior, len(BAN_STEPS) - 1)]
             with open(_DENY_FILE, "a", encoding="utf-8") as fh:
                 fh.write(f"{host}\n" if days is None else (f"{host} {int(time())}\n" if days == 30 else f"{host} {int(time())} {days}\n"))
@@ -1294,7 +1296,11 @@ def _removal_detail(rec, before=None):
                        % (round(len(rec["hist"]) / 48, 1), hu[0], hu[1], "" if hu[1] == 1 else "s"))
         if low.startswith("too unreliable"):
             fix = "unreliable"
-    if low.startswith("its ipv"):
+    if low.startswith("up/junk or up/broken"):  # since 2026-10-12: says what it was at the end
+        fix = ("split-swarm" if "share swarms" in low else "unreliable" if "score is under 50" in low
+               else "hidden-address" if "side doesn't share peers" in low and _peer_evidence(url, before) and
+               any(x.get("a") in ("private", "other") for _, x in _peer_evidence(url, before)) else "dead-address")
+    elif low.startswith("its ipv"):
         fix = "dead-address"
     elif "up/junk" in low:
         fix = "unreliable"
@@ -1543,6 +1549,24 @@ def _upbad_reason(url, fake, span):
         cause = None
     what = "returned fake peers" if fake else ("handed out unusable peers" if cause and cause.startswith("over IPv") else "handed out no peers")
     return "%s %s (Up/Bad)%s" % (what, span, ": " + cause if cause else "")
+
+
+def _junk_broken_now(t):
+    """What keeps it Up/Broken or Up/Junk right now, in a few words (for the 30-day removal), or None if neither."""
+    url = t.url
+    if PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT or FAKE_FAILS.get(url, 0) >= PEER_FAIL_LIMIT:
+        return None  # Up/Bad: the 5-day rules handle it
+    df = FAM_FAILS.get(url) or {}
+    if df.get("n", 0) >= PEER_FAIL_LIMIT:
+        return "its IPv%s address is dead" % str(df.get("fam", "?"))[-1]
+    if _split(url):
+        return "its servers don't share swarms"
+    f = _peer_fam_bad(url)
+    if f:
+        return "its IPv%s side doesn't share peers" % f[-1]
+    if float(t.uptime or 0) - _nt_lat_penalty(_nt_region_avg(url)) < 50:
+        return "its score is under 50"
+    return None
 
 
 def _useless_reason(t, days):

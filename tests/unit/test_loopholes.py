@@ -151,7 +151,7 @@ class TestJunkClock:
     def test_removed_after_30_days_of_junk(self, sample_tracker) -> None:
         self._check(sample_tracker, 30.2)
         assert sample_tracker.to_be_deleted is True
-        assert T._NT_DEL_REASON[sample_tracker.url] == "too unreliable: Up/Junk (score under 50) for 30 days"
+        assert T._NT_DEL_REASON[sample_tracker.url] == "Up/Junk or Up/Broken for 30 days in a row; now its score is under 50"
 
     def test_kept_before_30_days(self, sample_tracker) -> None:
         self._check(sample_tracker, 29)
@@ -221,7 +221,7 @@ class TestBrokenOnTheJunkClock:
         monkeypatch.setitem(T.FAM_FAILS, t.url, {"n": 40, "fam": "v6"})
         t.added, t.last_uptime, t.status, t.historic = now - 60 * DAY, now, 1, deque([1] * 1440, maxlen=1440)
         t.update_uptime()
-        assert t.to_be_deleted is True and "IPv6 address dead" in T._NT_DEL_REASON[t.url]
+        assert t.to_be_deleted is True and "now its IPv6 address is dead" in T._NT_DEL_REASON[t.url]
 
     def test_fixed_address_is_kept(self, sample_tracker) -> None:
         t = sample_tracker

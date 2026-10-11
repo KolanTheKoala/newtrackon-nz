@@ -114,3 +114,54 @@ def test_fixed_flaky_tracker_is_clear_of_15_percent_after_3_days(sample_tracker)
     t.historic = deque([{"1": 1, "h": 0.5}.get(c, 0) for c in hist] + [1] * (3 * 48 + 1), maxlen=1440)  # then 3 days all up
     t.update_uptime()
     assert t.to_be_deleted is False
+
+
+class TestOneThirtyDayRule:
+    """2026-10-12: Up/Junk or any kind of Up/Broken for 30 days in a row is removed, saying which it was at the end."""
+
+    def _run(self, t, kind):
+        from unittest.mock import patch
+        now = int(time())
+        bad = {"split": ["runs separate servers that don't share swarms"], "fam": ["its IPv6 side doesn't share peers"],
+               "dead": ["its published IPv6 address is dead"]}[kind]
+        T.LAST_STATE[t.url] = {"st": "up_bad", "bad": bad, "dead": [], "since": now - 31 * DAY, "junk_since": now - 31 * DAY}
+        if kind == "dead":
+            T.FAM_FAILS[t.url] = {"n": 10, "fam": "v6"}
+        t.added, t.last_uptime, t.status, t.historic = now - 60 * DAY, now, 1, deque([1] * 336, maxlen=1440)
+        with patch.object(T, "_split", return_value={"split": 3, "of": 6, "passed": 3, "tests": 6} if kind == "split" else None), \
+                patch.object(T, "_peer_fam_bad", return_value="v6" if kind == "fam" else None), \
+                patch.object(T, "_nt_lat_penalty", return_value=0.0):
+            t.update_uptime()
+        return t.to_be_deleted, T._NT_DEL_REASON.get(t.url)
+
+    @pytest.mark.parametrize(("kind", "now"), [("dead", "its IPv6 address is dead"), ("split", "its servers don't share swarms"),
+                                               ("fam", "its IPv6 side doesn't share peers")])
+    def test_every_kind_alike(self, sample_tracker, kind, now) -> None:
+        assert self._run(sample_tracker, kind) == (True, "Up/Junk or Up/Broken for 31 days in a row; now " + now)
+
+    def test_fix_link(self) -> None:
+        for why, fix in (("Up/Junk or Up/Broken for 31 days in a row; now its servers don't share swarms", "split-swarm"),
+                         ("Up/Junk or Up/Broken for 31 days in a row; now its IPv6 address is dead", "dead-address"),
+                         ("Up/Junk or Up/Broken for 31 days in a row; now its score is under 50", "unreliable")):
+            assert T._removal_detail({"url": "udp://x.example:1/announce", "reason": why})[1] == fix
+
+
+def test_comeback_after_a_ban_for_good_counts(sample_tracker) -> None:
+    now = int(time())
+    with open("data/denylist.txt", "w") as f:
+        f.write("old.example\n")  # banned for good
+    T.REMOVED["old.example"] = {"url": "udp://old.example:1/announce", "t": now - 60 * DAY, "count": 3, "ips": list(sample_tracker.ips), "network": "Example ISP"}
+    sample_tracker.added = now - 10 * DAY  # listed after that ban
+    sample_tracker._nt_ban()
+    assert open("data/denylist.txt").read().splitlines()[-1] == sample_tracker.host  # 3 earlier removals on its server: for good
+
+
+def test_sister_banned_for_good_after_this_was_listed_doesnt_count(sample_tracker) -> None:
+    now = int(time())
+    with open("data/denylist.txt", "w") as f:
+        f.write("old.example\n")
+    T.REMOVED["old.example"] = {"url": "udp://old.example:1/announce", "t": now - 5 * DAY, "count": 3, "ips": list(sample_tracker.ips), "network": "Example ISP"}
+    sample_tracker.added = now - 10 * DAY  # listed alongside it, before it was banned
+    sample_tracker._nt_ban()
+    assert open("data/denylist.txt").read().splitlines()[-1].split()[0] == sample_tracker.host
+    assert len(open("data/denylist.txt").read().splitlines()[-1].split()) == 2  # its own first removal: 30 days
