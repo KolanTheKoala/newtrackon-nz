@@ -151,7 +151,9 @@ paths:
                           family hasn't answered in 3+ checks in a row. nopeers_ipv4 / nopeers_ipv6: that family
                           answers but fails the peer test while the other passes. split_swarm: separate servers that
                           don't share swarms; clients only meet peers on the same server (1 in 3+ tests pass). up_bad
-                          has no_peers or fake_peers; up_broken has only the others.
+                          has no_peers or fake_peers; up_broken has only the others. answers_elsewhere (with status down):
+                          this server gets no answer but our test clients in other countries do ("Down from NZ"); it stays
+                          listed and its peer test runs from those test clients, so it may also have no_peers or fake_peers.
                       score: {type: number, description: "0-100: availability x stability, minus latency and interval penalties."}
                       latency_ms: {type: [integer, "null"], description: "From this server (Wellington)."}
                       latency_by_region_ms: {type: object, description: "Typical announce round trip from Oceania, Asia, Europe and North America."}

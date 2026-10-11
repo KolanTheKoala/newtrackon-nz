@@ -278,3 +278,78 @@ def test_inconclusive_for_7_days_still_leads_to_removal(sample_tracker) -> None:
     t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 336, maxlen=1440)
     t.update_uptime()
     assert t.to_be_deleted is True
+
+
+
+class TestExitsOnlyPeerTest:
+    """scraper.peer_probe_exits: both test clients on VPN exits; B must be handed A at A's exit's public address."""
+
+    EXITS = [("10.8.0.2", "203.0.113.10"), ("10.8.1.2", "198.51.100.20")]
+
+    def _run(self, monkeypatch, handed, exits=None, b_fails=False):
+        import socket
+        from newtrackon import scraper
+        monkeypatch.setattr(scraper, "_exit_pairs", lambda fam: (exits if exits is not None else self.EXITS) if fam == socket.AF_INET else [])
+        monkeypatch.setattr(scraper, "ordered_addrs", lambda h, p, fam=0, st=None: [(fam, 2, 17, "", ("93.184.216.34", 6969))] if fam == socket.AF_INET else [])
+
+        class S:
+            def close(self):
+                pass
+
+        def session(fam, sa, src):
+            def ann(pid, left, port, event, th):
+                if src == "10.8.1.2" and b_fails:
+                    raise TimeoutError("UDP timeout")
+                if left == 1 and event == 2:  # client B's announce
+                    return {"seeds": 1, "leechers": 1, "peers": [dict(p, port=(port - 1 if p.pop("a") else port)) for p in handed()]}
+                return {"seeds": 1, "leechers": 0, "peers": []}
+            return S(), ann
+        monkeypatch.setattr(scraper, "_udp_session", session)
+        ok = scraper.peer_probe_exits("udp://abroad.example:6969/announce")
+        return ok, scraper.rtt.probe_extra
+
+    def test_pass(self, monkeypatch) -> None:
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "203.0.113.10", "a": True}])
+        assert ok is True and ex["fam"] == "v4" and ex["exits_only"] and ex["seen"]["a"] == "ok"
+
+    def test_private_address_fails(self, monkeypatch) -> None:
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "172.17.0.1", "a": True}])
+        assert ok is False and ex["nat_ip"] == "172.17.0.1"
+
+    def test_another_public_address_is_no_verdict(self, monkeypatch) -> None:
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "9.9.9.9", "a": True}])  # a proxy, or our exit list is out of date
+        assert ok is None and ex["exit_blocked"] is True
+
+    def test_only_itself_is_a_split(self, monkeypatch) -> None:
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "198.51.100.20", "a": False}])
+        assert ok is False and ex["split"] is True
+
+    def test_needs_two_exits(self, monkeypatch) -> None:
+        ok, ex = self._run(monkeypatch, lambda: [], exits=self.EXITS[:1])
+        assert ok is None and ex["exit_blocked"] is True
+
+    def test_an_exit_with_no_answer_is_our_limit(self, monkeypatch) -> None:
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "203.0.113.10", "a": True}], b_fails=True)
+        assert ok is None and ex["exit_blocked"] is True
+
+
+def test_exit_public_address_is_looked_up_through_the_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+    import requests
+    from newtrackon import scraper
+    calls = []
+
+    class R:
+        text = "146.70.123.114\n"
+
+    def get(self, url, **k):
+        calls.append(url)
+        if len(calls) > 1:
+            raise requests.ConnectionError("no route")
+        return R()
+    monkeypatch.setattr(requests.Session, "get", get)
+    monkeypatch.setattr(scraper, "_EXIT_PUB", {})
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET, "203.0.113.10") == "146.70.123.114"
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET, "203.0.113.10") == "146.70.123.114" and len(calls) == 1  # kept
+    assert scraper._exit_public("10.8.1.2", socket.AF_INET, "198.51.100.20") == "198.51.100.20"  # lookup failed: the recorded one
+    assert calls[0] == "https://ipv4.icanhazip.com/"

@@ -275,6 +275,8 @@ class Tracker:
             INFLATED.pop(self.url, None)
             STALE.pop(self.url, None)
             CID_OK.pop(self.url, None)
+            if getattr(self, "_nt_partial", False):
+                self._abroad_peer_test()
             _probe_save()
             debug_down: HistoryData = {
                 "url": self.url,
@@ -292,6 +294,28 @@ class Tracker:
             pass  # interval is set in is_up()/is_down()
         self.update_uptime()
         self._emit_events()
+
+    def _abroad_peer_test(self) -> None:
+        """It answers our test clients abroad but not this server: its peer test runs between two of them, and the result
+        is recorded like any other, so the Up/Bad rules apply to it as to every tracker (it stays listed while it works)."""
+        try:
+            ok = scraper.peer_probe_exits(self.url)
+            ex = getattr(scraper.rtt, "probe_extra", None) or {}
+            self.peer_ok = ok
+            PEER_OK[self.url] = ok
+            FAKE_N[self.url] = ex.get("foreign")
+            INFLATED[self.url] = ex.get("inflated")
+            if ex.get("foreign") is not None:
+                _fake_hist_add(self.url, ex["foreign"] > 0)
+            if ok is not None:
+                _split_add(self.url, ex.get("split"))
+                _peer_hist_add(self.url, ok, ex.get("fam"))
+                _nat_seen_set(self.url, ex.get("fam"), ex.get("nat_ip"))
+                _peer_seen_set(self.url, ex.get("fam"), ex.get("seen"), ok)
+            _peer_conclusive(self.url, "exit_blocked" if (ok is None and ex.get("exit_blocked")) else ok)
+            logger.info("%s peer test from our test clients abroad: %s", self.url, {True: "PASS", False: "FAIL", None: "n/a"}[ok])
+        except Exception:
+            logger.exception("%s: peer test from abroad failed", self.url)
 
     def update_scheme_from_bep_34(self) -> None:
         valid_bep_34, bep_34_info = scraper.get_bep_34(self.host)
@@ -405,9 +429,10 @@ class Tracker:
         # "still failing" for a removal also needs its latest test to show the same fault: on its last 6 alone, a tracker
         # fixed a check or two before its 5 days were up was removed on the failures from before the fix, and one that had
         # stopped handing out fake peers was removed for fake peers when its latest test failed for another reason
-        nopeers_now = PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and self.status == 1 and (
+        tested = self.status == 1 or _answers_elsewhere_now(self)  # its peer test ran this check (from here or abroad)
+        nopeers_now = PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and tested and (
             PEER_OK.get(self.url) is False or (PEER_OK.get(self.url) is None and _peer_na_failing(self.url, now_ts)))
-        fake_now = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and self.status == 1 and bool(FAKE_N.get(self.url))
+        fake_now = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and tested and bool(FAKE_N.get(self.url))
         cl = CLOSED.get(self.url) or {}
         if cl.get("n", 0) >= CLOSED_LIMIT and ((self.status == 0 and not _answers_elsewhere_now(self)) or nopeers_now):
             _NT_DEL_REASON[self.url] = cl["why"]
@@ -664,7 +689,7 @@ class Tracker:
 
     def _next_interval(self) -> int:
         recent = list(self.historic)[-12:]
-        if self.status == 1 and _peer_unsettled(self.url):
+        if (self.status == 1 or _answers_elsewhere_now(self)) and _peer_unsettled(self.url):
             return 900  # its latest peer test disagrees with its status: look again soon (user's call, 2026-10-12)
         if self.status == 0:
             if 1 in recent:
@@ -741,6 +766,7 @@ def format_uptime_and_downtime_time(trackers_unprocessed: list[Tracker]) -> list
             tracker.status_epoch = sys.maxsize
             tracker.down_why = DOWN_WHY.get(tracker.url)
             tracker.down_label = _nt_down_label(tracker.down_why)
+            tracker.abroad = _answers_elsewhere_now(tracker)  # "Down from NZ": it answers our test clients abroad
             if not tracker.last_uptime:
                 tracker.status_readable = "Down"
             else:
@@ -1521,7 +1547,7 @@ def _nt_upbad_days(url, now=None):
     """Days it's been Up/Bad for no peers or fake peers (a dead address doesn't count), or None. Counted from the start of
     the current bad stretch: recoveries under BAD_BRIDGE don't reset it, so briefly passing a test can't dodge removal."""
     s = LAST_STATE.get(url) or {}
-    if s.get("st") != "up_bad" or not any("no peers" in b or "fake peers" in b for b in (s.get("bad") or [])):
+    if not _peer_bad(s.get("st"), s.get("bad")):
         return None
     now = now or time()
     start = s.get("bad_since", s.get("since"))
@@ -1593,7 +1619,7 @@ def _last_answer(t):
 
 def _answers_elsewhere_now(t):
     """Its latest check got no answer here, but an answer from our test clients abroad."""
-    return t.status == 0 and int(ELSEWHERE.get(t.url, 0) or 0) >= int(t.last_downtime or 0) > 0
+    return getattr(t, "status", 1) == 0 and int(ELSEWHERE.get(t.url, 0) or 0) >= int(getattr(t, "last_downtime", 0) or 0) > 0
 
 
 def _useless_reason(t, days):
@@ -1677,7 +1703,10 @@ BAD_SHARE_DAYS, BAD_SHARE = 7, 0.8  # Up/Bad for 80% of the last 7 days is remov
 
 
 def _peer_bad(st, bad):
-    return st == "up_bad" and any("no peers" in b or "fake peers" in b for b in (bad or []))
+    """Up/Bad for no or fake peers, or down from here while answering abroad with the same fault (its peer test runs
+    from there): the Up/Bad clocks and rules apply to both."""
+    bad = bad or []
+    return (st == "up_bad" or (st == "down" and ELSEWHERE_TEXT in bad)) and any("no peers" in b or "fake peers" in b for b in bad)
 
 
 def _nt_bad_share(url, now=None):
@@ -2524,6 +2553,8 @@ PARTIAL = ("dead_ipv", "nopeers_ipv", "split_swarm")  # faults that leave it use
 
 
 def _bad_text(code):
+    if code == "answers_elsewhere":
+        return ELSEWHERE_TEXT
     if code.startswith("dead_ipv"):
         return f"its published IPv{code[-1]} address is dead"
     if code.startswith("nopeers_ipv"):
@@ -2546,7 +2577,15 @@ def status_rule(t, pst=None):
     the feed doesn't flap. Without it this is the page's view; with it, the feed's. The tracker page, the API, the main
     table and the event feed all use this: there's no other copy of the rule."""
     if t.status != 1:
-        return "down", []
+        if not _answers_elsewhere_now(t):
+            return "down", []
+        # down from here but answering our test clients abroad: shown as "Down from NZ"; its peer test runs from abroad
+        codes = ["answers_elsewhere"]
+        if PEER_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT:
+            codes.append("no_peers")
+        if FAKE_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT:
+            codes.append("fake_peers")
+        return "down", codes
     url = t.url
     bad = []
     peer_fail = PEER_FAILS.get(url, 0) >= PEER_FAIL_LIMIT
@@ -2589,8 +2628,6 @@ def feed_state(t, pst=None):
     (_nt_bad_lbl and _broken() tell them apart) and Up/New under 'up_good'. Down while it answers our test clients abroad
     is stored with ELSEWHERE_TEXT, so the not-working clock doesn't run (it stays)."""
     st, codes = status_rule(t, pst)
-    if st == "down" and _answers_elsewhere_now(t):
-        return "down", [ELSEWHERE_TEXT]
     return {"up_broken": "up_bad", "up_new": "up_good"}.get(st, st), [_bad_text(c) for c in codes]
 
 

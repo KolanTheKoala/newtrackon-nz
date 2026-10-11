@@ -295,6 +295,22 @@ bantime  = 1h</pre>
         announce). Hosting closer to most users helps most.</p>
     </details>
 
+    <h4 id="answers-elsewhere">Down from New Zealand only (answers elsewhere)</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker works for people in other countries, but this site's server in New Zealand gets
+            no answer from it. It stays listed, shown as <b>Down from NZ</b>, and it's tested from our test clients in other
+            countries instead (peer test included), so it's judged like every other tracker.</p>
+        <p><b>How we know:</b> our checks from New Zealand time out, while our test clients in other countries get answers.</p>
+    </div>
+    <p><b>Most likely causes:</b></p>
+    <ul>
+        <li><b>It blocks or rate-limits this site's server.</b> Some trackers limit how often one address may announce, or
+            block datacenter addresses; our checks come from one server every 15 minutes to 4 hours. If you'd like it shown
+            as Up here, allow that address to announce at that rate.</li>
+        <li><b>The route between New Zealand and your server is broken</b> somewhere along the way. That usually clears by
+            itself; a traceroute from a New Zealand host shows where it stops.</li>
+    </ul>
+
     <h4 id="down-timeout">Down: timeout</h4>
     <div class="nt-plain">
         <p><b>In plain words:</b> we knocked and nobody answered at all. Either the tracker isn't running, or something is silently

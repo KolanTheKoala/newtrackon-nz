@@ -26,7 +26,10 @@ def _dying(t, now=None):
     now = now or time.time()
     if _rowcls(t) == "offline":
         days = (now - T._last_answer(t)) / 86400.0  # answering our test clients abroad counts: it stays
-        return "No answer for %d+ days: removed and banned after %d" % (int(days), T.REMOVE_DAYS) if days >= _DYING_DAYS else None
+        if days >= _DYING_DAYS:
+            return "No answer for %d+ days: removed and banned after %d" % (int(days), T.REMOVE_DAYS)
+        if not T._answers_elsewhere_now(t):
+            return None  # (answering abroad: its peer test from there can still put it on the Up/Bad clock)
     ub = T._nt_upbad_days(t.url, now) if T._peer_rule_applies(t.url) else None
     if ub is not None and ub >= _DYING_DAYS:
         return "Up/Bad for %d+ days: removed and banned after %d unless fixed" % (int(ub), T.UPBAD_DAYS)
@@ -334,6 +337,7 @@ FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peer
               "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer",
               "interval": "Announce interval too short or too long", "removed": "Removed and banned",
               "split-swarm": "Separate servers that don't share swarms (Up/Broken)",
+              "answers-elsewhere": "Down from New Zealand only (answers elsewhere)",
               "hidden-address": "Hands out an address nobody can reach"}
 
 
@@ -380,6 +384,8 @@ def _fix_base(t):
         st, bad = _state(t)
     except Exception:
         return None
+    if st == "down" and "answers_elsewhere" in bad:  # down from here only: its peer faults (tested from abroad) first
+        return "fake-peers" if "fake_peers" in bad else "no-peers" if "no_peers" in bad else "answers-elsewhere"
     if st == "down":
         return T.FIX_DOWN.get(T._nt_down_label(T.DOWN_WHY.get(t.url)), "down")
     if st == "up_bad":
@@ -433,6 +439,10 @@ def _evidence(t, d):
     fix = _fix_base(t)
     if fix is None:
         return out
+    if T._answers_elsewhere_now(t):
+        out.append("This site's server in New Zealand gets no answer from it, but our test clients in other countries do: "
+                   "it works for users elsewhere, so it stays listed, shown as Down from NZ. Its peer test runs between two of "
+                   "those test clients. If it blocks or rate-limits addresses, it may have blocked this server.")
     w = _warning(t.url)
     if w and fix in ("no-peers", "fake-peers", "unreliable"):
         out.append("The tracker itself says: \u201c%s\u201d. %s" % (w[0], w[1] or "That's its own message to clients, sent with each answer."))
@@ -726,7 +736,8 @@ def _badge(host):
     else:
         st = _state(t)[0]
         down, down_for = _is_it_down(t)
-        right = ("Down \u00b7 " + down_for) if down else "%s \u00b7 %d" % (_STATUS_TEXT.get(st, st), round(float(t.uptime or 0)))
+        right = (("Down from NZ \u00b7 " if T._answers_elsewhere_now(t) else "Down \u00b7 ") + down_for) if down else \
+            "%s \u00b7 %d" % (_STATUS_TEXT.get(st, st), round(float(t.uptime or 0)))
         svg, code = _badge_svg_stars("newTrackon NZ", _stars(t.uptime), right, _BADGE_COLOR.get(st, "#e07b00")), 200
     # short cache: badges are embedded elsewhere and should follow the status within minutes
     return Response(svg, code, mimetype="image/svg+xml",
@@ -774,7 +785,11 @@ def _tracker_page(host):
     from urllib.parse import quote
     down, down_for = _is_it_down(t)
     st_txt = _STATUS_TEXT.get(d["status"], d["status"])
-    if down:
+    abroad = T._answers_elsewhere_now(t)
+    if abroad:
+        desc = ("%s is down from New Zealand: this site's server has had no answer for %s, but our test clients in other "
+                "countries get one. Live uptime and latency history, checked from New Zealand around the clock." % (t.host, down_for))
+    elif down:
         desc = "%s is down: no answer for %s. Live uptime and latency history, checked from New Zealand around the clock." % (t.host, down_for)
     else:
         desc = "%s is up (%s, score %d%s) and has been for %s. Live uptime and latency history, checked from New Zealand around the clock." % (
@@ -783,7 +798,8 @@ def _tracker_page(host):
           "description": desc, "url": "https://newtrackon.co.nz/tracker/" + quote(t.host, safe=".-"),
           "dateModified": datetime.fromtimestamp(int(t.last_checked or now), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     return render_template(
-        "tracker.jinja", t=t, d=d, fam_answers=_fam_answers(t.url), status_text=_STATUS_TEXT.get(d["status"], d["status"]), row=_rowcls(t),
+        "tracker.jinja", t=t, d=d, fam_answers=_fam_answers(t.url), row=_rowcls(t),
+        status_text="Down from NZ (answers elsewhere)" if abroad else _STATUS_TEXT.get(d["status"], d["status"]),
         days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
         chart=_latency_chart(T.LAT_HIST.get(t.url), now), long=_long_term(t.url),
         events=[dict(e, ago=_ago(e["t"])) for e in reversed(T.EVENTS) if e.get("url") == t.url or e.get("host") == t.host][:30],

@@ -806,7 +806,9 @@ def _a_ok(ip: str) -> bool:
     return ip_is_public(ip) if ours is None else ours
 
 
-def _probe_eval(resp, want, extra):
+def _probe_eval(resp, want, extra, a_ok=None):
+    """Judge what client B was handed. a_ok(ip): is that client A's real address (default: this server's own)."""
+    _a_ok = a_ok or globals()["_a_ok"]
     peers = _probe_peers(resp)
     # Only our own probe clients can know this random hash: anything else is fake by the tracker.
     extra["foreign"] = sum(1 for x in peers if x.get("port") not in (want, want + 1))
@@ -1193,6 +1195,147 @@ def peer_probe(only_family: int | None = None) -> bool | None:
     if fb and extra.get("stale"):  # same-IP pass whose peer outlives "stopped" = echoed IP entry, not real peer sharing
         ok, extra["stale"], extra["inconclusive"] = None, None, True  # a fallback result only ever counts as a pass, never a fail
     return ok
+
+
+_EXIT_PUB: dict = {}  # (source address, family) -> (public address, when looked up): what trackers see an exit as
+EXIT_PUB_TTL = 12 * 3600
+
+
+def _exit_public(src, family, recorded=None):
+    """The public address a VPN exit's traffic comes from, looked up through that exit (the same service run.py asks
+    for this server's own address) and kept 12 hours. data/probe_src.json's exit4/exit6 were written by hand and went
+    out of date; they're only the fallback when the lookup fails."""
+    import ipaddress as _ia
+    now = time()
+    hit = _EXIT_PUB.get((src, family))
+    if hit and now - hit[1] < EXIT_PUB_TTL:
+        return hit[0]
+    pub = None
+    try:
+        ss = requests.Session()
+        ad = _SrcAdapter(src)
+        ss.mount("https://", ad)
+        host = "ipv6.icanhazip.com" if family == socket.AF_INET6 else "ipv4.icanhazip.com"
+        txt = ss.get("https://%s/" % host, timeout=8).text.strip()
+        a = _ia.ip_address(txt)
+        if a.is_global and a.version == (6 if family == socket.AF_INET6 else 4):
+            pub = str(a)
+    except Exception:
+        pass
+    if pub:
+        _EXIT_PUB[(src, family)] = (pub, now)
+        return pub
+    return recorded
+
+
+def _exit_pairs(family):
+    """[(source address, public address)] of each VPN exit for this family (data/probe_src.json 'all')."""
+    try:
+        import json as _pj
+        with open("data/probe_src.json") as f:
+            d = _pj.load(f)
+    except Exception:
+        return []
+    k, pub = ("ip6", "exit6") if family == socket.AF_INET6 else ("ip4", "exit4")
+    return [(x.get(k), _exit_public(x.get(k), family, x.get(pub))) for x in d.get("all", []) if x.get(k)]
+
+
+def _same_addr(ip, want):
+    """ip is `want`: IPv4 exactly, IPv6 within want's /64."""
+    import ipaddress as _ia
+    try:
+        a, b = _ia.ip_address(str(ip).split("%")[0]), _ia.ip_address(str(want))
+    except ValueError:
+        return False
+    if a.version == 6 and a.ipv4_mapped:
+        a = a.ipv4_mapped
+    if a.version != b.version:
+        return False
+    return a == b if a.version == 4 else a in _ia.ip_network(f"{b}/64", strict=False)
+
+
+def peer_probe_exits(url):
+    """The peer test with both clients on VPN exits, for a tracker that doesn't answer this server but answers them (it
+    blocks this server, or the route from here is broken): client A announces from one exit, client B from another,
+    and B must be handed A at that exit's public address. Like peer_probe: ok, and the details in rtt.probe_extra.
+    None with exit_blocked (our limit, never held against the tracker) when it can't be run or can't be judged here:
+    fewer than two exits, no exit got an answer, or A came back at a public address that isn't its exit's (the exit
+    list, kept by hand, may be out of date)."""
+    from urllib.parse import urlparse as _up
+    p = _up(url)
+    port = p.port or (443 if p.scheme == "https" else 80)
+    udp = p.scheme == "udp"
+    extra = {"foreign": None, "inflated": None, "stale": None, "cid_ok": None, "exits_only": True}
+    rtt.probe_extra = extra
+    new_client()
+    for fam, name in ((socket.AF_INET, "v4"), (socket.AF_INET6, "v6")):
+        pairs = [x for x in _exit_pairs(fam) if x[1]]
+        if len(pairs) < 2:
+            continue
+        try:
+            addrs = ordered_addrs(p.hostname, port, fam, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM)
+        except OSError:
+            continue
+        if not addrs:
+            continue
+        sa = addrs[0][4]
+        want, thash = probe_port(0x76FD if udp else HTTP_PORT), urandom(20)
+        pid_a, pid_b = generate_peer_id(), generate_peer_id()
+        for (src_a, pub_a), (src_b, _pub_b) in ((pairs[0], pairs[1]), (pairs[1], pairs[0])):
+            try:
+                if udp:
+                    sa_s, ann_a = _udp_session(fam, sa, src_a)
+                    try:
+                        ann_a(pid_a, 0, want, 2, thash)
+                        sb_s, ann_b = _udp_session(fam, sa, src_b)
+                        try:
+                            resp = ann_b(pid_b, 1, want + 1, 2, thash)
+                            for f_, pid, prt, left in ((ann_a, pid_a, want, 0), (ann_b, pid_b, want + 1, 1)):
+                                try:
+                                    f_(pid, left, prt, 3, thash)  # stopped: don't leave our clients in its swarm
+                                except Exception:
+                                    pass
+                        finally:
+                            sb_s.close()
+                    finally:
+                        sa_s.close()
+                else:
+                    def hann(src, pid, left, prt, event):
+                        ss = requests.Session()
+                        ad = _SrcAdapter(src)
+                        ss.mount("http://", ad)
+                        ss.mount("https://", ad)
+                        q = {"info_hash": thash, "peer_id": pid, "port": prt, "uploaded": 0, "downloaded": 0, "left": left,
+                             "compact": 1, "event": event}
+                        r = ss.get(url + "?" + urlencode(q), headers=headers(), timeout=10, allow_redirects=False)
+                        if r.status_code != 200 or not r.content:
+                            raise RuntimeError("probe: HTTP error")
+                        d = parse_http_tracker_response(r.content[:65536])
+                        if "failure reason" in d:
+                            raise RuntimeError("probe: failure reason")
+                        return d
+                    hann(src_a, pid_a, 0, want, "started")
+                    resp = hann(src_b, pid_b, 1, want + 1, "started")
+                    for src, pid, prt, left in ((src_a, pid_a, want, 0), (src_b, pid_b, want + 1, 1)):
+                        try:
+                            hann(src, pid, left, prt, "stopped")
+                        except Exception:
+                            pass
+            except Exception:
+                continue  # that exit got no answer: try the pair the other way round
+            extra["fam"] = name
+            ok = _probe_eval(resp, want, extra, a_ok=lambda ip, pub=pub_a: _same_addr(ip, pub))
+            seen = extra.get("seen") or {}
+            if not ok and seen.get("a") == "other":
+                # A came back at a public address that isn't its exit's: a proxy in front, or our exit list is out of
+                # date. Can't tell from here, so no verdict, and it's never held against the tracker
+                logger.warning("%s exits-only peer test: client A came back at %s, not its exit's address (exit list out of date?)",
+                               url, seen.get("a_ip"))
+                extra["exit_blocked"], extra["nat_ip"], extra["seen"] = True, None, None
+                return None
+            return ok
+    extra["exit_blocked"] = True  # couldn't run here: our limit
+    return None
 
 
 def peer_probe_family(url, fam_name):

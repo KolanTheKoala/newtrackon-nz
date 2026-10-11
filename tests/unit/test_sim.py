@@ -12,6 +12,8 @@ from newtrackon import scraper
 from newtrackon import tracker as T
 from newtrackon.tracker import Tracker
 
+from .test_regions import region_db  # noqa: F401  (fixture)
+
 DAY, HOUR = 86400, 3600
 START = 1_800_000_000 - 1_800_000_000 % 1800
 SIM_IP = "93.184.216.34"
@@ -70,6 +72,7 @@ class Sim:
         mp.setattr(scraper, "announce_http", lambda u: self._announce())
         mp.setattr(scraper, "peer_probe", self._peer_probe)
         mp.setattr(scraper, "peer_probe_family", self._peer_probe_family)
+        mp.setattr(scraper, "peer_probe_exits", self._peer_probe_exits)
         mp.setattr(scraper, "family_probe", lambda u: {f: f not in (self.state().get("dead") or ()) for f in self.fams})
         mp.setattr(scraper, "region_latency", lambda u, fams=None: {"Oceania": 30, "Asia": 60, "Europe": 90, "North America": 80})
         mp.setattr(T, "_delayed_maybe_start", lambda u, f: False)
@@ -117,6 +120,18 @@ class Sim:
 
     def _peer_probe(self, only_family=None):
         ok, extra = self._result(self._main_fam())
+        scraper.rtt.probe_extra = extra
+        self.latest = (ok, extra)
+        return ok
+
+    def _peer_probe_exits(self, url):
+        """Both test clients abroad (it answers them, not this server): the same peer behaviour as from here."""
+        if not self.state().get("elsewhere"):
+            scraper.rtt.probe_extra = {"exit_blocked": True}
+            self.latest = (None, {"exit_blocked": True})
+            return None
+        ok, extra = self._result(self._main_fam())
+        extra = dict(extra, exits_only=True)
         scraper.rtt.probe_extra = extra
         self.latest = (ok, extra)
         return ok
@@ -368,7 +383,7 @@ def test_accepting_a_protocol_upgrade_never_writes_a_ban(monkeypatch) -> None:
 # ---- randomized timelines: whatever the tracker does, it's never removed earlier than the rules allow, and the reason
 # matches what it was doing. The bounds come from the per-check record of what the world was doing, not from the code.
 MODES = ["ok", "ok", "ok", "none", "nat", "split", "rare", "fake", "down", "flap", "dead6", "nopeers6", "inconclusive", "na",
-         "abroad"]
+         "abroad", "abroad_none"]
 
 
 def _random_world(rng):
@@ -383,6 +398,8 @@ def _random_world(rng):
             return {"answers": False}
         if mode == "abroad":  # blocks this server, answers our test clients in other countries
             return {"answers": False, "elsewhere": True}
+        if mode == "abroad_none":  # the same, and hands out no peers (its peer test runs from abroad)
+            return {"answers": False, "elsewhere": True, "peers": "none"}
         if mode == "flap":
             return {"answers": int(d * 48) % 3 != 0}
         if mode == "dead6":
@@ -394,7 +411,7 @@ def _random_world(rng):
 
 
 def _peer_bad_world(s):
-    return s["answers"] and s.get("peers") in ("none", "nat", "fake", "rare", "inconclusive")
+    return (s["answers"] or s.get("elsewhere")) and s.get("peers") in ("none", "nat", "fake", "rare", "inconclusive")
 
 
 def _stretches(times, flags, bridge):
@@ -447,10 +464,12 @@ def test_random_timelines_never_remove_early(monkeypatch, seed) -> None:
         return
     t_rm, why = s.removed
     down = [st == "down" and not w.get("elsewhere") for (_, st, _), w in zip(s.log, seen)]  # answering abroad isn't down
-    pbad = [st == "up_bad" and _peer_bad_codes(c) for _, st, c in s.log]
+    pbad = [st in ("up_bad", "down") and _peer_bad_codes(c) for _, st, c in s.log]  # down + answers abroad can be peer-bad
     world_now = seen[-1]
-    if why.startswith(("no answer for", "not working for")):
+    if why.startswith("no answer for"):
         assert not world_now.get("elsewhere"), (seed, why, "removed while answering our test clients abroad")
+    if why.startswith("not working for") and world_now.get("elsewhere"):
+        assert s.latest[0] is False or s.latest[1].get("foreign"), (seed, why, "answering abroad and its peer test there passed")
     if why.startswith("no answer for"):
         last_answer = max((t for (t, st, _), w in zip(s.log, seen) if st != "down" or w.get("elsewhere")), default=None)
         assert not world_now["answers"] and (last_answer is None or t_rm - last_answer >= 5 * DAY), (seed, why)
@@ -471,7 +490,7 @@ def test_random_timelines_never_remove_early(monkeypatch, seed) -> None:
             assert last and last[1] is None and t_rm - last[0] >= 5 * DAY, (seed, why, [(_days(b), _days(e or t_rm)) for b, e in runs])
     elif why.startswith("not working for"):
         ok, extra = s.latest
-        assert not world_now["answers"] or (extra.get("foreign") if "can't exist" in why else
+        assert not (world_now["answers"] or world_now.get("elsewhere")) or (extra.get("foreign") if "can't exist" in why else
                                             ok is False or (ok is None and not extra.get("exit_blocked"))), (seed, why, world_now, s.latest)
         runs = _stretches(times[:-1], [d or p for d, p in zip(down[:-1], pbad[:-1])], 12 * HOUR)
         last = runs[-1] if runs else None
@@ -592,3 +611,57 @@ def test_answering_abroad_counts_in_full_for_the_15_percent_rule(sample_tracker)
     t.historic = deque([1, 0.5, 0.5, 0.5, 0, 0.5, 0.5, 1] * 60, maxlen=1440)  # mostly answering only abroad, flipping often
     t.update_uptime()
     assert t.to_be_deleted is False
+
+
+
+class TestAnsweringOnlyAbroad:
+    """It blocks this server but answers our test clients abroad: it stays, shown as Down from NZ, and its peer test runs
+    from those test clients, so the Up/Bad rules apply to it like to every tracker."""
+
+    def test_working_stays_and_says_so(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1}).run(20)
+        assert s.removed is None
+        assert T.status_rule(s.tr) == ("down", ["answers_elsewhere"]) and T.PEER_OK[s.tr.url] is True
+
+    @pytest.mark.parametrize(("mode", "words"), [("none", "handed out no peers for 5 days (Up/Bad)"),
+                                                 ("nat", "handed out unusable peers for 5 days (Up/Bad)"),
+                                                 ("fake", "returned fake peers for 5 days (Up/Bad)")])
+    def test_failing_its_peer_test_from_abroad_goes(self, monkeypatch, mode, words) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1, "peers": mode if d >= 1 else "ok"}).run(12)
+        assert s.removed is not None and s.removed[1].startswith(words), s.removed
+        assert 5.5 * DAY <= s.removed[0] - START <= 8 * DAY, _days(s.removed[0])
+
+    def test_its_failing_test_brings_the_next_check_forward(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1, "peers": "none" if d >= 3 else "ok"}).run(4)
+        first_fail = next(t for t, _, _ in s.log if _days(t) >= 3)
+        bad = next(t for t, st, c in s.log if "no_peers" in c)
+        assert bad - first_fail <= HOUR, (bad - first_fail) / 60
+
+    def test_blocked_exits_are_never_held_against_it(self, monkeypatch) -> None:
+        s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1, "peers": "na" if d >= 1 else "ok"})
+        orig = s.check
+
+        def check():
+            T._PEER_ANY[0] = s.now
+            orig()
+        s.check = check
+        s.run(25)
+        assert s.removed is None
+
+
+@pytest.mark.usefixtures("region_db")
+def test_down_from_nz_on_the_pages(monkeypatch, flask_client) -> None:
+    from unittest.mock import patch
+    from newtrackon import db, ntextra
+    s = Sim(monkeypatch, lambda d: {"answers": d < 1, "elsewhere": d >= 1}).run(2)
+    T._attach_extras([s.tr])
+    with patch.object(db, "get_all_data", return_value=[s.tr]), patch.object(ntextra, "_trackers", return_value=[s.tr]):
+        main = flask_client.get("/").get_data(as_text=True)
+        page = flask_client.get("/tracker/sim.example").get_data(as_text=True)
+        api = flask_client.get("/api/tracker/sim.example").get_json()
+        badge = flask_client.get("/badge/sim.example.svg").get_data(as_text=True)
+    assert ">Down from NZ<" in main and "our test clients in other countries do" in main
+    assert "Down from NZ (answers elsewhere)" in page and "it works for users elsewhere, so it stays listed" in page
+    assert 'href="/fix#answers-elsewhere"' in page
+    assert api["status"] == "down" and api["problems"] == ["answers_elsewhere"]
+    assert "Down from NZ" in badge
