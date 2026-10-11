@@ -428,6 +428,11 @@ class Tracker:
             return
         age_days = (now_ts - int(self.added or now_ts)) / 86400.0
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
+        # a reinstated tracker gets its last week back but, like a new one, 3 days before the 15% rule judges it: judged at
+        # once on the week that got it removed, a fixed tracker went again at its first check (with a 90-day ban)
+        back = REINSTATED.get(self.url)
+        if back and now_ts - int(back) < 3 * 86400:
+            age_days = min(age_days, (now_ts - int(back)) / 86400.0)
         if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and availability * stability < 0.15)):
             # the event, the removed page and the ban list say which of the two it was
             _dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(self.url)))
@@ -1312,8 +1317,11 @@ def _peer_hist_add(url, ok, fam=None):
         hf["?"] = list(h)  # results from before families were told apart
     h = (h + [1 if ok else 0])[-PEER_WINDOW:]
     PEER_HIST[url] = h
-    key = fam if fam in ("v4", "v6") else "?"
-    hf[key] = (hf.get(key, []) + [1 if ok else 0])[-PEER_WINDOW:]
+    # fam "*": a result for the tracker as a whole (7 days inconclusive), counted on every family that counts: written to
+    # '?' alone it was ignored once the per-family histories took over
+    keys = [fam] if fam in ("v4", "v6") else ([k for k in _peer_fams(url) if k != "?"] or ["?"]) if fam == "*" else ["?"]
+    for key in keys:
+        hf[key] = (hf.get(key, []) + [1 if ok else 0])[-PEER_WINDOW:]
     try:
         tmp = _PEER_HIST_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -1353,7 +1361,7 @@ def _peer_conclusive(url, ok, now=None):
         PEER_LAST[url] = int(now)  # start waiting from now
     elif now - PEER_LAST[url] >= PEER_NA_DAYS * 86400 and now - _PEER_ANY[0] < 3600:
         logger.info("%s peer test inconclusive for %d+ days: counted as a failure", url, PEER_NA_DAYS)
-        _peer_hist_add(url, False)
+        _peer_hist_add(url, False, "*")
         return
     else:
         return
@@ -2729,8 +2737,37 @@ _URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_F
                ("CLOSED", "_CLOSED_FILE"), ("REGION_SAMPLES", "_REGION_TS_FILE"), ("LAT_HIST", "_LAT_HIST_FILE"),
                ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"), ("PEER_HIST_FAM", "_PEER_HIST_FAM_FILE"),
                ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"),
-               ("DELAYED_HIST", "_DELAYED_FILE"))
+               ("DELAYED_HIST", "_DELAYED_FILE"), ("REINSTATED", "_REINSTATED_FILE"))
 _URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
+
+
+_REINSTATED_FILE = "data/reinstated.json"
+REINSTATED: dict = _jload(_REINSTATED_FILE)  # url -> when it was reinstated at its operator's request (kept 3 days)
+
+
+def _reinstated_mark(url, now=None):
+    now = int(now or time())
+    for u in [u for u, t in REINSTATED.items() if now - int(t) >= 3 * 86400]:
+        REINSTATED.pop(u)
+    REINSTATED[url] = now
+    _jsave(REINSTATED, _REINSTATED_FILE)
+
+
+_PEER_STORES = ("PEER_FAILS", "FAKE_FAILS", "FAKE_HIST", "PEER_HIST", "PEER_LAST", "PEER_HIST_FAM", "SPLIT_HIST", "NAT_SEEN",
+                "PEER_SEEN", "DELAYED_HIST")
+
+
+def _peer_reset(url):
+    """Forget a tracker's peer-test results (a reinstated tracker is judged on tests after its fix, not the failures
+    that got it removed; its carried Up/Bad clock still removes it after 3 new failures if it isn't fixed)."""
+    g = globals()
+    files = dict(_URL_STORES)
+    for name in _PEER_STORES:
+        if g[name].pop(url, None) is not None:
+            _jsave(g[name], g[files[name]])
+    for name in ("PEER_OK", "FAKE_N", "INFLATED", "STALE"):
+        g[name].pop(url, None)
+    _probe_save()
 
 
 def _nt_migrate_url(old, new):

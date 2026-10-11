@@ -553,6 +553,10 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
     tracker_candidate.update_ipapi_data()
     if _reinstating((cand_host or "").lower()):
         _restore_history(tracker_candidate, (cand_host or "").lower())
+        from newtrackon import tracker as _t
+        for u in {tracker_candidate.url, (_t.REMOVED.get((cand_host or "").lower()) or {}).get("url")} - {None}:
+            _t._peer_reset(u)  # judged on its peer tests from now on, not the failures before its fix
+        _t._reinstated_mark(tracker_candidate.url)  # 3 days before the 15% rule judges its restored week
     if old is not None:
         for a in ("historic", "added", "last_downtime", "last_uptime", "recent_ips"):
             if hasattr(old, a):
