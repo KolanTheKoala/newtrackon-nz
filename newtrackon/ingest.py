@@ -575,6 +575,7 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
     if old is not None:  # same tracker, better protocol: its records follow it
         from newtrackon import tracker as _t
         _t._nt_migrate_url(old.url, tracker_candidate.url)
+        _t._protocol_reset(tracker_candidate.url)  # judged on the new protocol's own tests
     host = (cand_host or "").lower()
     if _reinstating(host):
         REINSTATE.pop(host, None)
@@ -582,6 +583,8 @@ def process_new_tracker(tracker_candidate: Tracker) -> None:
         _lift_ban(host)
         _keep_upbad_clock(host, tracker_candidate.url)
         logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
+        from newtrackon import tracker as _t
+        _t._event(tracker_candidate.url, "added", "is back on the list at its operator's request")
         from newtrackon import tracker as _t
         if (_t.REMOVED.get(host) or {}).get("fault"):  # removed by a fault in our checks (scripts/nt_admin.py reinstate)
             _t.REMOVED.pop(host, None)  # so it doesn't count towards a longer ban next time
@@ -610,8 +613,10 @@ def _keep_upbad_clock(host: str, url: str) -> None:
     if "(Up/Bad)" not in why:
         return
     now = int(time())
-    bad = "returns fake peers (3+ checks in a row)" if "fake peers" in why else "hands out no peers (3+ of its last 6 peer tests failed)"
-    _t.LAST_STATE[url] = {"st": "up_bad", "bad": [bad], "dead": [], "since": now, "bad_since": now - _t.REMOVE_DAYS * 86400}
+    # the clock alone, with no state: a stored "Up/Bad" here made its first check (peer tests reset, so not Up/Bad yet)
+    # post "is Up/Good again" to the feed even when it wasn't fixed. Counted only if it's Up/Bad again within 12 hours.
+    _t.LAST_STATE[url] = {"st": None, "bad": None, "dead": None, "since": now, "bad_since": now - _t.REMOVE_DAYS * 86400,
+                          "bad_left": now}
     _t._jsave(_t.LAST_STATE, _t._LAST_STATE_FILE)
 
 

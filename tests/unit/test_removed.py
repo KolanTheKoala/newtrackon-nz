@@ -211,7 +211,8 @@ class TestReinstate:
     def test_up_bad_removal_keeps_its_clock(self) -> None:
         T.REMOVED["ub.example"] = {"url": "udp://ub.example:1/announce", "t": NOW, "reason": "handed out no peers for 5 days (Up/Bad)"}
         ingest._keep_upbad_clock("ub.example", "udp://ub.example:1/announce")
-        assert T._nt_upbad_days("udp://ub.example:1/announce") >= T.REMOVE_DAYS
+        s = T._bad_track(T.LAST_STATE["udp://ub.example:1/announce"], "up_bad", NOW + 3600, ["hands out no peers (3+ of its last 6 peer tests failed)"])
+        assert (NOW + 3600 - s["bad_since"]) / 86400 >= T.REMOVE_DAYS  # Up/Bad again within 12 hours: its clock carries on
         T.REMOVED["dn.example"] = {"url": "udp://dn.example:1/announce", "t": NOW, "reason": "no answer for 5 days"}
         ingest._keep_upbad_clock("dn.example", "udp://dn.example:1/announce")
         assert "udp://dn.example:1/announce" not in T.LAST_STATE

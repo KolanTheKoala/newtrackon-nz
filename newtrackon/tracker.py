@@ -563,8 +563,8 @@ class Tracker:
                 _jsave(LAST_STATE, _LAST_STATE_FILE)
                 return
             cur = {"st": st, "bad": bad, "dead": dead}
-            if prev is None:
-                if now - int(self.added or 0) < 86400:
+            if prev is None or prev.get("st") is None:  # no state yet (or a reinstated tracker's carried clock alone)
+                if prev is None and now - int(self.added or 0) < 86400:
                     _event(url, "added", "added to the list")
                 cur["since"] = now
             elif {k: prev.get(k) for k in ("st", "bad", "dead")} != cur:
@@ -1782,7 +1782,13 @@ def _nt_closed_reason(msg):
     m = str(msg or "").lower()
     if any(k in m for k in ("passkey", "authkey", "auth key")):
         return "a private tracker: it asks for a passkey"
-    if any(k in m for k in ("not authorized", "not authorised", "unregistered torrent", "torrent not registered", "not registered with this tracker", "whitelist")):
+    # not these: rate limits ("not authorized to announce more often than..."), blocked addresses ("IP not authorized") and
+    # client allow-lists ("your client is not on the whitelist"); only a refusal about the torrent itself
+    if any(k in m for k in ("rate", "often", "slow down", "too many", "limit", "wait", "interval")):
+        return None
+    torrent = any(k in m for k in ("info hash", "info_hash", "infohash", "torrent", "download"))
+    if any(k in m for k in ("unregistered torrent", "torrent not registered", "not registered with this tracker")) or \
+            (torrent and any(k in m for k in ("not authorized", "not authorised", "whitelist"))):
         return "it only serves its own torrents (a whitelist)"
     return None
 
@@ -2367,8 +2373,10 @@ def _removed_seed():
 
 
 _removed_seed()
-_bad_seed()
-_bad_log_seed()
+# _bad_seed() and _bad_log_seed() filled in states saved before bad_since/bad_log existed (before 2026-10-07). Every state
+# has been saved since, and a missing bad_since/bad_log now means there's no spell: run at each start they rebuilt spells
+# from the event history, including a reinstated tracker's from before its removal (85% Up/Bad after a restart, and removed
+# by the 80% rule at its next bad patch). Kept for reference and their tests; not run.
 
 
 def _event(url, kind, text):
@@ -2791,6 +2799,22 @@ def _peer_reset(url):
             _jsave(g[name], g[files[name]])
     for name in ("PEER_OK", "FAKE_N", "INFLATED", "STALE"):
         g[name].pop(url, None)
+    _probe_save()
+
+
+_PROTOCOL_STORES = ("FAM_FAILS", "FAM_HIST", "FAMS", "CLOSED", "WARNINGS", "ANN_IV", "DOWN_WHY")
+
+
+def _protocol_reset(url):
+    """After a better protocol replaced a tracker (UDP for HTTP): its history, latency and clocks carry over, but what
+    depends on the protocol starts afresh, so the old protocol's failed peer tests or dead address can't remove the new
+    one at its first check. A clock that's still running removes it soon if the new protocol has the same fault."""
+    _peer_reset(url)
+    g, files = globals(), dict(_URL_STORES)
+    for name in _PROTOCOL_STORES:
+        if g[name].pop(url, None) is not None:
+            _jsave(g[name], g[files[name]])
+    CID_OK.pop(url, None)
     _probe_save()
 
 

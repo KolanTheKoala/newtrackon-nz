@@ -33,10 +33,16 @@ def test_fixed_tracker_is_not_removed_on_its_first_passing_check(reinstated) -> 
 
 
 def test_still_broken_goes_again_soon(reinstated) -> None:
-    for _ in range(3):
+    removed_at = None
+    for i in range(5):  # each check: the peer test fails, then the removal rules, then the feed's state
         T._peer_hist_add(reinstated.url, False, "v4")
-    reinstated.update_uptime()
-    assert reinstated.to_be_deleted is True
+        reinstated.update_uptime()
+        if reinstated.to_be_deleted:
+            removed_at = i + 1
+            break
+        reinstated._emit_events()
+    assert removed_at == 4  # Up/Bad after 3 failed tests, with its carried clock: removed at the next check
+    assert not [e for e in T.EVENTS if "Up/Good" in e["text"]]  # never claimed it was fixed
 
 
 @pytest.mark.usefixtures("empty_queues", "mock_db_connection")
@@ -51,7 +57,7 @@ def test_through_the_real_acceptance_path(sample_tracker) -> None:
             patch("newtrackon.ingest.attempt_submitted", return_value=(1800, t.url, 50)), \
             patch("newtrackon.ingest.db.insert_new_tracker"), patch.object(t, "update_ipapi_data"):
         ingest.process_new_tracker(t)
-    assert t.url not in T.PEER_HIST and t.url not in T.PEER_FAILS and T.LAST_STATE[t.url]["st"] == "up_bad"
+    assert t.url not in T.PEER_HIST and t.url not in T.PEER_FAILS and T.LAST_STATE[t.url]["st"] is None and T.LAST_STATE[t.url]["bad_since"] <= now - T.REMOVE_DAYS * DAY
     T._peer_hist_add(t.url, True, "v4")  # first check back: fixed
     t.update_uptime()
     assert t.to_be_deleted is False
@@ -165,3 +171,11 @@ def test_sister_banned_for_good_after_this_was_listed_doesnt_count(sample_tracke
     sample_tracker._nt_ban()
     assert open("data/denylist.txt").read().splitlines()[-1].split()[0] == sample_tracker.host
     assert len(open("data/denylist.txt").read().splitlines()[-1].split()) == 2  # its own first removal: 30 days
+
+
+def test_fixed_after_reinstatement_posts_nothing_misleading(reinstated) -> None:
+    for _ in range(3):
+        T._peer_hist_add(reinstated.url, True, "v4")
+        reinstated.update_uptime()
+        reinstated._emit_events()
+    assert reinstated.to_be_deleted is False and T.EVENTS == [] and T.LAST_STATE[reinstated.url]["st"] in ("up_good", "up_unreliable", "up_slow")

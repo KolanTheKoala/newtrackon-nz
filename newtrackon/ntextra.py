@@ -401,6 +401,10 @@ def _warning(url):
     if not w:
         return None
     low = w.lower()
+    if any(k in low for k in ("rate", "too many", "slow down", "limit", "often")) and not T._nt_closed_reason(w):
+        return (w, "It's limiting how often clients may announce: some clients get turned away.", True)
+    if "client" in low and ("whitelist" in low or "not allowed" in low or "banned" in low):
+        return (w, "It only accepts certain torrent clients: others are turned away.", True)
     if any(k in low for k in ("passkey", "authkey", "auth key", "login", "registered user", "private")):
         return (w, "It's a private tracker: it only works for its own members, so it can't work as a public tracker. Nothing to fix here.", False)
     if any(k in low for k in ("not authorized", "not authorised", "not registered", "unregistered", "whitelist", "not allowed", "unknown torrent", "not found")):

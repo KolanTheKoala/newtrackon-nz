@@ -81,7 +81,7 @@ class TestRemovalReason:
         why = _remove_upbad(sample_tracker, monkeypatch)
         T.REMOVED[sample_tracker.host] = {"url": sample_tracker.url, "t": int(time()), "reason": why}
         ingest._keep_upbad_clock(sample_tracker.host, sample_tracker.url)
-        assert T.LAST_STATE[sample_tracker.url]["bad"] == NOPEERS  # ingest reads "(Up/Bad)" in the reason: still there
+        assert T.LAST_STATE[sample_tracker.url]["bad_since"] <= time() - T.REMOVE_DAYS * 86400  # ingest reads "(Up/Bad)" in the reason: still there
 
     def test_down_says_down(self, sample_tracker) -> None:
         t = sample_tracker
