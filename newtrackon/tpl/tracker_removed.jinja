@@ -23,6 +23,8 @@
 
     <dl class="mb-3">
         <dt>Why</dt><dd>{{ r.reason or "no reason recorded" }}</dd>
+        {% if detail %}<dt>What our checks saw</dt><dd><ul class="mb-0 ps-3">{% for x in detail %}<li>{{ x }}</li>{% endfor %}</ul></dd>{% endif %}
+        {% if fix %}<dt>How to fix it</dt><dd><a href="/fix#{{ fix }}">{{ fix_title }}</a>, on the How to fix page.</dd>{% endif %}
         <dt>Can it come back?</dt>
         <dd>{% if ban and ban.active and ban.until %}Yes, once it's fixed: press <b>Check again now</b> below. Otherwise not until {{ until }} (in {{ left }}): it's banned until then, so other submissions are refused.
             {% elif ban and ban.active %}No: it's banned from the list.

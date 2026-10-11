@@ -390,14 +390,16 @@ class Tracker:
         failing = fake or PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT
         share = _nt_bad_share(self.url, now_ts) if ub is not None else 0.0
         listed_days = (now_ts - int(self.added or now_ts)) / 86400.0
-        what = "returned fake peers" if fake else "handed out no peers"
+        cause = "peers that can't exist, for a random torrent only this site knows" if fake else _peer_cause(self.url)
+        what = "returned fake peers" if fake else ("handed out unusable peers" if cause and cause.startswith("over IPv") else "handed out no peers")
+        cause = ": " + cause if cause else ""
         why = None
         if not _peer_rule_applies(self.url):
             ub = None  # paused for HTTP(S): see HTTP_PEER_TEST_TRUSTED
         if ub is not None and failing and ub >= UPBAD_DAYS:
-            why = "%s for %d days (Up/Bad)" % (what, int(ub))
+            why = "%s for %d days (Up/Bad)%s" % (what, int(ub), cause)
         elif ub is not None and failing and share >= BAD_SHARE and listed_days >= BAD_SHARE_DAYS:
-            why = "%s %d%% of the last %d days (Up/Bad)" % (what, round(100 * share), BAD_SHARE_DAYS)
+            why = "%s %d%% of the last %d days (Up/Bad)%s" % (what, round(100 * share), BAD_SHARE_DAYS, cause)
         if why:
             _NT_DEL_REASON[self.url] = why
             logger.info("Evicting %s (Up/Bad: %.1f days in a row, %.0f%% of the last week)", self.url, ub, 100 * share)
@@ -410,7 +412,7 @@ class Tracker:
         if ud is not None and self.status != 0 and not _peer_rule_applies(self.url):
             ud = None  # answering but failing the (paused) HTTP peer test: not counted as "not working"
         if ud is not None and ud >= REMOVE_DAYS and listed >= 3 and (self.status == 0 or failing):
-            _NT_DEL_REASON[self.url] = "not working for %d days: down, or answering without handing out peers" % int(ud)
+            _NT_DEL_REASON[self.url] = _useless_reason(self, ud)
             logger.info("Evicting %s (down or Up/Bad for %.1f days)", self.url, ud)
             self.to_be_deleted = True
             self._nt_ban()
@@ -431,7 +433,8 @@ class Tracker:
         dead_days = (now_ts - int(self.last_uptime or 0)) / 86400.0
         if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and availability * stability < 0.15)):
             # the event, the removed page and the ban list say which of the two it was
-            _NT_DEL_REASON[self.url] = ("no answer for %d days" % int(dead_days) if dead_days >= REMOVE_DAYS else
+            _dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(self.url)))
+            _NT_DEL_REASON[self.url] = ("no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else "") if dead_days >= REMOVE_DAYS else
                                         "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * availability * stability))
             logger.info(
                 "Evicting %s (score=%.2f%%, availability=%.1f%%, no success for %.1f days, samples=%s, age_days=%.1f)",
@@ -1137,6 +1140,169 @@ def _nat_seen_set(url, fam, ip):
         _jsave(NAT_SEEN, _NAT_FILE)
 
 
+def _addr_cause(ip):
+    """What the address client A came back as says about the tracker's setup: (what it is, the cause as a sentence).
+    127.0.0.1 is a proxy on its own machine, 172.16/12 is almost always Docker, other private ranges NAT or a LAN, and
+    someone else's public address a proxy or CDN in front of it."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(str(ip).split("%")[0].strip("[]"))
+        if a.version == 6 and a.ipv4_mapped:
+            a = a.ipv4_mapped
+    except ValueError:
+        a = None
+    if a is not None and a.is_loopback:
+        return ("a loopback address", "Something on the tracker's own machine, such as a reverse proxy, a port forward or a "
+                "tunnel, passes every connection on to it without the client's real address")
+    if a is not None and a.version == 4 and a in ipaddress.ip_network("172.16.0.0/12"):
+        return ("a private address", "That almost always means Docker: traffic reaches the tracker through Docker's port "
+                "proxy, which replaces each client's address with the container's gateway")
+    if a is not None and a.is_global:
+        return ("a proxy or CDN's address", "A proxy or CDN in front of it, such as Cloudflare, hides clients' addresses, "
+                "and the tracker doesn't read the real one from the header the proxy passes on")
+    return ("a private address", "Something in front of it, such as NAT, a load balancer or a proxy, replaces each client's "
+            "address with its own")
+
+
+def _seen_sentence(s):
+    """What client B was handed in a peer test (a PEER_SEEN entry), in plain words (no full stop at the end)."""
+    if s.get("swarm_empty"):
+        return ("it ignores our second test client's network, and a second client from this server got nothing back, with "
+                "nobody counted: it isn't tracking the torrent at all")
+    counts = ""
+    if s.get("seeds") is not None or s.get("leech") is not None:
+        counts = " (it reported %s seeder%s, %s leecher%s)" % (s.get("seeds", 0) or 0, "" if (s.get("seeds") or 0) == 1 else "s",
+                                                               s.get("leech", 0) or 0, "" if (s.get("leech") or 0) == 1 else "s")
+    cause = None
+    if s.get("a") == "ok":
+        out = "our second test client was handed our first one, with its real address: clients find each other"
+    elif s.get("a") in ("private", "other") and s.get("a_ip"):
+        what, cause = _addr_cause(s["a_ip"])
+        out = "our second test client was handed our first one as %s, %s nobody can connect to" % (s["a_ip"], what)
+    elif s.get("self"):
+        out = ("our second test client was handed back only itself: the server it reached had never seen our first client"
+               + counts)
+    elif (s.get("seeds") or 0) >= 1:
+        out = "our second test client was handed no peers at all" + counts + ", so it counted our first client but didn't hand it out"
+    else:
+        out = "our second test client was handed no peers at all" + counts
+    if s.get("foreign"):
+        out += ", plus %d peer%s that can't exist (fake)" % (s["foreign"], "" if s["foreign"] == 1 else "s")
+    return out + (". " + cause if cause else "")
+
+
+def _peer_evidence(url, before=None):
+    """[(family, what client B was handed)] for each family whose last peer test failed, from PEER_SEEN (or, without it,
+    an unusable address in NAT_SEEN). With `before` (a removal time), evidence from later checks is left out."""
+    out, seen = [], PEER_SEEN.get(url) or {}
+    for fam in ("v4", "v6"):
+        s = seen.get(fam)
+        if isinstance(s, dict) and (before is None or int(s.get("t") or 0) <= before):
+            if not s.get("ok"):
+                out.append((fam, s))
+            continue
+        n = (NAT_SEEN.get(url) or {}).get(fam)
+        if isinstance(n, dict) and n.get("ip") and (before is None or int(n.get("t") or 0) <= before):
+            out.append((fam, {"a": "private", "a_ip": n["ip"]}))
+    return out
+
+
+def _peer_cause(url, before=None):
+    """A few words for why its peer test fails, for the removal reason: what client B was handed. None without evidence."""
+    ev = _peer_evidence(url, before)
+    for fam, s in ev:
+        if s.get("a") in ("private", "other") and s.get("a_ip"):
+            return "over IPv%s it gave out every client's address as %s" % (fam[-1], s["a_ip"])
+    if any(s.get("swarm_empty") for _, s in ev):
+        return "it wasn't tracking the torrents announced to it (it counted nobody)"
+    if ev and ((SPLIT_HIST.get(url) or []).count(1) >= SPLIT_MIN or any(s.get("self") for _, s in ev)):
+        return "its servers don't share swarms, so clients rarely met"
+    if any((s.get("seeds") or 0) >= 1 for _, s in ev):
+        return "it counted our test client but never handed it to a second one"
+    if ev:
+        return "a second client was never told about the first"
+    return None
+
+
+def _peer_fix(url, before=None, fake=False):
+    """The /fix section for a peer-test failure, from the evidence."""
+    ev = _peer_evidence(url, before)
+    if any(s.get("a") in ("private", "other") and s.get("a_ip") for _, s in ev):
+        return "hidden-address"
+    if fake:
+        return "fake-peers"
+    if ev and ((SPLIT_HIST.get(url) or []).count(1) >= SPLIT_MIN or any(s.get("self") for _, s in ev)):
+        return "split-swarm"
+    return "no-peers"
+
+
+_DOWN_WORDS = {"DNS": "its name didn't resolve", "Timeout": "timed out", "Refused": "connection refused",
+               "TLS": "TLS or certificate error", "HTTP error": "HTTP error", "Rejected": "it rejected our requests"}
+
+
+def _hist_up(hist):
+    """(share of checks it answered, times it dropped out) from a removal record's 'hist' string ('1', 'h', '0' per slot)."""
+    if not hist:
+        return None
+    up = sum(1 for c in hist if c != "0")
+    drops = sum(1 for a, b in zip(hist, hist[1:]) if a != "0" and b == "0")
+    return round(100 * up / len(hist)), drops
+
+
+def _removal_detail(rec, before=None):
+    """What the checks saw, in plain sentences, and the /fix section, for a removed tracker's page: (sentences, anchor).
+    Built from the stores when it's removed and kept in its record. For records from before that, `before` (the removal
+    time) keeps out anything a later check saw. Nothing is guessed: no evidence, no sentence."""
+    url, low = rec.get("url") or "", str(rec.get("reason") or "").lower()
+    out, fix = [], None
+    upbad = "(up/bad)" in low
+    useless = low.startswith("not working")
+    # records from before 2026-10-12 didn't say which of the two it was ("down, or answering without handing out peers"):
+    # a failed peer test is shown only if one was recorded
+    peers = upbad or (useless and "without usable peers" in low) or (useless and "or answering without" in low and _peer_evidence(url, before))
+    if peers:
+        fake = "fake peers" in low
+        for fam, s in _peer_evidence(url, before):
+            out.append("Last IPv%s peer test: %s." % (fam[-1], _seen_sentence(s)))
+        fams = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k != "?" and v} or _peer_fams(url)
+        if _peer_evidence(url, before) or before is None:
+            for k, v in sorted(fams.items()):
+                out.append("Passed %d of its last %d %speer tests." % (v.count(1), len(v), "" if k == "?" else "IPv%s " % k[-1]))
+            if fake and FAKE_HIST.get(url):
+                h = FAKE_HIST[url]
+                out.append("Returned peers that can't exist, for a random torrent only this site knows, in %d of its last %d checks."
+                           % (h.count(1), len(h)))
+        fix = _peer_fix(url, before, fake)
+    if useless or low.startswith("no answer") or low.startswith("too unreliable"):
+        why = DOWN_WHY.get(url)
+        if why and not (useless and peers):
+            out.append("Last error: %s" % why)
+            fix = fix or FIX_DOWN.get(_nt_down_label(why), "down")
+        elif low.startswith("no answer"):
+            fix = fix or "down"
+        if rec.get("last_up"):
+            out.append("Last successful check: %s." % __import__("datetime").datetime.fromtimestamp(
+                int(rec["last_up"]), __import__("datetime").timezone.utc).strftime("%-d %b %Y %H:%M UTC"))
+        hu = _hist_up(rec.get("hist"))
+        if hu:
+            out.append("Over its last %g days listed it answered in %d%% of checks and dropped out %d time%s."
+                       % (round(len(rec["hist"]) / 48, 1), hu[0], hu[1], "" if hu[1] == 1 else "s"))
+        if low.startswith("too unreliable"):
+            fix = "unreliable"
+    if low.startswith("its ipv"):
+        fix = "dead-address"
+    elif "up/junk" in low:
+        fix = "unreliable"
+    if "whitelist" in low or "passkey" in low:
+        w = WARNINGS.get(url) or {}
+        if w.get("msg") and (before is None or int(w.get("t") or 0) <= before):
+            out.append("Its own reply said: \u201c%s\u201d." % w["msg"])
+        out.append("A public list can only use trackers that accept any torrent, so that's a choice, not a fault.")
+    if "hostname" in low:
+        fix = "down-dns"
+    return out, fix
+
+
 def _peer_hist_add(url, ok, fam=None):
     h = PEER_HIST.get(url)
     if h is None:  # seed from the old streak counter
@@ -1357,6 +1523,20 @@ def _nt_useless_days(url, now=None):
     now = now or time()
     start = s.get("useless_since", s.get("since"))
     return (now - int(now if start is None else start)) / 86400.0
+
+
+def _useless_reason(t, days):
+    """The removal reason for a tracker that wasn't working for REMOVE_DAYS: which of the two it was, in numbers."""
+    n = max(1, int(days * 86400 // Tracker.SLOT))
+    h = [float(x) for x in list(getattr(t, "historic", None) or [])][-n:]
+    down = round(100 * sum(1 for x in h if x <= 0) / len(h)) if h else 0
+    head = "not working for %d days" % int(days)
+    if t.status == 0:
+        dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(t.url)))
+        return "%s: no answer in %d%% of checks, and never back for 12 hours in a row%s" % (head, down, " (%s)" % dw if dw else "")
+    cause = _peer_cause(t.url)
+    return "%s: %sanswering without usable peers%s" % (head, "no answer in %d%% of checks, the rest " % down if down else "",
+                                                         " (%s)" % cause if cause else "")
 
 
 def _useless_seed(trackers, now=None):
@@ -1858,6 +2038,12 @@ def _removed_add(t, reason, now=None):
                      "count": (int(prev.get("count", 1)) if prev else 0) + 1,  # removals so far, for longer bans
                      "ips": sorted(set(getattr(t, "ips", None) or []) | set((getattr(t, "recent_ips", None) or {}).keys())),
                      "hist": hist}  # its last week of uptime, restored if it's reinstated
+    if getattr(t, "last_uptime", None):
+        REMOVED[host]["last_up"] = int(t.last_uptime)
+    try:  # what the checks saw, kept for its Removed page: the stores can be cleared or overwritten later
+        REMOVED[host]["detail"], REMOVED[host]["fix"] = _removal_detail(REMOVED[host])
+    except Exception:
+        logger.exception("removal detail for %s", host)
     _jsave(REMOVED, _REMOVED_FILE)
 
 

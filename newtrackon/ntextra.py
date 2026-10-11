@@ -333,7 +333,8 @@ FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peer
               "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
               "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer",
               "interval": "Announce interval too short or too long", "removed": "Removed and banned",
-              "split-swarm": "Separate servers that don't share swarms (Up/Broken)"}
+              "split-swarm": "Separate servers that don't share swarms (Up/Broken)",
+              "hidden-address": "Hands out an address nobody can reach"}
 
 
 VERSION_FILE = __import__("os").path.join(__import__("os").path.dirname(__file__), "VERSION")
@@ -364,7 +365,17 @@ def _broken_why(t):
 
 
 def _fix_anchor(t):
-    """The /fix section for this tracker's current problem, or None if it's healthy."""
+    """The /fix section for this tracker's current problem, or None if it's healthy. A peer-test failure where client A came
+    back with an address nobody can reach (NAT_SEEN) gets that section: it's the cause, and it says how to fix it."""
+    fix = _fix_base(t)
+    nat = T.NAT_SEEN.get(t.url) or {}
+    if (fix == "no-peers" and nat) or (fix == "dead-address" and T._peer_fam_bad(t.url) in nat):
+        return "hidden-address"
+    return fix
+
+
+def _fix_base(t):
+    """The /fix section by status alone (the tracker page's evidence is worded from this)."""
     try:
         st, bad = _state(t)
     except Exception:
@@ -415,7 +426,7 @@ def _interval_note(iv):
 def _evidence(t, d):
     """What the checks saw, in plain words, for the tracker page's problem box."""
     out = []
-    fix = _fix_anchor(t)
+    fix = _fix_base(t)
     if fix is None:
         return out
     w = _warning(t.url)
@@ -443,16 +454,9 @@ def _evidence(t, d):
                    % (d["fake_peers"]["latest"] if d["fake_peers"]["latest"] is not None else "unknown", d["fake_peers"]["streak"]))
     for fam, x in sorted((T.NAT_SEEN.get(t.url) or {}).items()):
         if fix in ("no-peers", "dead-address"):
-            from newtrackon import scraper
-            if scraper.ip_is_public(x["ip"]):
-                out.append("Over IPv%s it sees every client as %s, an address that isn't theirs, and hands that out instead of "
-                           "their real one, so nobody can connect to those peers. A proxy or CDN in front of it (such as Cloudflare) "
-                           "hides clients' addresses, and the tracker doesn't read the real one from the header it passes on."
-                           % (fam[-1], x["ip"]))
-            else:
-                out.append("Over IPv%s it sees every client as %s, a private address, and hands that out instead of their real "
-                           "address, so nobody can connect to those peers. Something in front of it hides clients' addresses: "
-                           "usually Docker's port proxy (no real IPv6 in the container), NAT, or a reverse proxy." % (fam[-1], x["ip"]))
+            what, why = T._addr_cause(x["ip"])
+            out.append("Over IPv%s it sees every client as %s, %s, and hands that out instead of their real address, so nobody "
+                       "can connect to those peers. %s." % (fam[-1], x["ip"], what, why))
     rare = T._split_info(t.url) if fix == "no-peers" and not T._split(t.url) else None
     if rare:
         out.append("It runs separate servers that don't share their swarms, and clients rarely reach the same one: in %d of its "
@@ -557,29 +561,7 @@ def _iv_flag(t):
 
 def _seen_text(s):
     """One plain sentence for what client B was handed in a peer test (PEER_SEEN entry)."""
-    if s.get("swarm_empty"):
-        return ("it ignores our second test client's network, and a second client from this server got nothing back, with "
-                "nobody counted: it isn't tracking the torrent at all")
-    counts = ""
-    if s.get("seeds") is not None or s.get("leech") is not None:
-        counts = " (it reported %s seeder%s, %s leecher%s)" % (s.get("seeds", 0) or 0, "" if (s.get("seeds") or 0) == 1 else "s",
-                                                               s.get("leech", 0) or 0, "" if (s.get("leech") or 0) == 1 else "s")
-    if s.get("a") == "ok":
-        out = "our second test client was handed our first one, with its real address: clients find each other"
-    elif s.get("a") == "private":
-        out = ("our second test client was handed our first one as %s, a private address nobody can connect to"
-               % s.get("a_ip"))
-    elif s.get("a") == "other":
-        out = ("our second test client was handed our first one as %s, an address that isn't ours (a proxy or CDN's): nobody "
-               "can connect to it" % s.get("a_ip"))
-    elif s.get("self"):
-        out = ("our second test client was handed back only itself: the server it reached had never seen our first client"
-               + counts)
-    else:
-        out = "our second test client was handed no peers at all" + counts
-    if s.get("foreign"):
-        out += ", plus %d peer%s that can't exist (fake)" % (s["foreign"], "" if s["foreign"] == 1 else "s")
-    return out
+    return T._seen_sentence(s)
 
 
 def _ago(epoch):
@@ -858,11 +840,25 @@ def _date(ts):
     return datetime.fromtimestamp(int(ts), timezone.utc).strftime("%-d %b %Y")
 
 
+def _removed_detail(r):
+    """(sentences, /fix section) for a removed tracker: kept with its record since it was removed, or for older records
+    rebuilt from the stores, using nothing a check saw after the removal."""
+    if "detail" in r:
+        return list(r.get("detail") or []), r.get("fix")
+    if r.get("fault"):
+        return [], None  # removed by a fault in our own checks: nothing to fix
+    try:
+        return T._removal_detail(r, before=int(r.get("t") or 0))
+    except Exception:
+        return [], None
+
+
 def _removed_page(host, r):
     from flask import render_template
     import time
     now = int(time.time())
     ban = _ban(host, now)
+    detail, fix = _removed_detail(r)
     rows = T.DAILY.get(r.get("url")) or []
     days = [{"day": d, "pct": pct} for d, pct, _, _ in rows[-60:]]
     up = sum(pct * n / 100.0 for _, pct, n, _ in rows)
@@ -871,6 +867,7 @@ def _removed_page(host, r):
     desc = "%s is down: it was removed from the list on %s (%s). Its history, and whether it can be added again." % (host, when, r.get("reason") or "no reason recorded")
     return render_template(
         "tracker_removed.jinja", host=host, r=r, ban=ban, now=now, when=when, ago=_ago(r["t"]),
+        detail=detail, fix=fix, fix_title=FIX_TITLES.get(fix or ""),
         recheck=request.args.get("recheck"), recheck_m=request.args.get("m", type=int),
         until=_date(ban["until"]) if ban and ban.get("until") else None,
         left=_ago(now - (ban["until"] - now)) if ban and ban.get("until") and ban["active"] else None,  # time left, via the "ago" formatter
@@ -911,7 +908,9 @@ def register(app):
             rm = T.REMOVED.get(host)
             if rm:
                 ban = _ban(host)
+                detail, fix = _removed_detail(rm)
                 body["removed"] = {"url": rm.get("url"), "time": rm.get("t"), "reason": rm.get("reason"),
+                                   "details": detail, "fix": "/fix#" + fix if fix else None,
                                    "banned_until": (ban or {}).get("until") if ban and ban["active"] else None,
                                    "banned_permanently": bool(ban and ban["active"] and ban["until"] is None)}
                 body["daily"] = _daily_rows(rm.get("url"))

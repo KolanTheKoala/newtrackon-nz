@@ -53,7 +53,7 @@
         <li><b>It keeps IPv4 and IPv6 users apart</b>, so someone connecting over IPv6 never meets someone on IPv4. Many tracker
             programs have a setting for this.</li>
         <li><b>Something in front of it hides users' real addresses</b>, such as a proxy or load balancer, so every user looks like the
-            same address.</li>
+            same address: see <a href="#hidden-address">Hands out an address nobody can reach</a>.</li>
         <li><b>It forgets users too quickly</b>, before they announce again.</li>
     </ul>
     <p>If the tracker sends a message with its answers, such as "Require passkey" or "info hash is not authorized", it's shown on its
@@ -107,19 +107,9 @@ curl -s "$U?info_hash=$H&amp;peer_id=-NT0001-000000000002&amp;port=6882&amp;uplo
     <p><b>Or: one family doesn't share peers.</b> Both addresses answer, but clients on one of them (often IPv6) are never
         told about each other: our two test clients on IPv6 never meet, while on IPv4 they do. Usual causes: the tracker keeps no
         peer lists for that family (an IPv4-only build answering on IPv6), or something in front of it hides IPv6 clients' real
-        addresses. The tracker's page says which family, and if it hands out a private address (like <code>172.17.0.1</code>),
-        that's the cause: see the next paragraph.</p>
-    <p><b>Hands out a private address (172.17.0.1, 10.x, 192.168.x).</b> The tracker sees every client as that address, so
-        it gives everyone an address nobody can reach. Almost always the tracker runs in <b>Docker</b> and IPv6 (or all)
-        traffic reaches it through Docker's port proxy, which replaces each client's address with the container's gateway.
-        Fix: give the container real IPv6 (in <code>/etc/docker/daemon.json</code> set <code>"ipv6": true</code>,
-        <code>"ip6tables": true</code> and an IPv6 subnet, or run it with <code>network_mode: host</code>), or set the
-        tracker to trust the real client address from whatever sits in front of it.</p>
-    <p><b>Hands out a proxy's or CDN's address.</b> The same fault behind a reverse proxy or a CDN such as Cloudflare: the
-        tracker sees the proxy's address for everyone. Make the tracker take the client's address from the header the proxy
-        adds (<code>CF-Connecting-IP</code> or <code>X-Forwarded-For</code>; in opentracker, Chihaya and most others it's a
-        setting, often called "real IP header"), and only from your proxy's addresses. Cloudflare doesn't carry UDP, so a UDP
-        tracker behind it can't work at all.</p>
+        addresses. The tracker's page says which family, and if it hands out an address nobody can reach (like
+        <code>172.17.0.1</code> or <code>127.0.0.1</code>), that's the cause: see
+        <a href="#hidden-address">Hands out an address nobody can reach</a>.</p>
     <p><b>Most likely causes, and what to do:</b></p>
     <ul>
         <li><b>An old or wrong address is still in your domain's settings</b> (the DNS records). In your domain or hosting control panel,
@@ -158,6 +148,35 @@ EOF</pre>
         port for both in the firewall (<code>ip6tables</code>/<code>nft</code> rules are separate from IPv4 ones), or remove the record for
         the family you don't serve. It clears once that address answers.</p>
     </details>
+
+    <h4 id="hidden-address">Hands out an address nobody can reach</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker shares peers, but it gives everyone the wrong address for each peer, so nobody can
+            connect to anyone it hands out. It doesn't see where clients really come from: something between them and the
+            tracker puts its own address in their place.</p>
+        <p><b>How we know:</b> our second test client is handed our first one, but with an address that isn't ours. The
+            tracker's page shows the address it gave out.</p>
+    </div>
+    <p><b>Hands out 127.0.0.1 (or ::1).</b> Every connection reaches the tracker from its own machine: a reverse proxy
+        (nginx, Caddy, a NAS's built-in reverse proxy), a port forward or a tunnel on the same machine passes it on without the
+        client's address. Either connect clients straight to the tracker's own port, or make the tracker take the client's
+        address from the header the proxy adds (<code>X-Forwarded-For</code> or <code>X-Real-IP</code>; in opentracker,
+        Chihaya and most others it's a setting, often called "real IP header"), and only from the proxy itself. A UDP tracker
+        can't sit behind an HTTP proxy at all: it needs its port open directly.</p>
+    <p><b>Hands out 172.17.0.1 (or another 172.16 to 172.31 address).</b> The tracker almost always runs in <b>Docker</b>
+        and IPv6 (or all) traffic reaches it through Docker's port proxy, which replaces each client's address with the
+        container's gateway. Fix: give the container real IPv6 (in <code>/etc/docker/daemon.json</code> set
+        <code>"ipv6": true</code>, <code>"ip6tables": true</code> and an IPv6 subnet, or run it with
+        <code>network_mode: host</code>), or set the tracker to trust the real client address from whatever sits in front of it.</p>
+    <p><b>Hands out another private address (10.x, 192.168.x).</b> A router, firewall or load balancer in front of it
+        translates addresses (NAT) on the way in, so every client arrives from that box. Forward the port to the tracker
+        without rewriting the source address, or have the load balancer pass the client's address on.</p>
+    <p><b>Hands out a proxy's or CDN's address.</b> The same fault behind a reverse proxy or a CDN such as Cloudflare: the
+        tracker sees the proxy's address for everyone. Make the tracker take the client's address from the header the proxy
+        adds (<code>CF-Connecting-IP</code> or <code>X-Forwarded-For</code>; in opentracker, Chihaya and most others it's a
+        setting, often called "real IP header"), and only from your proxy's addresses. Cloudflare doesn't carry UDP, so a UDP
+        tracker behind it can't work at all.</p>
+    <p>Then press <b>Check again now</b> on its page.</p>
 
     <h4 id="split-swarm">Separate servers that don't share swarms (Up/Broken)</h4>
     <div class="nt-plain">

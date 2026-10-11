@@ -224,7 +224,9 @@ paths:
               schema:
                 type: object
         "404":
-          description: 'Not on the list. Body: {"error": "not listed", "host": "..."}'
+          description: 'Not on the list. Body: {"error": "not listed", "host": "..."}, plus, for a tracker this site removed,
+            "removed": {url, time, reason, details (what the checks saw, as sentences), fix (the /fix section for it, or
+            null), banned_until, banned_permanently} and "daily".'
           content:
             application/json:
               schema:

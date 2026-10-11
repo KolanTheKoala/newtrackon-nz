@@ -901,7 +901,7 @@ class TestAMustComeBackAsItself:
             T._peer_hist_add(url, False, "v4")
         T._nat_seen_set(url, "v4", "104.21.83.32")
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
-        assert "104.21.83.32, an address that isn" in html and "Cloudflare" in html
+        assert "104.21.83.32, a proxy or CDN" in html and "Cloudflare" in html
 
 
 @pytest.mark.usefixtures("region_db")
