@@ -764,7 +764,7 @@ class TestRefusingThisServer:
 
 class TestMadeUpConnectionId:
     """The BEP 15 check (an announce with a made-up connection ID) is the one request no real client sends: once a day per
-    tracker, and again when it's back from being down, not at every check."""
+    tracker, not at every check. The result stands in between, down or not: it's the tracker software's."""
 
     def test_once_a_day(self, monkeypatch) -> None:
         sim = Sim(monkeypatch, lambda d: {}).run(5)
@@ -778,10 +778,18 @@ class TestMadeUpConnectionId:
         sim.run(0.5)
         assert len(sim.cid) == 1 and T.CID_OK[sim.tr.url] is True
 
-    def test_again_when_its_back_from_down(self, monkeypatch) -> None:
-        sim = Sim(monkeypatch, lambda d: {"answers": not 1.5 <= d < 1.7}).run(2)
-        back = next(t for t, st, _ in sim.log if t >= START + 1.7 * DAY and st != "down")
-        assert back in sim.cid and len(sim.cid) == 3, [(t - START) / DAY for t in sim.cid]
+    def test_a_spell_down_keeps_the_result(self, monkeypatch) -> None:
+        sim = Sim(monkeypatch, lambda d: {"answers": not 0.5 <= d < 0.7}).run(0.6)
+        assert sim.log[-1][1] == "down" and T.CID_OK[sim.tr.url] is True  # still shown by the API while it's down
+        sim.run(0.3)
+        back = next(t for t, st, _ in sim.log if t >= START + 0.7 * DAY and st != "down")
+        assert back not in sim.cid and len(sim.cid) == 1 and T.CID_OK[sim.tr.url] is True  # back: shown at once, no retest
+
+    def test_every_check_shows_the_standing_result(self, monkeypatch) -> None:
+        from newtrackon import persistence
+        sim = Sim(monkeypatch, lambda d: {}).run(0.3)
+        assert len(sim.cid) == 1 and len(sim.log) > 1
+        assert persistence.raw_data[0]["flags"]["cid_ok"] is True  # the /raw page's row for a check that didn't test it
 
     def test_a_restart_keeps_the_day(self, monkeypatch) -> None:
         sim = Sim(monkeypatch, lambda d: {}).run(1.5)

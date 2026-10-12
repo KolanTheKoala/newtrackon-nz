@@ -214,7 +214,7 @@ class Tracker:
                 if _df:
                     logger.info("%s DEAD FAMILY: published %s address does not answer", self.url, _df)
                 _probe_save()
-                debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": _ex.get("cid_ok")}
+                debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": CID_OK.get(self.url)}
                 if _ex.get("stale"):
                     logger.info("%s STALE PEERS: still hands out a peer after it sent stopped", self.url)
                 if _ex.get("cid_ok") is False:
@@ -276,8 +276,7 @@ class Tracker:
             FAKE_N.pop(self.url, None)
             INFLATED.pop(self.url, None)
             STALE.pop(self.url, None)
-            CID_OK.pop(self.url, None)
-            CID_T.pop(self.url, None)  # tested again once it's back
+            # CID_OK stays: whether it enforces the connection ID is its software's, not this check's (retested daily)
             if getattr(self, "_nt_partial", False):
                 self._abroad_peer_test()
             _probe_save()
