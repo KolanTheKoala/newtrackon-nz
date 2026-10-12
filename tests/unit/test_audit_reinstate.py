@@ -56,7 +56,8 @@ def test_through_the_real_acceptance_path(sample_tracker) -> None:
     ingest.REINSTATE[t.host] = now
     with patch("newtrackon.ingest.db.get_all_data", return_value=[]), \
             patch("newtrackon.ingest.attempt_submitted", return_value=(1800, t.url, 50)), \
-            patch("newtrackon.ingest.db.insert_new_tracker"), patch.object(t, "update_ipapi_data"):
+            patch("newtrackon.ingest.db.insert_new_tracker"), patch.object(t, "update_ipapi_data"), \
+            patch("newtrackon.ingest.time", lambda: now):  # one clock: a second ticking over in between failed it
         ingest.process_new_tracker(t)
     assert t.url not in T.PEER_HIST and t.url not in T.PEER_FAILS and T.LAST_STATE[t.url]["st"] is None and T.LAST_STATE[t.url]["bad_since"] <= now - T.REMOVE_DAYS * DAY
     T._peer_hist_add(t.url, True, "v4")  # first check back: fixed

@@ -369,6 +369,8 @@ def _lift_ban(host: str) -> None:
                 f.seek(0)
                 f.write("\n".join(keep) + "\n")
                 f.truncate()
+    except FileNotFoundError:
+        pass  # no denylist: no ban to lift
     except OSError:
         logger.exception("could not lift the ban on %s", host)
 
