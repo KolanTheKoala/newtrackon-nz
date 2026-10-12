@@ -54,3 +54,16 @@ def test_the_table_names_every_up_state_itself(flask_client: FlaskClient, monkey
     cell = html[html.index('<span class="nt-st">'):][:1500]
     assert re.search(r">%s<span class=\"nt-emo\">%s" % (label, emo), cell), cell[:300]
     assert "ns(r,td)" not in html and "dataset.ntnew" not in html
+
+
+@pytest.mark.usefixtures("insert_sample_tracker")
+@pytest.mark.parametrize("uptime, shown", [(88.5, 88), (89.5, 90)])
+def test_the_tooltip_score_is_the_score_shown(flask_client: FlaskClient, mock_db_connection, monkeypatch: pytest.MonkeyPatch,
+                                              uptime, shown) -> None:
+    """Both round halves the same way (Python's round, which Jinja's round filter uses): 88.5 reads 88 in the cell and
+    in "score 88 is under 90"."""
+    from newtrackon import tracker as T
+    mock_db_connection.execute("UPDATE status SET uptime = ?", (uptime,))
+    monkeypatch.setattr(T, "status_rule", lambda t, pst=None: ("up_unreliable", []))
+    html = flask_client.get("/").get_data(as_text=True)
+    assert "score %d is under 90" % shown in html and "</span> %d</td>" % shown in html
