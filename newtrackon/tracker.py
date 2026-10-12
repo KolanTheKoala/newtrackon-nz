@@ -787,8 +787,43 @@ def _dur(epoch):
     return f"{d // 86400}d {h}" if d >= 86400 else h
 
 
+# ---- every store of per-tracker records (keyed by the tracker's URL), declared in one place ----
+# Making a store with _url_store() is what registers it: moving a tracker's records to a new URL, clearing its peer-test
+# or protocol records, a restart, the tests and the admin tool all go by this one list (before, each kept a list of its
+# own by hand, and a store missing from one was a bug that only showed after a restart or a reinstatement). A store is
+# kept in its own data file (file), with the others in data/probe_state.json (probe: its key there), or in memory only.
+# peer: cleared with the tracker's peer-test records (a reinstatement, a protocol change). protocol: cleared when a
+# better protocol replaces it. tests/unit/test_stores.py fails on a module-level dict that's in neither list.
+_STORES: dict = {}  # name -> {"file", "probe", "peer", "protocol", "check"}
+_NOT_STORES = {  # module-level dicts that aren't per-tracker records, and why
+    "BAD_TEXT": "constant", "FIX_DOWN": "constant", "_DOWN_WORDS": "constant", "_NT_ICON": "constant", "_NT_LBL": "constant",
+    "REMOVED": "keyed by host, kept for good", "_DAILY_SAVE": "bookkeeping for daily.json's saves",
+    "_NT_DEL_REASON": "a removal's reason, from the check that decides it to its event",
+}
+
+
+def _url_store(name, file=None, probe=None, peer=False, protocol=False, check=None):
+    """Register a store and give its starting contents: its file's, else empty (a probe store is filled by
+    _probe_load). check(d): the file's contents are usable (else it's set aside and the store starts empty)."""
+    _STORES[name] = {"file": file, "probe": probe, "peer": peer, "protocol": protocol, "check": check}
+    return _store_load(name)
+
+
+def _store_load(name):
+    """A store's contents as its file holds them (a restart reads them this way)."""
+    from newtrackon import store
+    s = _STORES[name]
+    if not s["file"]:
+        return {}
+    d = store.load(s["file"], kind=dict)
+    if d and s["check"] and not s["check"](d):
+        store.set_aside(s["file"], "isn't laid out as %s expects" % name)
+        return {}
+    return d
+
+
 # Peer-test results by URL, kept in memory (the web page builds Tracker objects from the DB, which has no column for this).
-PEER_OK: dict = {}
+PEER_OK: dict = _url_store("PEER_OK", probe="peer_ok", peer=True)
 
 
 import json as _json, os as _os
@@ -816,20 +851,20 @@ class _Count:
 # peer_fails.json and fake_fails.json held these counts until 2026-10-13. They're still written, so an image from before
 # then reads the right counts after a rollback; nothing reads them now.
 _PEER_FAILS_FILE = "data/peer_fails.json"
-_PEER_FAILS_SAVED: dict = __import__("newtrackon.store", fromlist=["load"]).load(_PEER_FAILS_FILE)
+_PEER_FAILS_SAVED: dict = _url_store("_PEER_FAILS_SAVED", _PEER_FAILS_FILE, peer=True)
 
 
 # Fake-peer / inflated-count checks (random-hash authenticity tests).
-FAKE_N: dict = {}      # url -> fake peers seen at latest test
-INFLATED: dict = {}    # url -> (seeders, leechers) reported when the truth is 1/1
+FAKE_N: dict = _url_store("FAKE_N", probe="fake_n", peer=True)  # url -> fake peers seen at latest test
+INFLATED: dict = _url_store("INFLATED", probe="inflated", peer=True)  # url -> (seeders, leechers) reported when the truth is 1/1
 _FAKE_FAILS_FILE = "data/fake_fails.json"
-_FAKE_FAILS_SAVED: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_FAILS_FILE)  # for a rollback only
+_FAKE_FAILS_SAVED: dict = _url_store("_FAKE_FAILS_SAVED", _FAKE_FAILS_FILE, peer=True)  # for a rollback only
 
 
 # Fake peers: judged over the last PEER_WINDOW probe results like the peer test, not a streak, so returning
 # fake peers every other check can't dodge it. FAKE_FAILS[url] = fakes in that window.
 _FAKE_HIST_FILE = "data/fake_hist.json"
-FAKE_HIST: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_HIST_FILE)
+FAKE_HIST: dict = _url_store("FAKE_HIST", _FAKE_HIST_FILE, peer=True)
 FAKE_FAILS = _Count(lambda url: (FAKE_HIST.get(url) or []).count(1))
 
 
@@ -851,9 +886,9 @@ def _ctr_set(d, path, url, n):
 
 
 # Informational tracker-hygiene checks (no score effect).
-STALE: dict = {}   # url -> True if it keeps handing out a peer after 'stopped'
-CID_OK: dict = {}  # url -> True if it rejects a made-up UDP connection ID, False if it accepts one
-CID_T: dict = {}  # url -> when that was last tested
+STALE: dict = _url_store("STALE", probe="stale", peer=True)  # url -> True if it keeps handing out a peer after 'stopped'
+CID_OK: dict = _url_store("CID_OK", probe="cid_ok", protocol=True)  # url -> True if it rejects a made-up UDP connection ID, False if it accepts one
+CID_T: dict = _url_store("CID_T", probe="cid_t", protocol=True)  # url -> when that was last tested
 CID_EVERY = 86400  # once a day: the made-up ID is the one request no real client sends
 
 
@@ -862,19 +897,24 @@ _PROBE_FILE = "data/probe_state.json"
 
 
 def _probe_save():
-    _jsave({"peer_ok": PEER_OK, "fake_n": FAKE_N, "inflated": INFLATED, "stale": STALE, "cid_ok": CID_OK, "cid_t": CID_T}, _PROBE_FILE)
+    g = globals()
+    _jsave({s["probe"]: g[n] for n, s in _STORES.items() if s["probe"]}, _PROBE_FILE)
 
 
-try:
-    _st = __import__("newtrackon.store", fromlist=["load"]).load(_PROBE_FILE)
-    PEER_OK.update(_st.get("peer_ok", {}))
-    FAKE_N.update(_st.get("fake_n", {}))
-    INFLATED.update({k: (tuple(v) if v else v) for k, v in _st.get("inflated", {}).items()})
-    STALE.update(_st.get("stale", {}))
-    CID_OK.update(_st.get("cid_ok", {}))
-    CID_T.update(_st.get("cid_t", {}))
-except Exception:
-    pass
+def _probe_load():
+    """Fill the probe stores from data/probe_state.json (at start, and a simulated restart)."""
+    g = globals()
+    try:
+        st = __import__("newtrackon.store", fromlist=["load"]).load(_PROBE_FILE, kind=dict)
+        for n, s in _STORES.items():
+            if s["probe"]:
+                v = st.get(s["probe"], {})
+                g[n].update({k: (tuple(x) if x else x) for k, x in v.items()} if n == "INFLATED" else v)
+    except Exception:
+        logger.exception("could not read %s", _PROBE_FILE)
+
+
+_probe_load()
 
 
 # Dual-stack test. FAMS: {url: {"v4": bool, "v6": bool}}; FAM_FAILS: {url: {"n": consecutive fails, "fam": "v4"|"v6"}}
@@ -892,10 +932,10 @@ def _jsave(d, path):
     store.save(d, path)
 
 
-FAM_FAILS: dict = _jload(_FAM_FAILS_FILE)
-FAMS: dict = _jload(_FAMS_FILE)
+FAM_FAILS: dict = _url_store("FAM_FAILS", _FAM_FAILS_FILE, protocol=True)
+FAMS: dict = _url_store("FAMS", _FAMS_FILE, protocol=True)
 _DOWN_WHY_FILE = "data/down_why.json"
-DOWN_WHY: dict = _jload(_DOWN_WHY_FILE)
+DOWN_WHY: dict = _url_store("DOWN_WHY", _DOWN_WHY_FILE, protocol=True)
 
 
 def _nt_down_label(raw):
@@ -982,7 +1022,7 @@ def _nt_down_why_set(url, raw):
 FAM_RECOVER = 2  # good checks in a row before a confirmed-dead address counts as answering again (3 failures confirm it)
 FAM_HIST_N = 20  # per-family answers kept for the tracker page ("IPv6 answered 2 of the last 20 checks")
 _FAM_HIST_FILE = "data/fam_hist.json"
-FAM_HIST: dict = _jload(_FAM_HIST_FILE)  # url -> {"v4": [1, 0, ...], "v6": [...]}, oldest first
+FAM_HIST: dict = _url_store("FAM_HIST", _FAM_HIST_FILE, protocol=True)  # url -> {"v4": [1, 0, ...], "v6": [...]}, oldest first
 
 
 def _fam_set(url, fam, res=None):
@@ -1017,13 +1057,13 @@ def _fam_set(url, fam, res=None):
 # Peer test: judge the last PEER_WINDOW conclusive results (n/a ignored), not just a streak.
 PEER_WINDOW = 6
 _PEER_HIST_FILE = "data/peer_hist.json"
-PEER_HIST: dict = _jload(_PEER_HIST_FILE)
+PEER_HIST: dict = _url_store("PEER_HIST", _PEER_HIST_FILE, peer=True)
 
 
 # Peer results are also kept per family ("v4"/"v6"), since a tracker can share peers on one and not the other. (Files
 # from before 2026-10-06 also have a "?" list, from before families were told apart: it's ignored.)
 _PEER_HIST_FAM_FILE = "data/peer_hist_fam.json"
-PEER_HIST_FAM: dict = _jload(_PEER_HIST_FAM_FILE)  # url -> {"v4": [1, 0, ...], "v6": [...]}, oldest first
+PEER_HIST_FAM: dict = _url_store("PEER_HIST_FAM", _PEER_HIST_FAM_FILE, peer=True)  # url -> {"v4": [1, 0, ...], "v6": [...]}, oldest first
 
 
 def _peer_fams(url):
@@ -1045,7 +1085,7 @@ def _peer_fam_bad(url):
 
 
 _SPLIT_FILE = "data/split_hist.json"
-SPLIT_HIST: dict = _jload(_SPLIT_FILE)  # url -> last PEER_WINDOW peer tests: 1 = B was handed back only itself, without A
+SPLIT_HIST: dict = _url_store("SPLIT_HIST", _SPLIT_FILE, peer=True)  # url -> last PEER_WINDOW peer tests: 1 = B was handed back only itself, without A
 SPLIT_MIN = 2  # that many of the last PEER_WINDOW tests, while some tests pass: separate servers not sharing swarms
 SPLIT_MIN_RATE = 1 / 3  # and at least this share of its peer tests pass, or clients rarely meet: that's no peers (Up/Bad)
 
@@ -1087,7 +1127,7 @@ DELAYED_EVERY = 20 * 3600
 DELAYED_RANGE = (300, 900)
 DELAYED_AFFECTS_STATUS = False
 _DELAYED_FILE = "data/delayed_hist.json"
-DELAYED_HIST: dict = _jload(_DELAYED_FILE)  # url -> {fam: {"r": [1, 0, ...], "t": last start, "last": {...}}}
+DELAYED_HIST: dict = _url_store("DELAYED_HIST", _DELAYED_FILE, peer=True)  # url -> {fam: {"r": [1, 0, ...], "t": last start, "last": {...}}}
 DELAYED_PENDING: list = []  # [due time, state from scraper.delayed_start, start time]: in memory (a restart drops them)
 
 
@@ -1138,7 +1178,7 @@ def delayed_due(now=None):
 
 
 _PEER_SEEN_FILE = "data/peer_seen.json"
-PEER_SEEN: dict = _jload(_PEER_SEEN_FILE)  # url -> {"v4"/"v6": what client B was handed in the last peer test, + "ok", "t"}
+PEER_SEEN: dict = _url_store("PEER_SEEN", _PEER_SEEN_FILE, peer=True)  # url -> {"v4"/"v6": what client B was handed in the last peer test, + "ok", "t"}
 
 
 def _peer_seen_set(url, fam, seen, ok):
@@ -1149,7 +1189,7 @@ def _peer_seen_set(url, fam, seen, ok):
 
 
 _NAT_FILE = "data/nat_seen.json"
-NAT_SEEN: dict = _jload(_NAT_FILE)  # url -> {"v4"/"v6": {"ip": private address it handed out, "t"}}: hides clients' addresses
+NAT_SEEN: dict = _url_store("NAT_SEEN", _NAT_FILE, peer=True)  # url -> {"v4"/"v6": {"ip": private address it handed out, "t"}}: hides clients' addresses
 
 
 def _nat_seen_set(url, fam, ip):
@@ -1375,7 +1415,7 @@ def _peer_hist_add(url, ok, fam=None):
 # as a failure: it can't show that it shares peers.
 PEER_NA_DAYS = 7
 _PEER_LAST_FILE = "data/peer_last.json"
-PEER_LAST: dict = _jload(_PEER_LAST_FILE)  # url -> last conclusive peer test (or when we started waiting for one)
+PEER_LAST: dict = _url_store("PEER_LAST", _PEER_LAST_FILE, peer=True)  # url -> last conclusive peer test (or when we started waiting for one)
 _PEER_ANY = [0.0]  # last conclusive peer test for any tracker: the test itself works
 
 
@@ -1457,12 +1497,12 @@ def _monitor_online() -> bool:
 # ---- extras: tracker's own announce interval, latency by region, stats, same-operator groups ----
 _ANN_IV_FILE = "data/ann_iv.json"
 _REGION_FILE = "data/region_lat.json"
-ANN_IV: dict = _jload(_ANN_IV_FILE)
-REGION_LAT: dict = _jload(_REGION_FILE)
+ANN_IV: dict = _url_store("ANN_IV", _ANN_IV_FILE, protocol=True)
+REGION_LAT: dict = _url_store("REGION_LAT", _REGION_FILE)
 
 
 _WARN_FILE = "data/warnings.json"
-WARNINGS: dict = _jload(_WARN_FILE)  # url -> {"msg", "t"}: the 'warning message' in its last successful reply
+WARNINGS: dict = _url_store("WARNINGS", _WARN_FILE, protocol=True)  # url -> {"msg", "t"}: the 'warning message' in its last successful reply
 
 
 def _warn_set(url, msg):
@@ -1603,7 +1643,7 @@ def _junk_broken_now(t):
 
 
 _ELSEWHERE_FILE = "data/elsewhere.json"
-ELSEWHERE: dict = __import__("newtrackon.store", fromlist=["load"]).load(_ELSEWHERE_FILE)  # url -> last check answered only abroad
+ELSEWHERE: dict = _url_store("ELSEWHERE", _ELSEWHERE_FILE, protocol=True)  # url -> last check answered only abroad
 ELSEWHERE_TEXT = "it answers our test clients in other countries, not this site's server"
 
 
@@ -1825,7 +1865,7 @@ def _bad_seed(now=None):
 
 
 _CLOSED_FILE = "data/closed.json"
-CLOSED: dict = _jload(_CLOSED_FILE)  # url -> {"why", "n"}: replies in a row saying it's private or whitelist-only
+CLOSED: dict = _url_store("CLOSED", _CLOSED_FILE, protocol=True)  # url -> {"why", "n"}: replies in a row saying it's private or whitelist-only
 CLOSED_LIMIT = 3
 
 
@@ -1865,8 +1905,8 @@ def _ann_iv_set(url, iv):
 
 
 _REGION_TS_FILE = "data/region_ts.json"  # {url: {region: [[ts, ms], ...]}}
-_rs = _jload(_REGION_TS_FILE)
-REGION_SAMPLES: dict = _rs if all(isinstance(v, dict) and all(isinstance(x, list) for x in v.values()) for v in _rs.values()) else {}
+REGION_SAMPLES: dict = _url_store("REGION_SAMPLES", _REGION_TS_FILE,
+                                  check=lambda d: all(isinstance(v, dict) and all(isinstance(x, list) for x in v.values()) for v in d.values()))
 
 
 def _region_set(url, d):
@@ -1891,8 +1931,7 @@ def _region_set(url, d):
 _LAT_HIST_FILE = "data/lat_hist.json"
 LAT_HIST_STEP = 7200
 LAT_HIST_DAYS = 30
-_lh = _jload(_LAT_HIST_FILE)
-LAT_HIST: dict = _lh if isinstance(_lh, dict) else {}
+LAT_HIST: dict = _url_store("LAT_HIST", _LAT_HIST_FILE)
 
 
 def _lat_hist_add(url, now):
@@ -1930,31 +1969,11 @@ def _lat_hist_add(url, now):
 # A day is added once the tracker's history has moved past it. Latency is the median of that day's LAT_HIST values,
 # each already a 48 h median: a typical figure, not that day's own median. Trackers removed from the list keep theirs.
 _DAILY_FILE = "data/daily.json"
-LAST_REC: dict = {}  # url -> time of its newest slot (in memory; after a restart, last_checked stands in)
+LAST_REC: dict = _url_store("LAST_REC")  # url -> time of its newest slot (in memory; after a restart, last_checked stands in)
 _DAILY_SAVE: dict = {}  # "t": time of the last save, "dirty": unsaved days (recomputed from historic if lost)
 
 
-def _daily_load(path):
-    """Load the permanent summary. A file that exists but can't be read is moved aside, never overwritten."""
-    if not _os.path.exists(path):
-        return {}
-    try:
-        with open(path) as f:
-            d = _json.load(f)
-        if isinstance(d, dict):
-            return d
-    except Exception:
-        pass
-    bad = "%s.bad-%d" % (path, int(time()))
-    try:
-        _os.replace(path, bad)
-    except OSError:
-        pass
-    logger.error("daily summary: %s unreadable, kept as %s; starting a new one", path, bad)
-    return {}
-
-
-DAILY: dict = _daily_load(_DAILY_FILE)
+DAILY: dict = _url_store("DAILY", _DAILY_FILE)  # an unreadable file is set aside, never overwritten
 
 
 def _day(ts):
@@ -2129,7 +2148,7 @@ _EVENTS_FILE = "data/events.json"
 _LAST_STATE_FILE = "data/last_state.json"
 _ev = _jload(_EVENTS_FILE)
 EVENTS: list = _ev if isinstance(_ev, list) else []
-LAST_STATE: dict = _jload(_LAST_STATE_FILE)
+LAST_STATE: dict = _url_store("LAST_STATE", _LAST_STATE_FILE)
 
 # ---- removed trackers, kept for good so their page can say what happened: {host: {url, t, reason, added, country, network}} ----
 _REMOVED_FILE = "data/removed.json"
@@ -2666,7 +2685,7 @@ def _nt_quiet(t):
 
 
 # ---- second opinion before blaming a tracker: our DNS or our network path may be the problem ----
-_NT_SKIPS: dict = {}
+_NT_SKIPS: dict = _url_store("_NT_SKIPS")
 _NT_SIGNAL_FILE = "data/local_faults.json"
 
 
@@ -2840,20 +2859,10 @@ def _attach_extras(trackers):
 
 
 # ---- a tracker's own records follow the tracker, not its URL: when a better protocol replaces it (UDP for HTTP),
-# everything stored under the old URL moves to the new one ----
-_URL_STORES = (("_PEER_FAILS_SAVED", "_PEER_FAILS_FILE"), ("_FAKE_FAILS_SAVED", "_FAKE_FAILS_FILE"), ("FAKE_HIST", "_FAKE_HIST_FILE"),
-               ("FAM_FAILS", "_FAM_FAILS_FILE"), ("FAMS", "_FAMS_FILE"), ("DOWN_WHY", "_DOWN_WHY_FILE"),
-               ("FAM_HIST", "_FAM_HIST_FILE"), ("PEER_HIST", "_PEER_HIST_FILE"), ("PEER_LAST", "_PEER_LAST_FILE"),
-               ("ANN_IV", "_ANN_IV_FILE"), ("REGION_LAT", "_REGION_FILE"), ("WARNINGS", "_WARN_FILE"),
-               ("CLOSED", "_CLOSED_FILE"), ("REGION_SAMPLES", "_REGION_TS_FILE"), ("LAT_HIST", "_LAT_HIST_FILE"),
-               ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"), ("PEER_HIST_FAM", "_PEER_HIST_FAM_FILE"),
-               ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"),
-               ("DELAYED_HIST", "_DELAYED_FILE"), ("REINSTATED", "_REINSTATED_FILE"), ("ELSEWHERE", "_ELSEWHERE_FILE"))
-_URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "CID_T", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
-
+# everything stored under the old URL moves to the new one (every store in _STORES) ----
 
 _REINSTATED_FILE = "data/reinstated.json"
-REINSTATED: dict = _jload(_REINSTATED_FILE)  # url -> when it was reinstated at its operator's request (kept 3 days)
+REINSTATED: dict = _url_store("REINSTATED", _REINSTATED_FILE)  # url -> when it was reinstated at its operator's request (kept 3 days)
 
 
 def _reinstated_mark(url, now=None):
@@ -2864,24 +2873,19 @@ def _reinstated_mark(url, now=None):
     _jsave(REINSTATED, _REINSTATED_FILE)
 
 
-_PEER_STORES = ("_PEER_FAILS_SAVED", "_FAKE_FAILS_SAVED", "FAKE_HIST", "PEER_HIST", "PEER_LAST", "PEER_HIST_FAM", "SPLIT_HIST", "NAT_SEEN",
-                "PEER_SEEN", "DELAYED_HIST")
+def _store_drop(url, flag):
+    """Drop a tracker's records from every store marked `flag` ("peer" or "protocol"), saving the files that changed."""
+    g = globals()
+    for n, s in _STORES.items():
+        if s[flag] and g[n].pop(url, None) is not None and s["file"]:
+            _jsave(g[n], s["file"])
+    _probe_save()
 
 
 def _peer_reset(url):
     """Forget a tracker's peer-test results (a reinstated tracker is judged on tests after its fix, not the failures
     that got it removed; its carried Up/Bad clock still removes it after 3 new failures if it isn't fixed)."""
-    g = globals()
-    files = dict(_URL_STORES)
-    for name in _PEER_STORES:
-        if g[name].pop(url, None) is not None:
-            _jsave(g[name], g[files[name]])
-    for name in ("PEER_OK", "FAKE_N", "INFLATED", "STALE"):
-        g[name].pop(url, None)
-    _probe_save()
-
-
-_PROTOCOL_STORES = ("FAM_FAILS", "FAM_HIST", "FAMS", "CLOSED", "WARNINGS", "ANN_IV", "DOWN_WHY", "ELSEWHERE")
+    _store_drop(url, "peer")
 
 
 def _protocol_reset(url):
@@ -2889,13 +2893,7 @@ def _protocol_reset(url):
     depends on the protocol starts afresh, so the old protocol's failed peer tests or dead address can't remove the new
     one at its first check. A clock that's still running removes it soon if the new protocol has the same fault."""
     _peer_reset(url)
-    g, files = globals(), dict(_URL_STORES)
-    for name in _PROTOCOL_STORES:
-        if g[name].pop(url, None) is not None:
-            _jsave(g[name], g[files[name]])
-    CID_OK.pop(url, None)
-    CID_T.pop(url, None)
-    _probe_save()
+    _store_drop(url, "protocol")
 
 
 def _nt_migrate_url(old, new):
@@ -2905,9 +2903,9 @@ def _nt_migrate_url(old, new):
         return []
     g = globals()
     moved = []
-    for name, file_var in _URL_STORES:
-        d = g.get(name)
-        if not isinstance(d, dict) or old not in d:
+    for name, s in _STORES.items():
+        d = g[name]
+        if old not in d:
             continue
         v = d.pop(old)
         if name == "DAILY" and new in d:  # keep both, one row per day (the new URL's rows win a clash)
@@ -2915,13 +2913,9 @@ def _nt_migrate_url(old, new):
             days.update({r[0]: r for r in d[new]})
             v = [days[k] for k in sorted(days)]
         d[new] = v
-        _jsave(d, g[file_var])
+        if s["file"]:
+            _jsave(d, s["file"])
         moved.append(name)
-    for name in _URL_MEMORY:
-        d = g.get(name)
-        if isinstance(d, dict) and old in d:
-            d[new] = d.pop(old)
-            moved.append(name)
     _probe_save()
     logger.info("Moved %s's records to %s: %s", old, new, ", ".join(moved) or "nothing")
     return moved

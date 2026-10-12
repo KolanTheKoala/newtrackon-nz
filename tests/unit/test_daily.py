@@ -67,11 +67,11 @@ class TestDailyUpdate:
     def test_unreadable_file_is_kept_aside_not_overwritten(self) -> None:
         with open("data/daily.json", "w") as f:
             f.write('{"udp://x:1/announce": [["2026-01-01", 100')
-        assert T._daily_load("data/daily.json") == {}
+        assert T._store_load("DAILY") == {}
         assert not os.path.exists("data/daily.json")
         bad = glob.glob("data/daily.json.bad-*")
         assert len(bad) == 1 and open(bad[0]).read().startswith('{"udp://x:1')
-        assert T._daily_load("data/missing.json") == {}  # no file yet: nothing to keep
+        assert T._store_load("DAILY") == {}  # no file now: nothing to keep
 
 
 def _rows(n, start="2026-08-20"):

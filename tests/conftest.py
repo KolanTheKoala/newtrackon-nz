@@ -51,12 +51,7 @@ def clean_global_state() -> Generator[None]:
     persistence.submitted_data.clear()
 
 
-_NT_STATE_DICTS = (
-    "PEER_OK", "_PEER_FAILS_SAVED", "_FAKE_FAILS_SAVED", "FAKE_N", "INFLATED", "STALE", "CID_OK", "CID_T", "FAM_FAILS", "FAMS", "DOWN_WHY",
-    "ANN_IV", "REGION_LAT", "REGION_SAMPLES", "REGION_TS", "LAT_HIST", "PEER_HIST", "LAST_STATE", "_NT_SKIPS", "_NT_DEL_REASON",
-    "DAILY", "LAST_REC", "_DAILY_SAVE", "REMOVED", "WARNINGS", "CLOSED", "FAKE_HIST", "PEER_LAST", "FAM_HIST", "PEER_HIST_FAM", "PEER_HIST", "NAT_SEEN", "SPLIT_HIST", "PEER_SEEN", "DELAYED_HIST",
-    "REINSTATED", "ELSEWHERE",
-)
+_NT_STATE_DICTS = ("_NT_DEL_REASON", "_DAILY_SAVE", "REMOVED")  # besides every per-tracker store (tracker._STORES)
 
 
 @pytest.fixture(autouse=True)
@@ -82,9 +77,8 @@ def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[N
     monkeypatch.setattr(T, "_nt_public_ips", lambda host: set())
     monkeypatch.setattr(T, "_nt_local_fault", lambda t, err: False)
     monkeypatch.setattr(T, "_notify", lambda ev: None)
-    for name in _NT_STATE_DICTS:
-        if isinstance(getattr(T, name, None), dict):
-            monkeypatch.setattr(T, name, {})
+    for name in (*T._STORES, *_NT_STATE_DICTS):
+        monkeypatch.setattr(T, name, {})
     monkeypatch.setattr(T, "EVENTS", [])
     monkeypatch.setattr(T, "FORCE_CHECK", set())
     monkeypatch.setattr(T, "DELAYED_PENDING", [])

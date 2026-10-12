@@ -199,19 +199,14 @@ class Sim:
         """The app restarts: every store is read back from the files it wrote; what's only in memory is gone."""
         import copy
         url = self.tr.url
-        before = {n: copy.deepcopy(getattr(T, n).get(url)) for n, _ in T._URL_STORES}
-        for name, var in T._URL_STORES:
-            self.mp.setattr(T, name, T._jload(getattr(T, var)))
+        files = [n for n, s in T._STORES.items() if s["file"]]
+        before = {n: copy.deepcopy(getattr(T, n).get(url)) for n in files}
+        for name in T._STORES:
+            self.mp.setattr(T, name, T._store_load(name))  # its file's contents, or empty (memory, probe state)
+        T._probe_load()
         self.mp.setattr(T, "REMOVED", T._jload(T._REMOVED_FILE))
-        for name in T._URL_MEMORY:
-            self.mp.setattr(T, name, {})
-        st = T._jload(T._PROBE_FILE)
-        T.PEER_OK.update(st.get("peer_ok", {}))
-        T.FAKE_N.update(st.get("fake_n", {}))
-        T.CID_OK.update(st.get("cid_ok", {}))
-        T.CID_T.update(st.get("cid_t", {}))
         self.mp.setattr(T, "_PEER_ANY", [0.0])
-        after = {n: getattr(T, n).get(url) for n, _ in T._URL_STORES}
+        after = {n: getattr(T, n).get(url) for n in files}
         assert after == before, {n: (before[n], after[n]) for n in before if before[n] != after[n]}
 
     def first(self, state):
@@ -534,9 +529,7 @@ def _fresh_state(monkeypatch) -> None:
     """Forget everything between two runs in one test: every store, in memory and on disk."""
     import glob
     import os
-    for name, _ in T._URL_STORES:
-        monkeypatch.setattr(T, name, {})
-    for name in T._URL_MEMORY + ("REMOVED", "REINSTATED"):
+    for name in (*T._STORES, "REMOVED"):
         monkeypatch.setattr(T, name, {})
     monkeypatch.setattr(T, "EVENTS", [])
     monkeypatch.setattr(T, "_PEER_ANY", [0.0])

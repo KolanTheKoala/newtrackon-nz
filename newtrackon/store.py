@@ -36,18 +36,34 @@ def save(obj, path: str) -> bool:
         return False
 
 
-def load(path: str, default=None):
+def _set_aside(path: str) -> str | None:
+    bad = "%s.bad-%d" % (path, int(time.time()))
+    try:
+        os.replace(path, bad)
+    except OSError:
+        return None
+    return bad
+
+
+def set_aside(path: str, why: str) -> None:
+    """Move a file whose contents can't be used out of the way (<file>.bad-<time>), and say so."""
+    bad = _set_aside(path)
+    logger.error("%s %s: starting it empty%s", path, why, ", moved to %s" % bad if bad else "")
+
+
+def load(path: str, default=None, kind=None):
+    """kind (dict, list...): a file holding something else is set aside like an unreadable one."""
     empty = {} if default is None else default
     try:
         with open(path) as f:
-            return json.load(f)
+            obj = json.load(f)
     except FileNotFoundError:
         return empty
     except Exception:
-        bad = "%s.bad-%d" % (path, int(time.time()))
-        try:
-            os.replace(path, bad)
-        except OSError:
-            bad = None
+        bad = _set_aside(path)
         logger.exception("unreadable %s%s: starting it empty", path, ", moved to %s" % bad if bad else "")
         return empty
+    if kind is not None and not isinstance(obj, kind):
+        set_aside(path, "holds a %s, not a %s" % (type(obj).__name__, kind.__name__))
+        return empty
+    return obj
