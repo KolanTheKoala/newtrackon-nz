@@ -1043,13 +1043,14 @@ def _swarm_empty(resp, want):
     return not _probe_peers(resp) and not any(isinstance(c, int) and c > 0 for c in counts)
 
 
-def peer_probe(only_family: int | None = None) -> bool | None:
+def peer_probe(only_family: int | None = None, cid: bool = False) -> bool | None:
     """Authenticity tests on the random hash the check just announced from the VPS (as seeder A).
     The second client B announces from a DIFFERENT IP (the AirVPN exit), so trackers that merge
     clients sharing an IP can't fail unfairly. No tunnel -> peer test is n/a (never a fail).
     peer test  - B must be handed A;  fake peers - nothing else may appear; counts ~1/1;
     stale      - after A sends 'stopped', B must no longer be handed A;
-    cid (UDP)  - an announce with a made-up connection ID must be refused (BEP 15)."""
+    cid (UDP)  - only if cid: an announce with a made-up connection ID must be refused (BEP 15). It's the one request
+                 no real client sends, so the check asks for it once a day (tracker.CID_EVERY), not every time."""
     p = getattr(rtt, "probe", None)
     extra = {"foreign": None, "inflated": None, "stale": None, "cid_ok": None}
     rtt.probe_extra = extra
@@ -1101,18 +1102,19 @@ def peer_probe(only_family: int | None = None) -> bool | None:
                 pass
             if fb and extra.get("stale"):  # same-IP pass whose peer outlives "stopped" = echoed IP entry, not real peer sharing
                 ok, extra["stale"], extra["inconclusive"] = None, None, True  # a fallback result only ever counts as a pass, never a fail
-            try:
-                bogus = struct.unpack("!q", urandom(8))[0]
-                rq, t = udp_create_announce_request(bogus, urandom(20), generate_peer_id(), left=1, port=want + 2, event=2)
-                sa_.settimeout(3)
-                sa_.sendall(rq)
+            if cid:
                 try:
-                    udp_parse_announce_response(sa_.recv(2048), t, sa_.family)
-                    extra["cid_ok"] = False
-                except Exception:
-                    extra["cid_ok"] = True
-            except OSError:
-                pass
+                    bogus = struct.unpack("!q", urandom(8))[0]
+                    rq, t = udp_create_announce_request(bogus, urandom(20), generate_peer_id(), left=1, port=want + 2, event=2)
+                    sa_.settimeout(3)
+                    sa_.sendall(rq)
+                    try:
+                        udp_parse_announce_response(sa_.recv(2048), t, sa_.family)
+                        extra["cid_ok"] = False
+                    except Exception:
+                        extra["cid_ok"] = True
+                except OSError:
+                    pass
         except Exception:
             pass
         finally:
@@ -1221,18 +1223,25 @@ def peer_probe(only_family: int | None = None) -> bool | None:
     return ok
 
 
-_EXIT_PUB: dict = {}  # (source address, family) -> (public address, when looked up): what trackers see an exit as
+_EXIT_PUB: dict = {}  # (source address, family) -> (public address, when looked up, AirVPN server): what trackers see
 EXIT_PUB_TTL = 12 * 3600
 
 
-def _exit_public(src, family, recorded=None):
+def _exit_endpoint(src):
+    """The AirVPN server the exit with this source address is on now: data/exits.json, rewritten whenever the VPS moves
+    a tunnel to another server (airvpn-rotate.sh, every 6 hours each)."""
+    return next((e.get("endpoint") for e in (_exits() or {}).values() if src in (e.get("src4"), e.get("src6"))), None)
+
+
+def _exit_public(src, family, recorded=None, fresh=False):
     """The public address a VPN exit's traffic comes from, looked up through that exit (the same service run.py asks
-    for this server's own address) and kept 12 hours. data/probe_src.json's exit4/exit6 were written by hand and went
-    out of date; they're only the fallback when the lookup fails."""
+    for this server's own address) and kept 12 hours, or until the exit moves to another server (fresh: look it up
+    again now). data/probe_src.json's exit4/exit6 were written by hand and went out of date; they're only the fallback
+    when the lookup fails."""
     import ipaddress as _ia
-    now = time()
+    now, ep = time(), _exit_endpoint(src)
     hit = _EXIT_PUB.get((src, family))
-    if hit and now - hit[1] < EXIT_PUB_TTL:
+    if hit and not fresh and now - hit[1] < EXIT_PUB_TTL and hit[2] == ep:
         return hit[0]
     pub = None
     try:
@@ -1247,7 +1256,7 @@ def _exit_public(src, family, recorded=None):
     except Exception:
         pass
     if pub:
-        _EXIT_PUB[(src, family)] = (pub, now)
+        _EXIT_PUB[(src, family)] = (pub, now, ep)
         return pub
     return recorded
 
@@ -1283,8 +1292,8 @@ def peer_probe_exits(url):
     blocks this server, or the route from here is broken): client A announces from one exit, client B from another,
     and B must be handed A at that exit's public address. Like peer_probe: ok, and the details in rtt.probe_extra.
     None with exit_blocked (our limit, never held against the tracker) when it can't be run or can't be judged here:
-    fewer than two exits, no exit got an answer, or A came back at a public address that isn't its exit's (the exit
-    list, kept by hand, may be out of date)."""
+    fewer than two exits, no exit got an answer, or A came back at a public address that isn't its exit's, even
+    looked up again (a proxy in front)."""
     from urllib.parse import urlparse as _up
     p = _up(url)
     port = p.port or (443 if p.scheme == "https" else 80)
@@ -1350,6 +1359,11 @@ def peer_probe_exits(url):
             extra["fam"] = name
             ok = _probe_eval(resp, want, extra, a_ok=lambda ip, pub=pub_a: _same_addr(ip, pub))
             seen = extra.get("seen") or {}
+            if not ok and seen.get("a") == "other":
+                pub_now = _exit_public(src_a, fam, pub_a, fresh=True)  # the exit may have moved since we looked it up
+                if pub_now != pub_a:
+                    ok = _probe_eval(resp, want, extra, a_ok=lambda ip, pub=pub_now: _same_addr(ip, pub))
+                    seen = extra.get("seen") or {}
             if not ok and seen.get("a") == "other":
                 # A came back at a public address that isn't its exit's: a proxy in front, or our exit list is out of
                 # date. Can't tell from here, so no verdict, and it's never held against the tracker

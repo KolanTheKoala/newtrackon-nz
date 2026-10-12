@@ -1249,3 +1249,24 @@ class TestDelayedPeerTest:
         b, b_stop, a_stop = sent[1:]
         assert b[0] == "10.9.0.2" and b[3] == st["port"] + 1 and b[5] == sent[0][5] and b[4] == 2 and b_stop[4] == 3
         assert a_stop[0] is None and a_stop[1] == sent[0][1] and a_stop[4] == 3
+
+
+@pytest.mark.parametrize("cid", [True, False])
+def test_the_made_up_connection_id_only_when_asked(monkeypatch: pytest.MonkeyPatch, cid) -> None:
+    """It's the one request no real client sends: the check asks for it once a day (tracker.CID_EVERY)."""
+    import socket
+    sent = []
+
+    class S:
+        def close(self): pass
+        def settimeout(self, t): pass
+        def sendall(self, b): sent.append(b)
+        def recv(self, n): raise TimeoutError  # refused, as BEP 15 asks
+
+    want = scraper.probe_port(0x76FD)
+    monkeypatch.setattr(scraper, "probe_port", lambda base: want)
+    monkeypatch.setattr(scraper, "_udp_session", lambda fam, sa, src: (S(), lambda *a: {"peers": [{"IP": "192.0.2.5", "port": want}]}))
+    monkeypatch.setattr(scraper, "_probe_srcs", lambda fam, key=None: ["10.0.0.1"])
+    scraper.rtt.probe = ("udp", b"h" * 20, socket.AF_INET, ("192.0.2.1", 6969), b"p" * 20)
+    scraper.peer_probe(cid=cid)
+    assert len(sent) == (1 if cid else 0) and scraper.rtt.probe_extra["cid_ok"] is (True if cid else None)

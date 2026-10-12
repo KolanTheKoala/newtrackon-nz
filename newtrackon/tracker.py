@@ -196,13 +196,14 @@ class Tracker:
                 persistence.raw_data.appendleft(debug)
                 self.latency = scraper.rtt.ms if getattr(scraper.rtt, "ms", None) is not None else int((time() - t1) * 1000)
                 self.latency = _nt_region_avg(self.url) or self.latency
-                self.peer_ok = scraper.peer_probe()
+                self.peer_ok = scraper.peer_probe(cid=time() - CID_T.get(self.url, 0) >= CID_EVERY)
                 PEER_OK[self.url] = self.peer_ok
                 _ex = getattr(scraper.rtt, "probe_extra", None) or {}
                 FAKE_N[self.url] = _ex.get("foreign")
                 INFLATED[self.url] = _ex.get("inflated")
                 STALE[self.url] = _ex.get("stale")
-                CID_OK[self.url] = _ex.get("cid_ok")
+                if _ex.get("cid_ok") is not None:  # tested this time: otherwise the last day's result stands
+                    CID_OK[self.url], CID_T[self.url] = _ex["cid_ok"], int(time())
                 _fr = scraper.family_probe(self.url)
                 _df = next((k for k, v in _fr.items() if not v), None) if len(_fr) == 2 and sum(_fr.values()) == 1 else None
                 _fam_set(self.url, _df, _fr)
@@ -276,6 +277,7 @@ class Tracker:
             INFLATED.pop(self.url, None)
             STALE.pop(self.url, None)
             CID_OK.pop(self.url, None)
+            CID_T.pop(self.url, None)  # tested again once it's back
             if getattr(self, "_nt_partial", False):
                 self._abroad_peer_test()
             _probe_save()
@@ -853,6 +855,8 @@ def _ctr_set(d, path, url, n):
 # Informational tracker-hygiene checks (no score effect).
 STALE: dict = {}   # url -> True if it keeps handing out a peer after 'stopped'
 CID_OK: dict = {}  # url -> True if it rejects a made-up UDP connection ID, False if it accepts one
+CID_T: dict = {}  # url -> when that was last tested
+CID_EVERY = 86400  # once a day: the made-up ID is the one request no real client sends
 
 
 # Persist latest probe results so restarts don't blank the status marks.
@@ -860,7 +864,7 @@ _PROBE_FILE = "data/probe_state.json"
 
 
 def _probe_save():
-    _jsave({"peer_ok": PEER_OK, "fake_n": FAKE_N, "inflated": INFLATED, "stale": STALE, "cid_ok": CID_OK}, _PROBE_FILE)
+    _jsave({"peer_ok": PEER_OK, "fake_n": FAKE_N, "inflated": INFLATED, "stale": STALE, "cid_ok": CID_OK, "cid_t": CID_T}, _PROBE_FILE)
 
 
 try:
@@ -870,6 +874,7 @@ try:
     INFLATED.update({k: (tuple(v) if v else v) for k, v in _st.get("inflated", {}).items()})
     STALE.update(_st.get("stale", {}))
     CID_OK.update(_st.get("cid_ok", {}))
+    CID_T.update(_st.get("cid_t", {}))
 except Exception:
     pass
 
@@ -2855,7 +2860,7 @@ _URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_F
                ("LAST_STATE", "_LAST_STATE_FILE"), ("DAILY", "_DAILY_FILE"), ("PEER_HIST_FAM", "_PEER_HIST_FAM_FILE"),
                ("SPLIT_HIST", "_SPLIT_FILE"), ("NAT_SEEN", "_NAT_FILE"), ("PEER_SEEN", "_PEER_SEEN_FILE"),
                ("DELAYED_HIST", "_DELAYED_FILE"), ("REINSTATED", "_REINSTATED_FILE"), ("ELSEWHERE", "_ELSEWHERE_FILE"))
-_URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
+_URL_MEMORY = ("PEER_OK", "FAKE_N", "INFLATED", "STALE", "CID_OK", "CID_T", "LAST_REC", "_NT_SKIPS")  # in memory (probe ones saved together)
 
 
 _REINSTATED_FILE = "data/reinstated.json"
@@ -2900,6 +2905,7 @@ def _protocol_reset(url):
         if g[name].pop(url, None) is not None:
             _jsave(g[name], g[files[name]])
     CID_OK.pop(url, None)
+    CID_T.pop(url, None)
     _probe_save()
 
 

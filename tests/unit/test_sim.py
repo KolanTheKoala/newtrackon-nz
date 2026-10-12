@@ -60,6 +60,7 @@ class Sim:
         self.mp = monkeypatch
         self.tr = self._tracker(url, added_days)
         self.log: list = []  # (time, state, codes) at every check
+        self.cid: list = []  # when the made-up connection ID was sent
         self.removed = None  # (time, reason)
         mp = monkeypatch
         mp.setattr(T, "time", lambda: self.now)
@@ -123,8 +124,11 @@ class Sim:
         k = self.n[fam] = self.n.get(fam, -1) + 1
         return _probe_result(self._fam_mode(fam), fam, k)
 
-    def _peer_probe(self, only_family=None):
+    def _peer_probe(self, only_family=None, cid=False):
         ok, extra = self._result(self._main_fam())
+        if cid:  # the once-a-day made-up connection ID: refused, as BEP 15 asks
+            self.cid.append(self.now)
+            extra = dict(extra, cid_ok=True)
         scraper.rtt.probe_extra = extra
         self.latest = (ok, extra)
         return ok
@@ -204,6 +208,8 @@ class Sim:
         st = T._jload(T._PROBE_FILE)
         T.PEER_OK.update(st.get("peer_ok", {}))
         T.FAKE_N.update(st.get("fake_n", {}))
+        T.CID_OK.update(st.get("cid_ok", {}))
+        T.CID_T.update(st.get("cid_t", {}))
         self.mp.setattr(T, "_PEER_ANY", [0.0])
         after = {n: getattr(T, n).get(url) for n, _ in T._URL_STORES}
         assert after == before, {n: (before[n], after[n]) for n in before if before[n] != after[n]}
@@ -754,3 +760,32 @@ class TestRefusingThisServer:
     def test_a_new_submission_still_needs_this_server(self, monkeypatch) -> None:
         s = Sim(monkeypatch, lambda d: {"answers": False, "refused": True, "elsewhere": True})
         assert s.resubmit(reinstating=False, url="udp://other.example:6969/announce", expect=False) is None
+
+
+class TestMadeUpConnectionId:
+    """The BEP 15 check (an announce with a made-up connection ID) is the one request no real client sends: once a day per
+    tracker, and again when it's back from being down, not at every check."""
+
+    def test_once_a_day(self, monkeypatch) -> None:
+        sim = Sim(monkeypatch, lambda d: {}).run(5)
+        gaps = [b - a for a, b in zip(sim.cid, sim.cid[1:])]
+        assert 4 <= len(sim.cid) <= 6 and all(DAY <= g < DAY + 4 * HOUR + 600 for g in gaps), [g / HOUR for g in gaps]
+        assert len(sim.log) > 25 and T.CID_OK[sim.tr.url] is True  # every other check keeps the result
+
+    def test_the_result_stands_between_tests(self, monkeypatch) -> None:
+        sim = Sim(monkeypatch, lambda d: {}).run(0.2)
+        assert len(sim.cid) == 1 and len(sim.log) > 1
+        sim.run(0.5)
+        assert len(sim.cid) == 1 and T.CID_OK[sim.tr.url] is True
+
+    def test_again_when_its_back_from_down(self, monkeypatch) -> None:
+        sim = Sim(monkeypatch, lambda d: {"answers": not 1.5 <= d < 1.7}).run(2)
+        back = next(t for t, st, _ in sim.log if t >= START + 1.7 * DAY and st != "down")
+        assert back in sim.cid and len(sim.cid) == 3, [(t - START) / DAY for t in sim.cid]
+
+    def test_a_restart_keeps_the_day(self, monkeypatch) -> None:
+        sim = Sim(monkeypatch, lambda d: {}).run(1.5)
+        sim.restart()
+        sim.run(1.2)
+        gaps = [b - a for a, b in zip(sim.cid, sim.cid[1:])]
+        assert len(sim.cid) == 3 and all(g >= DAY for g in gaps) and T.CID_OK[sim.tr.url] is True

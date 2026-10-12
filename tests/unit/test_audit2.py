@@ -320,6 +320,19 @@ class TestExitsOnlyPeerTest:
         ok, ex = self._run(monkeypatch, lambda: [{"IP": "9.9.9.9", "a": True}])  # a proxy, or our exit list is out of date
         assert ok is None and ex["exit_blocked"] is True
 
+    def test_an_exit_that_moved_since_is_looked_up_again(self, monkeypatch) -> None:
+        from newtrackon import scraper
+        looked = []
+        monkeypatch.setattr(scraper, "_exit_public", lambda src, fam, rec=None, fresh=False: looked.append((src, fresh)) or "208.77.22.27")
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "208.77.22.27", "a": True}])  # the VPS moved the exit to another server
+        assert ok is True and ex["seen"]["a"] == "ok" and looked == [("10.8.0.2", True)]
+
+    def test_still_another_address_after_looking_again_is_no_verdict(self, monkeypatch) -> None:
+        from newtrackon import scraper
+        monkeypatch.setattr(scraper, "_exit_public", lambda src, fam, rec=None, fresh=False: rec)
+        ok, ex = self._run(monkeypatch, lambda: [{"IP": "9.9.9.9", "a": True}])
+        assert ok is None and ex["exit_blocked"] is True
+
     def test_only_itself_is_a_split(self, monkeypatch) -> None:
         ok, ex = self._run(monkeypatch, lambda: [{"IP": "198.51.100.20", "a": False}])
         assert ok is False and ex["split"] is True
@@ -353,3 +366,23 @@ def test_exit_public_address_is_looked_up_through_the_exit(monkeypatch: pytest.M
     assert scraper._exit_public("10.8.0.2", socket.AF_INET, "203.0.113.10") == "146.70.123.114" and len(calls) == 1  # kept
     assert scraper._exit_public("10.8.1.2", socket.AF_INET, "198.51.100.20") == "198.51.100.20"  # lookup failed: the recorded one
     assert calls[0] == "https://ipv4.icanhazip.com/"
+
+
+def test_exit_public_address_is_looked_up_again_when_the_exit_moves(monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+    import requests
+    from newtrackon import scraper
+    answers = iter(["146.70.123.114\n", "208.77.22.27\n", "184.75.208.10\n"])
+
+    class R:
+        def __init__(self):
+            self.text = next(answers)
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, **k: R())
+    monkeypatch.setattr(scraper, "_EXIT_PUB", {})
+    exits = {"airvpn2": {"src4": "10.8.0.2", "endpoint": "184.75.208.162"}}
+    monkeypatch.setattr(scraper, "_exits", lambda: exits)
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET) == "146.70.123.114"
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET) == "146.70.123.114"  # kept
+    exits["airvpn2"]["endpoint"] = "208.77.22.214"  # airvpn-rotate.sh moved it to another server
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET) == "208.77.22.27"
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET, fresh=True) == "184.75.208.10"  # asked to look again
