@@ -24,7 +24,7 @@ def test_udp_upgrade_of_an_up_bad_http_tracker_is_judged_on_udp(sample_tracker) 
     T.LAST_STATE[HTTP] = {"st": "up_bad", "bad": ["hands out no peers (3+ of its last 6 peer tests failed)"], "dead": [],
                           "since": now - int(4.9 * DAY), "bad_since": now - int(4.9 * DAY), "pb_since": now - int(4.9 * DAY),
                           "useless_since": now - int(4.9 * DAY)}
-    T.PEER_HIST[HTTP], T.PEER_HIST_FAM[HTTP], T.PEER_FAILS[HTTP] = [0] * 6, {"v4": [0] * 6}, 6
+    T.PEER_HIST[HTTP], T.PEER_HIST_FAM[HTTP] = [0] * 6, {"v4": [0] * 6}
     t = sample_tracker
     t.url = UDP
     with patch("newtrackon.ingest.db.get_all_data", return_value=[old]), \
@@ -145,7 +145,7 @@ def test_bep34_move_keeps_its_records(sample_tracker, monkeypatch: pytest.Monkey
     old, new = sample_tracker.url, "udp://tracker.example.com:7000/announce"
     T.LAST_STATE[old] = {"st": "up_bad", "bad": ["hands out no peers (3+ of its last 6 peer tests failed)"], "dead": [], "since": 5, "bad_since": 5}
     T.DAILY[old] = [["2026-10-01", 100.0, 48, {}]]
-    T.PEER_HIST_FAM[old], T.PEER_FAILS[old] = {"v4": [0] * 6}, 6
+    T.PEER_HIST_FAM[old] = {"v4": [0] * 6}
     monkeypatch.setattr(scraper, "get_bep_34", lambda host: (True, [("udp", 7000)]))
     monkeypatch.setattr(sample_tracker, "update_ips", lambda: (_ for _ in ()).throw(RuntimeError("stop here")))
     monkeypatch.setattr(T, "_monitor_online", lambda: True)
@@ -244,7 +244,7 @@ def test_removal_needs_its_latest_peer_test_to_fail(sample_tracker, monkeypatch:
     T.LAST_STATE[t.url] = {"st": "up_bad", "bad": ["hands out no peers (3+ of its last 6 peer tests failed)"], "dead": [],
                            "since": now - int(5.1 * DAY), "bad_since": now - int(5.1 * DAY), "pb_since": now - int(5.1 * DAY),
                            "useless_since": now - int(5.1 * DAY)}
-    T.PEER_HIST_FAM[t.url], T.PEER_FAILS[t.url] = {"v4": [0, 0, 0, 0, 0, 1]}, 5  # fixed: its latest test passed
+    T.PEER_HIST_FAM[t.url] = {"v4": [0, 0, 0, 0, 0, 1]}  # 5 failures, but fixed: its latest test passed
     T.PEER_OK[t.url] = True
     t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 336, maxlen=1440)
     t.update_uptime()
@@ -259,7 +259,7 @@ def test_no_fake_peers_removal_once_it_stopped_returning_them(sample_tracker) ->
     T.LAST_STATE[t.url] = {"st": "up_bad", "bad": ["returns fake peers (3+ of its last 6 checks)"], "dead": [],
                            "since": now - int(5.1 * DAY), "bad_since": now - int(5.1 * DAY), "pb_since": now - int(5.1 * DAY),
                            "useless_since": now - int(5.1 * DAY)}
-    T.FAKE_HIST[t.url], T.FAKE_FAILS[t.url] = [1, 1, 1, 1, 0, 0], 4  # fakes earlier, none in its latest two checks
+    T.FAKE_HIST[t.url] = [1, 1, 1, 1, 0, 0]  # fakes earlier, none in its latest two checks
     T.FAKE_N[t.url], T.PEER_OK[t.url] = 0, False  # its latest test failed, but not with fake peers
     t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 336, maxlen=1440)
     t.update_uptime()
@@ -271,7 +271,7 @@ def test_inconclusive_for_7_days_still_leads_to_removal(sample_tracker) -> None:
     T.LAST_STATE[t.url] = {"st": "up_bad", "bad": ["hands out no peers (3+ of its last 6 peer tests failed)"], "dead": [],
                            "since": now - int(5.1 * DAY), "bad_since": now - int(5.1 * DAY), "pb_since": now - int(5.1 * DAY),
                            "useless_since": now - int(5.1 * DAY)}
-    T.PEER_HIST_FAM[t.url], T.PEER_FAILS[t.url] = {"v4": [0] * 6}, 6  # the 7-day rule's failures
+    T.PEER_HIST_FAM[t.url] = {"v4": [0] * 6}  # the 7-day rule's failures
     T.PEER_OK[t.url] = None  # its tests still come back with no result
     T.PEER_LAST[t.url] = now - 13 * DAY
     T._PEER_ANY[0] = now  # the test works for other trackers

@@ -127,7 +127,7 @@ class TestWhatItSays:
 class TestTouchesNothingElse:
     def test_only_its_own_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         names = ("PEER_HIST", "PEER_HIST_FAM", "PEER_SEEN", "NAT_SEEN", "SPLIT_HIST", "FAKE_HIST", "DOWN_WHY", "CLOSED",
-                 "PEER_LAST", "_PEER_ANY", "_FAILSTREAK", "LAST_STATE", "PEER_FAILS", "FAKE_FAILS", "FAM_FAILS")
+                 "PEER_LAST", "_PEER_ANY", "_FAILSTREAK", "LAST_STATE", "_PEER_FAILS_SAVED", "_FAKE_FAILS_SAVED", "FAM_FAILS")
         before = {n: copy.deepcopy(getattr(T, n)) for n in names}
         rec = copy.deepcopy(T.REMOVED[HOST])
         deny = open("data/denylist.txt").read()

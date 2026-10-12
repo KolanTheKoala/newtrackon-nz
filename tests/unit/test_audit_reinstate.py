@@ -18,7 +18,6 @@ def reinstated(sample_tracker):
     t, now = sample_tracker, int(time())
     T.PEER_HIST[t.url] = [0] * 6  # its last 6 peer tests before removal: all failed
     T.PEER_HIST_FAM[t.url] = {"v4": [0] * 6}
-    T.PEER_FAILS[t.url] = 6
     T.REMOVED[t.host] = {"url": t.url, "t": now - 3 * DAY, "reason": "handed out no peers for 5 days (Up/Bad)", "count": 1, "added": now - 30 * DAY}
     T._peer_reset(t.url)  # what accepting the reinstatement does
     ingest._keep_upbad_clock(t.host, t.url)
@@ -50,7 +49,7 @@ def test_still_broken_goes_again_soon(reinstated) -> None:
 def test_through_the_real_acceptance_path(sample_tracker) -> None:
     from unittest.mock import patch
     t, now = sample_tracker, int(time())
-    T.PEER_HIST[t.url], T.PEER_HIST_FAM[t.url], T.PEER_FAILS[t.url] = [0] * 6, {"v4": [0] * 6}, 6
+    T.PEER_HIST[t.url], T.PEER_HIST_FAM[t.url] = [0] * 6, {"v4": [0] * 6}
     T.REMOVED[t.host] = {"url": t.url, "t": now - 3 * DAY, "reason": "handed out no peers for 5 days (Up/Bad)", "count": 1,
                          "added": now - 30 * DAY, "hist": "1" * 48}
     ingest.REINSTATE[t.host] = now

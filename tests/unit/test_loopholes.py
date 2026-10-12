@@ -2,6 +2,7 @@
 that's never conclusive, repeat removals, and reinstatement with a clean history."""
 
 from __future__ import annotations
+from tests.helpers import set_peer_fails
 
 from collections import deque
 from time import time
@@ -42,7 +43,7 @@ class TestBadShare:
         # bad 4.5 days, good 13 h, bad again 1.5 days: never 5 days in a row, but 86% of the week
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "since": now - int(1.5 * DAY), "bad_since": now - int(1.5 * DAY),
                                "bad_log": [[now - 7 * DAY + 3600, now - int(2.05 * DAY)]]}
-        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        set_peer_fails(monkeypatch, t.url, T.PEER_FAIL_LIMIT)
         monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         assert T._nt_upbad_days(t.url, now) < T.UPBAD_DAYS and T._nt_bad_share(t.url, now) >= T.BAD_SHARE
@@ -53,7 +54,7 @@ class TestBadShare:
         now = int(time())
         t = sample_tracker
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "since": now - int(4 * DAY), "bad_since": now - int(4 * DAY)}
-        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        set_peer_fails(monkeypatch, t.url, T.PEER_FAIL_LIMIT)
         monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 4 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
@@ -197,7 +198,7 @@ class TestUselessClock:
         now = int(time())
         T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": now - int(0.5 * DAY),
                                "bad_since": now - int(0.5 * DAY), "useless_since": now - int(5.1 * DAY)}
-        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
+        set_peer_fails(monkeypatch, t.url, T.PEER_FAIL_LIMIT)
         monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()

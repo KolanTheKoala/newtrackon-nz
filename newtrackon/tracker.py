@@ -791,45 +791,53 @@ def _dur(epoch):
 PEER_OK: dict = {}
 
 
-# Consecutive peer-test failures per URL, persisted so a restart doesn't wipe the penalty.
 import json as _json, os as _os
-PEER_FAIL_LIMIT = 3      # this many FAILs in a row ...
+PEER_FAIL_LIMIT = 3      # this many failed peer tests (or fake-peer results) in the last PEER_WINDOW ...
 PEER_FAIL_CAP = 50.0     # ... caps the score here (1 star, red, out of every score-based API list)
+
+
+class _Count:
+    """A read-only {url: n} whose numbers are counted from the histories when asked: never stored apart from them, so
+    they can't disagree with them."""
+
+    def __init__(self, count):
+        self._count = count
+
+    def get(self, url, default=0):
+        return self._count(url) or default
+
+    def __getitem__(self, url):
+        return self._count(url)
+
+    def __contains__(self, url):
+        return bool(self._count(url))
+
+
+# peer_fails.json and fake_fails.json held these counts until 2026-10-13. They're still written, so an image from before
+# then reads the right counts after a rollback; nothing reads them now.
 _PEER_FAILS_FILE = "data/peer_fails.json"
-PEER_FAILS: dict = __import__("newtrackon.store", fromlist=["load"]).load(_PEER_FAILS_FILE)
-
-
-def _peer_fail_set(url, n):
-    if PEER_FAILS.get(url, 0) == n:
-        return
-    if n:
-        PEER_FAILS[url] = n
-    else:
-        PEER_FAILS.pop(url, None)
-    _jsave(PEER_FAILS, _PEER_FAILS_FILE)
+_PEER_FAILS_SAVED: dict = __import__("newtrackon.store", fromlist=["load"]).load(_PEER_FAILS_FILE)
 
 
 # Fake-peer / inflated-count checks (random-hash authenticity tests).
 FAKE_N: dict = {}      # url -> fake peers seen at latest test
 INFLATED: dict = {}    # url -> (seeders, leechers) reported when the truth is 1/1
 _FAKE_FAILS_FILE = "data/fake_fails.json"
-FAKE_FAILS: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_FAILS_FILE)
+_FAKE_FAILS_SAVED: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_FAILS_FILE)  # for a rollback only
 
 
 # Fake peers: judged over the last PEER_WINDOW probe results like the peer test, not a streak, so returning
-# fake peers every other check can't dodge it. FAKE_FAILS[url] = fakes in that window (consumers unchanged).
+# fake peers every other check can't dodge it. FAKE_FAILS[url] = fakes in that window.
 _FAKE_HIST_FILE = "data/fake_hist.json"
 FAKE_HIST: dict = __import__("newtrackon.store", fromlist=["load"]).load(_FAKE_HIST_FILE)
+FAKE_FAILS = _Count(lambda url: (FAKE_HIST.get(url) or []).count(1))
 
 
 def _fake_hist_add(url, fake):
-    h = FAKE_HIST.get(url)
-    if h is None:  # seed from the old streak counter
-        h = [1] * min(FAKE_FAILS.get(url, 0), PEER_WINDOW)
-    h = (h + [1 if fake else 0])[-PEER_WINDOW:]
+    h = ((FAKE_HIST.get(url) or []) + [1 if fake else 0])[-PEER_WINDOW:]
     FAKE_HIST[url] = h
     _jsave(FAKE_HIST, _FAKE_HIST_FILE)
-    _ctr_set(FAKE_FAILS, _FAKE_FAILS_FILE, url, h.count(1))
+    _ctr_set(_FAKE_FAILS_SAVED, _FAKE_FAILS_FILE, url, h.count(1))
 
 
 def _ctr_set(d, path, url, n):
@@ -1007,7 +1015,6 @@ def _fam_set(url, fam, res=None):
 
 
 # Peer test: judge the last PEER_WINDOW conclusive results (n/a ignored), not just a streak.
-# PEER_FAILS[url] = fails within that window, so every existing consumer (>= 3 -> Junk / score 0) is unchanged.
 PEER_WINDOW = 6
 _PEER_HIST_FILE = "data/peer_hist.json"
 PEER_HIST: dict = _jload(_PEER_HIST_FILE)
@@ -1336,12 +1343,21 @@ def _removal_detail(rec, before=None):
     return out, fix
 
 
+def _peer_fails(url):
+    """Failed peer tests in the last PEER_WINDOW, on the family that does best ("hands out no peers" needs every family
+    to fail; one failing family is _peer_fam_bad). 0 for a split swarm: it still works for clients on the same server."""
+    if _split(url):
+        return 0
+    fams = _peer_fams(url)
+    return min(v.count(0) for v in fams.values()) if fams else (PEER_HIST.get(url) or []).count(0)
+
+
+PEER_FAILS = _Count(_peer_fails)
+
+
 def _peer_hist_add(url, ok, fam=None):
-    h = PEER_HIST.get(url)
-    if h is None:  # seed from the old streak counter
-        h = [0] * min(PEER_FAILS.get(url, 0), PEER_WINDOW)
     hf = PEER_HIST_FAM.setdefault(url, {})
-    h = (h + [1 if ok else 0])[-PEER_WINDOW:]
+    h = ((PEER_HIST.get(url) or []) + [1 if ok else 0])[-PEER_WINDOW:]
     PEER_HIST[url] = h
     # fam "*": a result for the tracker as a whole (7 days inconclusive), counted on every family that counts, or on every
     # family it publishes if none has results yet. (Filed under the old "?" alone, a dual-stack tracker whose test was
@@ -1351,10 +1367,7 @@ def _peer_hist_add(url, ok, fam=None):
         hf[key] = (hf.get(key, []) + [1 if ok else 0])[-PEER_WINDOW:]
     _jsave(PEER_HIST, _PEER_HIST_FILE)
     _jsave(PEER_HIST_FAM, _PEER_HIST_FAM_FILE)
-    # "hands out no peers" (Up/Bad) only when every family that counts fails; one failing family is _peer_fam_bad
-    fams = _peer_fams(url)
-    # a split swarm still works for clients on the same server: never "hands out no peers"
-    _peer_fail_set(url, 0 if _split(url) else (min(v.count(0) for v in fams.values()) if fams else h.count(0)))
+    _ctr_set(_PEER_FAILS_SAVED, _PEER_FAILS_FILE, url, _peer_fails(url))
 
 
 # A peer test that's never conclusive (only our first test client is ever answered) would freeze its last 6 results
@@ -2828,7 +2841,7 @@ def _attach_extras(trackers):
 
 # ---- a tracker's own records follow the tracker, not its URL: when a better protocol replaces it (UDP for HTTP),
 # everything stored under the old URL moves to the new one ----
-_URL_STORES = (("PEER_FAILS", "_PEER_FAILS_FILE"), ("FAKE_FAILS", "_FAKE_FAILS_FILE"), ("FAKE_HIST", "_FAKE_HIST_FILE"),
+_URL_STORES = (("_PEER_FAILS_SAVED", "_PEER_FAILS_FILE"), ("_FAKE_FAILS_SAVED", "_FAKE_FAILS_FILE"), ("FAKE_HIST", "_FAKE_HIST_FILE"),
                ("FAM_FAILS", "_FAM_FAILS_FILE"), ("FAMS", "_FAMS_FILE"), ("DOWN_WHY", "_DOWN_WHY_FILE"),
                ("FAM_HIST", "_FAM_HIST_FILE"), ("PEER_HIST", "_PEER_HIST_FILE"), ("PEER_LAST", "_PEER_LAST_FILE"),
                ("ANN_IV", "_ANN_IV_FILE"), ("REGION_LAT", "_REGION_FILE"), ("WARNINGS", "_WARN_FILE"),
@@ -2851,7 +2864,7 @@ def _reinstated_mark(url, now=None):
     _jsave(REINSTATED, _REINSTATED_FILE)
 
 
-_PEER_STORES = ("PEER_FAILS", "FAKE_FAILS", "FAKE_HIST", "PEER_HIST", "PEER_LAST", "PEER_HIST_FAM", "SPLIT_HIST", "NAT_SEEN",
+_PEER_STORES = ("_PEER_FAILS_SAVED", "_FAKE_FAILS_SAVED", "FAKE_HIST", "PEER_HIST", "PEER_LAST", "PEER_HIST_FAM", "SPLIT_HIST", "NAT_SEEN",
                 "PEER_SEEN", "DELAYED_HIST")
 
 
