@@ -778,15 +778,6 @@ def format_uptime_and_downtime_time(trackers_unprocessed: list[Tracker]) -> list
     return trackers_unprocessed
 
 
-def _q15(epoch):
-    """Round a 'down for / working for' duration to the nearest 15 min (min 15): checks run at 15-min resolution."""
-    if not epoch:
-        return epoch
-    now = int(time())
-    d = max(0, now - int(epoch))
-    return now - max(900, int((d + 450) // 900) * 900)
-
-
 def _dur(epoch):
     """Status duration as 'Dd HHh' (whole hours elapsed), e.g. '3d 04h'."""
     d = max(0, int(time()) - int(epoch))
@@ -1022,22 +1013,17 @@ _PEER_HIST_FILE = "data/peer_hist.json"
 PEER_HIST: dict = _jload(_PEER_HIST_FILE)
 
 
-# Peer results are also kept per family ("v4"/"v6"), since a tracker can share peers on one and not the other.
-# "?" holds results from before families were told apart; it counts only until a real family has PEER_WINDOW // 2 results.
+# Peer results are also kept per family ("v4"/"v6"), since a tracker can share peers on one and not the other. (Files
+# from before 2026-10-06 also have a "?" list, from before families were told apart: it's ignored.)
 _PEER_HIST_FAM_FILE = "data/peer_hist_fam.json"
-PEER_HIST_FAM: dict = _jload(_PEER_HIST_FAM_FILE)  # url -> {"v4": [1, 0, ...], "v6": [...], "?": [...]}, oldest first
+PEER_HIST_FAM: dict = _jload(_PEER_HIST_FAM_FILE)  # url -> {"v4": [1, 0, ...], "v6": [...]}, oldest first
 
 
 def _peer_fams(url):
     """The per-family histories that count. A family counts once it has PEER_WINDOW // 2 results (one result is no
-    evidence); until one does, the pre-split '?' history decides, or for a new tracker whatever results there are."""
-    h = PEER_HIST_FAM.get(url) or {}
-    real = {k: v for k, v in h.items() if k != "?" and len(v) >= PEER_WINDOW // 2}
-    if real:
-        return real
-    if h.get("?"):
-        return {"?": h["?"]}
-    return {k: v for k, v in h.items() if k != "?" and v}
+    evidence); until one does, whatever results there are."""
+    h = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k in ("v4", "v6")}
+    return {k: v for k, v in h.items() if len(v) >= PEER_WINDOW // 2} or {k: v for k, v in h.items() if v}
 
 
 def _peer_fam_bad(url):
@@ -1045,7 +1031,7 @@ def _peer_fam_bad(url):
     Not for a split swarm: there which family fails is down to which server each client lands on."""
     if _split(url):
         return None
-    fams = {k: v for k, v in _peer_fams(url).items() if k != "?"}
+    fams = _peer_fams(url)
     bad = [k for k, v in fams.items() if v.count(0) >= PEER_FAIL_LIMIT]
     good = [k for k, v in fams.items() if v.count(0) < PEER_FAIL_LIMIT and len(v) >= PEER_WINDOW // 2]
     return bad[0] if bad and good else None
@@ -1070,7 +1056,7 @@ def _split_info(url):
     h = SPLIT_HIST.get(url) or []
     if h.count(1) < SPLIT_MIN:
         return None
-    fams = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k != "?"} or _peer_fams(url)
+    fams = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k in ("v4", "v6")} or _peer_fams(url)
     passed, tests = sum(v.count(1) for v in fams.values()), sum(len(v) for v in fams.values())
     if not passed:
         return None  # never shares anything: that's no peers, not a split
@@ -1307,10 +1293,10 @@ def _removal_detail(rec, before=None):
         fake = "fake peers" in low
         for fam, s in _peer_evidence(url, before):
             out.append("Last IPv%s peer test: %s." % (fam[-1], _seen_sentence(s)))
-        fams = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k != "?" and v} or _peer_fams(url)
+        fams = {k: v for k, v in (PEER_HIST_FAM.get(url) or {}).items() if k in ("v4", "v6") and v} or _peer_fams(url)
         if _peer_evidence(url, before) or before is None:
             for k, v in sorted(fams.items()):
-                out.append("Passed %d of its last %d %speer tests." % (v.count(1), len(v), "" if k == "?" else "IPv%s " % k[-1]))
+                out.append("Passed %d of its last %d IPv%s peer tests." % (v.count(1), len(v), k[-1]))
             if fake and FAKE_HIST.get(url):
                 h = FAKE_HIST[url]
                 out.append("Returned peers that can't exist, for a random torrent only this site knows, in %d of its last %d checks."
@@ -1355,13 +1341,12 @@ def _peer_hist_add(url, ok, fam=None):
     if h is None:  # seed from the old streak counter
         h = [0] * min(PEER_FAILS.get(url, 0), PEER_WINDOW)
     hf = PEER_HIST_FAM.setdefault(url, {})
-    if not hf and h:
-        hf["?"] = list(h)  # results from before families were told apart
     h = (h + [1 if ok else 0])[-PEER_WINDOW:]
     PEER_HIST[url] = h
-    # fam "*": a result for the tracker as a whole (7 days inconclusive), counted on every family that counts: written to
-    # '?' alone it was ignored once the per-family histories took over
-    keys = [fam] if fam in ("v4", "v6") else ([k for k in _peer_fams(url) if k != "?"] or ["?"]) if fam == "*" else ["?"]
+    # fam "*": a result for the tracker as a whole (7 days inconclusive), counted on every family that counts, or on every
+    # family it publishes if none has results yet. (Filed under the old "?" alone, a dual-stack tracker whose test was
+    # never conclusive was never judged on it: the removal rules wait for evidence on each family.)
+    keys = [fam] if fam in ("v4", "v6") else (list(_peer_fams(url)) or [k for k in ("v4", "v6") if k in (FAMS.get(url) or {})] or ["v4"])
     for key in keys:
         hf[key] = (hf.get(key, []) + [1 if ok else 0])[-PEER_WINDOW:]
     _jsave(PEER_HIST, _PEER_HIST_FILE)
@@ -1486,19 +1471,11 @@ def _warn_set(url, msg):
 HTTP_PEER_TEST_TRUSTED = True
 
 
-# The peer test runs over whichever family answered and keeps one result, so a tracker that shares peers on IPv4 but not
-# on IPv6 (tracker.farted.net, 2026-10-05) gets recorded as failing outright. Until results are kept per family, failing
-# it doesn't remove a tracker that publishes both families (single-family trackers are unaffected).
-PEER_TEST_PER_FAMILY = True  # results are kept per family since 2026-10-06 (_peer_fam_bad)
-
-
 def _peer_rule_applies(url):
     if not (HTTP_PEER_TEST_TRUSTED or str(url).startswith("udp")):
         return False
     alive = [f for f, ok in (FAMS.get(url) or {}).items() if ok]
     if len(alive) >= 2:
-        if not PEER_TEST_PER_FAMILY:
-            return False
         # answering on both families: no removal for the peer test until each family has its own evidence (tracker.farted.net
         # was removed on its pre-split history 20 minutes after per-family testing started, though IPv4 passed)
         h = PEER_HIST_FAM.get(url) or {}

@@ -323,13 +323,13 @@ class TestExitsOnlyPeerTest:
     def test_an_exit_that_moved_since_is_looked_up_again(self, monkeypatch) -> None:
         from newtrackon import scraper
         looked = []
-        monkeypatch.setattr(scraper, "_exit_public", lambda src, fam, rec=None, fresh=False: looked.append((src, fresh)) or "208.77.22.27")
+        monkeypatch.setattr(scraper, "_exit_public", lambda src, fam, fresh=False: looked.append((src, fresh)) or "208.77.22.27")
         ok, ex = self._run(monkeypatch, lambda: [{"IP": "208.77.22.27", "a": True}])  # the VPS moved the exit to another server
         assert ok is True and ex["seen"]["a"] == "ok" and looked == [("10.8.0.2", True)]
 
     def test_still_another_address_after_looking_again_is_no_verdict(self, monkeypatch) -> None:
         from newtrackon import scraper
-        monkeypatch.setattr(scraper, "_exit_public", lambda src, fam, rec=None, fresh=False: rec)
+        monkeypatch.setattr(scraper, "_exit_public", lambda src, fam, fresh=False: None)  # the lookup fails
         ok, ex = self._run(monkeypatch, lambda: [{"IP": "9.9.9.9", "a": True}])
         assert ok is None and ex["exit_blocked"] is True
 
@@ -362,9 +362,9 @@ def test_exit_public_address_is_looked_up_through_the_exit(monkeypatch: pytest.M
         return R()
     monkeypatch.setattr(requests.Session, "get", get)
     monkeypatch.setattr(scraper, "_EXIT_PUB", {})
-    assert scraper._exit_public("10.8.0.2", socket.AF_INET, "203.0.113.10") == "146.70.123.114"
-    assert scraper._exit_public("10.8.0.2", socket.AF_INET, "203.0.113.10") == "146.70.123.114" and len(calls) == 1  # kept
-    assert scraper._exit_public("10.8.1.2", socket.AF_INET, "198.51.100.20") == "198.51.100.20"  # lookup failed: the recorded one
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET) == "146.70.123.114"
+    assert scraper._exit_public("10.8.0.2", socket.AF_INET) == "146.70.123.114" and len(calls) == 1  # kept
+    assert scraper._exit_public("10.8.1.2", socket.AF_INET) is None  # lookup failed: no address (no verdict abroad)
     assert calls[0] == "https://ipv4.icanhazip.com/"
 
 

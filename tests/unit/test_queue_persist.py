@@ -65,11 +65,15 @@ class TestSaveQueue:
         assert seen[1] == ["udp://b.example:2/announce"]
         assert _saved() == []
 
-    def test_crash_while_processing_keeps_nothing_stuck(self) -> None:
+    def test_crash_while_processing_keeps_nothing_stuck(self, caplog: pytest.LogCaptureFixture) -> None:
         ingest.submitted_queue.put_nowait(_tracker("udp://a.example:1/announce"))
-        with patch.object(ingest, "process_new_tracker", side_effect=RuntimeError("boom")), patch.object(ingest, "save_deque_to_disk"):
-            with pytest.raises(RuntimeError):
-                ingest.process_submitted_queue()
+        ingest.submitted_queue.put_nowait(_tracker("udp://b.example:2/announce"))
+        done = []
+        with patch.object(ingest, "process_new_tracker", side_effect=lambda t: done.append(t.url) or (_ for _ in ()).throw(RuntimeError("boom")) if t.url.startswith("udp://a.") else done.append(t.url)), \
+                patch.object(ingest, "save_deque_to_disk"):
+            ingest.process_submitted_queue()  # the worker's own step: logged, and the next one is still checked
+        assert "Unhandled error while processing submitted tracker udp://a.example:1/announce" in caplog.text
+        assert done == ["udp://a.example:1/announce", "udp://b.example:2/announce"]
         assert _saved() == [] and ingest._in_flight == []
 
     def test_not_written_while_restoring(self) -> None:

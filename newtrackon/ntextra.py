@@ -63,6 +63,29 @@ def _state(t):
     """(state, problem codes): the single status rule, tracker.status_rule."""
     return T.status_rule(t)
 
+
+def _up_label(t, st):
+    """The main table's label for the Up states that the score alone doesn't name (Up/New, Up/Slow, Up/Unreliable):
+    {label, emo, color, title}. Worked out here, from the status rule's state, not in the browser."""
+    import math
+    import time
+    sc, ms = int(round(float(t.uptime or 0))), int(t.latency or 0)
+    if st == "up_new":
+        age = round((time.time() - (t.added or 0)) / 86400, 2)
+        cap = math.floor(80 + 20 * min(1.0, age / 7) + 0.5)
+        return {"label": "Up/New", "emo": "\U0001F423", "color": "#4fc3f7",
+                "title": "New tracker (%.1f days old): %sits score can't go above %d yet. The cap rises from 80 to 100 over its "
+                         "first 7 days, so a top score has to be earned." % (
+                             age, "" if getattr(t, "region_lat", None) else "just added, latency by region not measured yet. ", cap)}
+    if st == "up_slow":
+        return {"label": "Up/Slow", "emo": "\U0001F422", "color": "#00e676" if sc >= 90 else "#ffa500",
+                "title": ("Up and passing checks, but average latency across regions is %d ms (300 ms or more)" % ms) if ms >= 300
+                else "Reliable, but its %d ms average latency pulls the score down to %d, under 90" % (ms, sc)}
+    if st == "up_unreliable":
+        return {"label": "Up/Unreliable", "emo": "\U0001F3B2", "color": "#ffa500",
+                "title": "Up now, but score %d is under 90: missed too many recent checks to make the stable list" % sc}
+    return None
+
 def _addr_report(t, now=None):
     """Each published address of a tracker and whether it answers, from the checks: [{ip, fam, ok, since}], or [].
     'not answering' = failed its last 3+ tries and nothing in the last hour."""
@@ -969,6 +992,9 @@ def register(app):
     app.jinja_env.globals["nt_host"] = lambda url: (__import__("urllib.parse").parse.urlparse(str(url or "")).hostname or "").lower()
     app.jinja_env.globals["nt_date"] = _date
     app.jinja_env.globals["nt_state"] = _statekey
+    app.jinja_env.globals["nt_rule"] = _state
+    app.jinja_env.globals["nt_up_label"] = _up_label
+    app.jinja_env.globals["nt_fail_limit"] = T.PEER_FAIL_LIMIT
     app.add_url_rule("/feed.xml", "nt_feed", _feed)
     app.add_url_rule("/feed", "nt_feed2", _feed)
 

@@ -178,14 +178,7 @@ function show(td,x,y){tip.innerHTML='';td._nt.split('\n').forEach(function(l){va
 function hide(){tip.style.display='none'}
 function score(r){for(var i=0;i<r.cells.length;i++){var t=r.cells[i].textContent;if(/[\u2605\u2606]/.test(t)){var k=/(\d+(?:\.\d+)?)\s*$/.exec(t.trim());return k?[+k[1],r.cells[i]]:null}}return null}
 function pc(el){var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),n;while((n=w.nextNode())){var m=/(\d+(?:\.\d+)?)\s*ms\b/.exec(n.nodeValue)||/^\s*(\d+)\s*$/.exec(n.nodeValue);if(m){n.parentNode.style.setProperty('color',C(parseFloat(m[1])),'important');n.parentNode.style.setProperty('font-weight','600','important');break}}}
-function ns(r,td){var st=r.querySelector('.nt-st');if(!st||st.textContent.trim().indexOf('Up/Good')!==0)return;
-  var m=/(\d+)\s*ms/.exec(td.textContent),ms=m?+m[1]:0,s=score(r),sc=s?s[0]:null,lab=null,tp='',S=r.dataset.ntState||'';
-  var ae=r.querySelector('[data-nt-age]'),ag=ae?parseFloat(ae.dataset.ntAge):99,ce=Math.round(80+20*Math.min(1,ag/7));
-  if(S==='up_new'){lab='Up/New';r.dataset.ntnew=1;tp='New tracker ('+ag.toFixed(1)+' days old): '+(td.classList.contains('nt-haslat')?'':'just added, latency by region not measured yet. ')+'its score can\'t go above '+ce+' yet. The cap rises from 80 to 100 over its first 7 days, so a top score has to be earned.'}
-  else if(S==='up_slow'){lab='Up/Slow';tp=ms>=300?'Up and passing checks, but average latency across regions is '+ms+' ms (300 ms or more)':'Reliable, but its '+ms+' ms average latency pulls the score down to '+sc+', under 90'}
-  else if(S==='up_unreliable'){lab='Up/Unreliable';tp='Up now, but score '+sc+' is under 90: missed too many recent checks to make the stable list'}
-  if(!lab)return;st.textContent=lab;var em={'Up/New':'\uD83D\uDC23','Up/Slow':'\uD83D\uDC22','Up/Unreliable':'\uD83C\uDFB2'}[lab];if(em){var es=document.createElement('span');es.className='nt-emo';es.textContent=em;st.appendChild(es)}st.style.setProperty('color',lab==='Up/New'?'#4fc3f7':(lab==='Up/Slow'&&sc!==null&&sc>=90)?'#00e676':'#ffa500','important');st.title=tp}
-function gr(r){var s=score(r);if(!s||s[0]>=90||r.dataset.ntnew)return;r.querySelectorAll('*').forEach(function(e){
+function gr(r){var s=score(r);if(!s||s[0]>=90||r.dataset.ntState==='up_new')return;r.querySelectorAll('*').forEach(function(e){
   if(![].some.call(e.childNodes,function(n){return n.nodeType==3&&n.nodeValue.trim()}))return;
   var c=getComputedStyle(e).color.match(/\d+/g);if(c&&+c[0]>230&&+c[1]>230&&+c[2]>230)e.style.setProperty('color','#8b93a1','important')})}
 function sr(r){var s=score(r);if(!s)return;var c=s[1],n=Math.max(0,Math.min(5,Math.round(s[0]/20)));
@@ -201,7 +194,7 @@ function RUN(){document.querySelectorAll('table').forEach(function(tb){var hr=nu
   tb.querySelectorAll('tr').forEach(function(r){if(idx<0){cols(r).forEach(function(c){if(c[1].tagName=='TH'&&/latency/i.test(c[1].textContent)){idx=c[0];hr=r}})}});
   if(idx<0)return;
   tb.querySelectorAll('tr').forEach(function(r){if(r===hr)return;cols(r).forEach(function(c){if(c[0]!==idx||c[1].tagName!='TD'||c[1].colSpan>1)return;var td=c[1];
-    try{sr(r);pc(td);ns(r,td);gr(r)}catch(e){}
+    try{sr(r);pc(td);gr(r)}catch(e){}
     var te=td.hasAttribute('title')?td:td.querySelector('[title]');
     if(te&&/\d\s*ms/.test(te.getAttribute('title'))){td._nt=te.getAttribute('title');te.removeAttribute('title');td.style.cursor='help';
       if(!td._ntL){td._ntL=1;td.addEventListener('mousemove',function(e){show(td,e.clientX,e.clientY)});td.addEventListener('mouseleave',hide);

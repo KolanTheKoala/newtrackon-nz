@@ -523,36 +523,6 @@ class TestHttpPeerRulePaused:
             assert ntextra._dying(SimpleNamespace(url=url, status=1, last_uptime=0)) is None
 
 
-@pytest.fixture
-def per_family_paused(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(T, "PEER_TEST_PER_FAMILY", False)
-
-
-@pytest.mark.usefixtures("per_family_paused")
-class TestDualStackPeerRulePaused:
-    BAD = ["hands out no peers (3+ of its last 6 peer tests failed)"]
-
-    def _check(self, t, fams: dict, monkeypatch: pytest.MonkeyPatch) -> None:
-        from collections import deque
-        from time import time
-        t.url = "udp://tracker.example.com:6969/announce"
-        T.LAST_STATE[t.url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": int(time() - 6 * 86400),
-                               "bad_since": int(time() - 6 * 86400), "useless_since": int(time() - 6 * 86400)}
-        monkeypatch.setitem(T.PEER_FAILS, t.url, T.PEER_FAIL_LIMIT)
-        monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
-        monkeypatch.setitem(T.FAMS, t.url, fams)
-        t.added, t.last_uptime, t.status, t.historic = int(time()) - 30 * 86400, int(time()), 1, deque([1] * 48, maxlen=1440)
-        t.update_uptime()
-
-    def test_dual_stack_is_not_removed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._check(sample_tracker, {"v4": True, "v6": True}, monkeypatch)
-        assert sample_tracker.to_be_deleted is False
-
-    def test_single_family_still_is(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._check(sample_tracker, {"v4": True}, monkeypatch)
-        assert sample_tracker.to_be_deleted is True
-
-
 class TestPeerTestPerFamily:
     U = "udp://pf.example:6969/announce"
 
@@ -569,13 +539,17 @@ class TestPeerTestPerFamily:
         self._feed([0] * 6, [0] * 6)
         assert T.PEER_FAILS[self.U] == 6 and T._peer_fam_bad(self.U) is None
 
-    def test_old_combined_history_counts_until_families_have_results(self) -> None:
-        T.PEER_HIST[self.U] = [0] * 6  # from before families were told apart: failing
+    def test_an_old_combined_history_is_ignored(self) -> None:
+        T.PEER_HIST_FAM[self.U] = {"?": [0] * 6}  # from before families were told apart (files before 2026-10-06)
         T._peer_hist_add(self.U, True, "v4")
-        assert T.PEER_HIST_FAM[self.U]["?"] == [0] * 6 and T.PEER_FAILS[self.U] == 6  # one IPv4 pass isn't evidence yet
-        T._peer_hist_add(self.U, True, "v4")
-        T._peer_hist_add(self.U, True, "v4")
-        assert "?" not in T._peer_fams(self.U) and T.PEER_FAILS.get(self.U, 0) == 0  # three are
+        assert T._peer_fams(self.U) == {"v4": [1]} and T.PEER_FAILS.get(self.U, 0) == 0
+
+    def test_never_conclusive_counts_on_every_family_it_publishes(self) -> None:
+        T.FAMS[self.U] = {"v4": True, "v6": True}
+        for _ in range(3):
+            T._peer_hist_add(self.U, False, "*")  # 7 days without a conclusive test, before any family has results
+        assert T.PEER_HIST_FAM[self.U] == {"v4": [0] * 3, "v6": [0] * 3} and T.PEER_FAILS[self.U] == 3
+        assert T._peer_rule_applies(self.U)  # judged on it: filed under "?" it never was
 
     def test_both_status_rules_agree_on_up_broken(self, sample_tracker) -> None:
         from collections import deque
@@ -986,8 +960,8 @@ def test_all_three_copies_of_the_status_rule_agree(name, want, sample_tracker, f
     html = flask_client.get("/").get_data(as_text=True)
     row = re.search(r'<tr[^>]*data-nt-host="akl.example"[^>]*>.*?</tr>', html, re.S).group(0)
     table = re.findall(r'<span class="nt-st">.*?>(Up/[A-Za-z]+|Down)<', row, re.S)[0]
-    if want is None:  # healthy: the table says Up/Good and the page script refines it (Up/Slow, Up/New...)
-        assert page not in ("Up/Bad", "Up/Broken", "Up/Junk") and feed is None and table == "Up/Good"
+    if want is None:  # healthy: Up/Good, Up/New, Up/Slow or Up/Unreliable, named by the table itself
+        assert page not in ("Up/Bad", "Up/Broken", "Up/Junk") and feed is None and table in ("Up/Good", "Up/New", "Up/Slow", "Up/Unreliable")
     else:
         assert (page, feed, table) == (want, want, want)
 

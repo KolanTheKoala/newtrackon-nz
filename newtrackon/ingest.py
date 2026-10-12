@@ -445,37 +445,35 @@ def add_one_tracker_to_submitted_queue(url: str) -> None:
     save_queue()
 
 
+def _process_one(tracker) -> None:
+    """Check one submission from the queue (the worker's loop, and process_submitted_queue for tests)."""
+    _in_flight[:] = [tracker.url]
+    _started[0] = time()
+    try:
+        process_new_tracker(tracker)
+        save_deque_to_disk(submitted_data, submitted_history_file)
+    except Exception:
+        logger.exception("Unhandled error while processing submitted tracker %s", tracker.url)
+    finally:
+        _in_flight.clear()
+        submitted_queue.task_done()
+        save_queue()
+        _durations.append(time() - _started[0])
+
+
 def process_submitted_queue() -> None:
+    """Check everything in the queue now, then return."""
     while True:
         try:
             tracker = submitted_queue.get_nowait()
         except Empty:
             break
-        _in_flight[:] = [tracker.url]
-        try:
-            process_new_tracker(tracker)
-            save_deque_to_disk(submitted_data, submitted_history_file)
-        finally:
-            _in_flight.clear()
-            submitted_queue.task_done()
-            save_queue()
+        _process_one(tracker)
 
 
 def submission_worker() -> NoReturn:
     while True:
-        tracker = submitted_queue.get()
-        _in_flight[:] = [tracker.url]
-        _started[0] = time()
-        try:
-            process_new_tracker(tracker)
-            save_deque_to_disk(submitted_data, submitted_history_file)
-        except Exception:
-            logger.exception("Unhandled error while processing submitted tracker %s", tracker.url)
-        finally:
-            _in_flight.clear()
-            submitted_queue.task_done()
-            save_queue()
-            _durations.append(time() - _started[0])
+        _process_one(submitted_queue.get())
 
 
 def _closed_on_submit(url: str) -> str | None:

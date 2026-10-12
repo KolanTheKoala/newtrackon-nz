@@ -1026,14 +1026,6 @@ def _udp_session(family, sa, src):
     return s, ann
 
 
-def _two_distinct(r):
-    """Same-IP fallback only counts if the tracker stored both clients separately (1+ seeder AND 1+ leecher).
-    Trackers that key peers by IP alone merge them into one entry and would fake a pass."""
-    s = r.get("seeds", r.get("complete"))
-    l = r.get("leechers", r.get("incomplete"))
-    return isinstance(s, int) and isinstance(l, int) and s >= 1 and l >= 1
-
-
 def _swarm_empty(resp, want):
     """A same-IP second client's reply: True when the tracker isn't tracking the swarm at all (no peers, and nobody counted,
     right after our seed announced). That can only be a failure; anything else from a same-IP client proves nothing."""
@@ -1233,11 +1225,10 @@ def _exit_endpoint(src):
     return next((e.get("endpoint") for e in (_exits() or {}).values() if src in (e.get("src4"), e.get("src6"))), None)
 
 
-def _exit_public(src, family, recorded=None, fresh=False):
+def _exit_public(src, family, fresh=False):
     """The public address a VPN exit's traffic comes from, looked up through that exit (the same service run.py asks
     for this server's own address) and kept 12 hours, or until the exit moves to another server (fresh: look it up
-    again now). data/probe_src.json's exit4/exit6 were written by hand and went out of date; they're only the fallback
-    when the lookup fails."""
+    again now). None if the lookup fails. (data/probe_src.json's hand-written exit4/exit6 are out of date: unused.)"""
     import ipaddress as _ia
     now, ep = time(), _exit_endpoint(src)
     hit = _EXIT_PUB.get((src, family))
@@ -1257,8 +1248,7 @@ def _exit_public(src, family, recorded=None, fresh=False):
         pass
     if pub:
         _EXIT_PUB[(src, family)] = (pub, now, ep)
-        return pub
-    return recorded
+    return pub
 
 
 def _exit_pairs(family):
@@ -1269,8 +1259,8 @@ def _exit_pairs(family):
             d = _pj.load(f)
     except Exception:
         return []
-    k, pub = ("ip6", "exit6") if family == socket.AF_INET6 else ("ip4", "exit4")
-    return [(x.get(k), _exit_public(x.get(k), family, x.get(pub))) for x in d.get("all", []) if x.get(k)]
+    k = "ip6" if family == socket.AF_INET6 else "ip4"
+    return [(x.get(k), _exit_public(x.get(k), family)) for x in d.get("all", []) if x.get(k)]
 
 
 def _same_addr(ip, want):
@@ -1360,8 +1350,8 @@ def peer_probe_exits(url):
             ok = _probe_eval(resp, want, extra, a_ok=lambda ip, pub=pub_a: _same_addr(ip, pub))
             seen = extra.get("seen") or {}
             if not ok and seen.get("a") == "other":
-                pub_now = _exit_public(src_a, fam, pub_a, fresh=True)  # the exit may have moved since we looked it up
-                if pub_now != pub_a:
+                pub_now = _exit_public(src_a, fam, fresh=True)  # the exit may have moved since we looked it up
+                if pub_now and pub_now != pub_a:
                     ok = _probe_eval(resp, want, extra, a_ok=lambda ip, pub=pub_now: _same_addr(ip, pub))
                     seen = extra.get("seen") or {}
             if not ok and seen.get("a") == "other":
