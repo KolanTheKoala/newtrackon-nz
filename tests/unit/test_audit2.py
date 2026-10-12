@@ -70,9 +70,6 @@ def test_a_restart_doesnt_bring_back_spells_from_before_a_removal() -> None:
                    {"t": now - 1 * DAY, "url": url, "host": "back.example", "type": "added", "text": "is back on the list at its operator's request"},
                    {"t": now - 3600, "url": url, "host": "back.example", "type": "good", "text": "is Up/Good again"}]
     T.LAST_STATE[url] = {"st": "up_good", "bad": [], "dead": [], "since": now - 3600}  # its state now: no Up/Bad spells
-    import importlib.util
-    src = open(importlib.util.find_spec("newtrackon.tracker").origin).read()
-    assert "\n_bad_seed()" not in src and "\n_bad_log_seed()" not in src  # not run at start any more
     assert T._nt_bad_share(url, now) == 0.0 and "bad_since" not in T.LAST_STATE[url]
 
 
@@ -162,6 +159,7 @@ def test_bep34_refusal_says_so(sample_tracker, monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(RuntimeError):
         sample_tracker.update_scheme_from_bep_34()
     assert T._NT_DEL_REASON[sample_tracker.url] == "its own DNS records (BEP 34) say it doesn't accept connections"
+    assert T._NT_DEL_KIND[sample_tracker.url] == "closed"
 
 
 def test_our_resolver_giving_a_private_address_isnt_counted(sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:

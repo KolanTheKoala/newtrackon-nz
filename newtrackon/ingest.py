@@ -635,9 +635,7 @@ def _keep_upbad_clock(host: str, url: str) -> None:
     """Removed for Up/Bad: carry its 5 days over, so a tracker that's still Up/Bad goes again at its next checks
     instead of getting a fresh 5 days. A recovery of 12 hours or more resets it as usual."""
     from newtrackon import tracker as _t
-    r = _t.REMOVED.get(host) or {}
-    why = str(r.get("reason") or "")
-    if "(Up/Bad)" not in why:
+    if _t._removal_kind(_t.REMOVED.get(host) or {}) != "upbad":
         return
     now = int(time())
     # the clock alone, with no state: a stored "Up/Bad" here made its first check (peer tests reset, so not Up/Bad yet)

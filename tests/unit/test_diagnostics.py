@@ -101,6 +101,7 @@ class TestClosedEviction:
         self._check(sample_tracker, 3, T.PEER_FAIL_LIMIT, monkeypatch)
         assert sample_tracker.to_be_deleted is True
         assert T._NT_DEL_REASON[sample_tracker.url] == "it only serves its own torrents (a whitelist)"
+        assert T._NT_DEL_KIND[sample_tracker.url] == "closed"
         assert open("data/denylist.txt").read().split()[0] == sample_tracker.host
 
     def test_not_before_3(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,6 +166,7 @@ class TestUpBadClock:
         self._check(sample_tracker, 5.1, T.PEER_FAIL_LIMIT, monkeypatch)
         assert sample_tracker.to_be_deleted is True
         assert T._NT_DEL_REASON[sample_tracker.url] == "handed out no peers for 5 days (Up/Bad)"
+        assert T._NT_DEL_KIND[sample_tracker.url] == "upbad"
         assert open("data/denylist.txt").read().split()[0] == sample_tracker.host
 
     def test_kept_before_5_days_or_once_fixed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,18 +231,6 @@ class TestBadStretch:
         assert abs(T._nt_bad_share(url, 168 * self.H) - 1.0) < 1e-6  # all of it, never more
         T.LAST_STATE[url]["st"] = "up_good"
         assert abs(T._nt_bad_share(url, 168 * self.H) - 50 / 168) < 1e-6
-
-    def test_seeded_from_events_like_corpscorp(self) -> None:
-        url, now = "udp://cc.example:80/announce", 200 * self.H
-        evs = [(122.8, "good", "is Up/Good again"), (121.7, "bad", self.BAD), (120.2, "good", "is Up/Good again"), (119.3, "bad", self.BAD),
-               (72.2, "good", "is Up/Good again"), (50.8, "bad", self.BAD), (47.1, "good", "is Up/Good again"), (46.2, "bad", self.BAD),
-               (9.6, "good", "is Up/Good again"), (8.6, "bad", self.BAD), (6.1, "good", "is Up/Good again"), (5.2, "bad", self.BAD)]
-        T.EVENTS[:] = [{"t": int(now - h * self.H), "url": url, "host": "cc.example", "type": k, "text": x} for h, k, x in evs]
-        T.LAST_STATE[url] = {"st": "up_bad", "bad": ["hands out no peers (3+ of its last 6 peer tests failed)"], "dead": [], "since": int(now - 5.2 * self.H)}
-        T._bad_seed(now)
-        assert T.LAST_STATE[url]["bad_since"] == int(now - 50.8 * self.H)  # the 21 h recovery 72 h ago counts; the 1 h blips don't
-        assert 2.1 < T._nt_upbad_days(url, now) < 2.2
-
 
 class TestFamilyHysteresis:
     U = "udp://fam.example:1/announce"

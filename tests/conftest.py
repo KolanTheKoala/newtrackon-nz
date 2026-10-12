@@ -51,7 +51,7 @@ def clean_global_state() -> Generator[None]:
     persistence.submitted_data.clear()
 
 
-_NT_STATE_DICTS = ("_NT_DEL_REASON", "_DAILY_SAVE", "REMOVED")  # besides every per-tracker store (tracker._STORES)
+_NT_STATE_DICTS = ("_NT_DEL_REASON", "_NT_DEL_KIND", "_DAILY_SAVE", "REMOVED")  # besides every per-tracker store (tracker._STORES)
 
 
 @pytest.fixture(autouse=True)

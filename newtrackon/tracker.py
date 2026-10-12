@@ -325,7 +325,7 @@ class Tracker:
             return
         if not bep_34_info:
             logger.info("Hostname denies connection via BEP34, removing tracker %s", self.url)
-            _NT_DEL_REASON[self.url] = "its own DNS records (BEP 34) say it doesn't accept connections"
+            _nt_removal_why(self.url, "its own DNS records (BEP 34) say it doesn't accept connections", "closed")
             self.to_be_deleted = True
             raise RuntimeError("Host denied connection according to BEP34, removed")
 
@@ -437,7 +437,7 @@ class Tracker:
         fake_now = FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT and tested and bool(FAKE_N.get(self.url))
         cl = CLOSED.get(self.url) or {}
         if cl.get("n", 0) >= CLOSED_LIMIT and ((self.status == 0 and not _answers_elsewhere_now(self)) or nopeers_now):
-            _NT_DEL_REASON[self.url] = cl["why"]
+            _nt_removal_why(self.url, cl["why"], "closed")
             logger.info("Evicting %s (%s, %d checks in a row)", self.url, cl["why"], cl["n"])
             self.to_be_deleted = True
             self._nt_ban()
@@ -456,7 +456,7 @@ class Tracker:
         elif ub is not None and failing and share >= BAD_SHARE and listed_days >= BAD_SHARE_DAYS:
             why = _upbad_reason(self.url, fake, "%d%% of the last %d days" % (round(100 * share), BAD_SHARE_DAYS))
         if why:
-            _NT_DEL_REASON[self.url] = why
+            _nt_removal_why(self.url, why, "upbad")
             logger.info("Evicting %s (Up/Bad: %.1f days in a row, %.0f%% of the last week)", self.url, ub, 100 * share)
             self.to_be_deleted = True
             self._nt_ban()
@@ -470,7 +470,7 @@ class Tracker:
         # check before, so it can still say Up/Bad at the first such check)
         down_now = self.status == 0 and not _answers_elsewhere_now(self)
         if ud is not None and ud >= REMOVE_DAYS and listed >= 3 and (down_now or failing):
-            _NT_DEL_REASON[self.url] = _useless_reason(self, ud)
+            _nt_removal_why(self.url, _useless_reason(self, ud), "not_working")
             logger.info("Evicting %s (down or Up/Bad for %.1f days)", self.url, ud)
             self.to_be_deleted = True
             self._nt_ban()
@@ -482,7 +482,7 @@ class Tracker:
         if jd is not None and jd >= JUNK_DAYS:
             now_fault = _junk_broken_now(self)
             if now_fault:
-                _NT_DEL_REASON[self.url] = "Up/Junk or Up/Broken for %d days in a row; now %s" % (int(jd), now_fault)
+                _nt_removal_why(self.url, "Up/Junk or Up/Broken for %d days in a row; now %s" % (int(jd), now_fault), "junk")
                 logger.info("Evicting %s (Up/Junk or Up/Broken for %.1f days)", self.url, jd)
                 self.to_be_deleted = True
                 self._nt_ban()
@@ -499,8 +499,10 @@ class Tracker:
         if age_days >= 3 and (dead_days >= REMOVE_DAYS or (n >= 144 and rav * rst < 0.15)):
             # the event, the removed page and the ban list say which of the two it was
             _dw = _DOWN_WORDS.get(_nt_down_label(DOWN_WHY.get(self.url)))
-            _NT_DEL_REASON[self.url] = ("no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else "") if dead_days >= REMOVE_DAYS else
-                                        "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * rav * rst))
+            if dead_days >= REMOVE_DAYS:
+                _nt_removal_why(self.url, "no answer for %d days%s" % (int(dead_days), " (%s)" % _dw if _dw else ""), "dead")
+            else:
+                _nt_removal_why(self.url, "too unreliable: %.0f%% once dropouts are counted (under 15%%)" % (100.0 * rav * rst), "unreliable")
             logger.info(
                 "Evicting %s (score=%.2f%%, availability=%.1f%%, no success for %.1f days, samples=%s, age_days=%.1f)",
                 self.url,
@@ -562,9 +564,7 @@ class Tracker:
                         raise _NtOurDNS(f"our resolver gave {ip}, not a public address, but public DNS gives {sorted(pub) if pub else 'no answer'}")
                     self.ips = None
                     self.to_be_deleted = True
-                    if len(_NT_DEL_REASON) > 200:
-                        _NT_DEL_REASON.clear()
-                    _NT_DEL_REASON[self.url] = "its hostname no longer points to a public IP address"
+                    _nt_removal_why(self.url, "its hostname no longer points to a public IP address", "dns")
                     raise RuntimeError(f"IP {ip} is not globally routable, removed")
             for ip in parsed_ips:
                 if ip.version == 6:
@@ -621,7 +621,7 @@ class Tracker:
             if self.to_be_deleted:
                 why = _NT_DEL_REASON.pop(url, "no answer for 5+ days, or too unreliable: under 15% once dropouts are counted")
                 _event(url, "removed", "removed from the list (" + why + ")")
-                _removed_add(self, why)
+                _removed_add(self, why, kind=_NT_DEL_KIND.pop(url, None))
                 LAST_STATE.pop(url, None)
                 _jsave(LAST_STATE, _LAST_STATE_FILE)
                 return
@@ -798,7 +798,7 @@ _STORES: dict = {}  # name -> {"file", "probe", "peer", "protocol", "check"}
 _NOT_STORES = {  # module-level dicts that aren't per-tracker records, and why
     "BAD_TEXT": "constant", "FIX_DOWN": "constant", "_DOWN_WORDS": "constant", "_NT_ICON": "constant", "_NT_LBL": "constant",
     "REMOVED": "keyed by host, kept for good", "_DAILY_SAVE": "bookkeeping for daily.json's saves",
-    "_NT_DEL_REASON": "a removal's reason, from the check that decides it to its event",
+    "_NT_DEL_REASON": "a removal's reason, from the check that decides it to its event", "_NT_DEL_KIND": "the same, which rule",
 }
 
 
@@ -1609,8 +1609,8 @@ def _nt_useless_days(url, now=None):
 
 
 def _upbad_reason(url, fake, span):
-    """The removal reason for Up/Bad, worded from what the peer tests saw. It must keep "(Up/Bad)" and "fake peers":
-    ingest._keep_upbad_clock reads them when a banned tracker comes back."""
+    """The removal reason for Up/Bad, worded from what the peer tests saw. (It says "(Up/Bad)" and "fake peers": the
+    Removed page's details go by them, and records from before kind was stored (_removal_kind).)"""
     if not fake and PEER_OK.get(url) is None and _peer_na_failing(url):
         days = int((time() - PEER_LAST.get(url, time())) // 86400)
         return ("showed no peer sharing %s (Up/Bad): no conclusive peer test for %d days, only our first test client is ever "
@@ -1678,37 +1678,6 @@ def _useless_reason(t, days):
         cause = None
     return "%s: %sanswering without usable peers%s%s" % (head, "no answer in %d%% of checks, the rest " % down if down else "",
                                                            " (%s)" % cause if cause else "", "; down now (%s)" % dw if dw else "")
-
-
-def _useless_seed(trackers, now=None):
-    """For states saved before useless_since existed: Up/Bad now, after a run of failed checks just before it went Up/Bad,
-    counts from the start of that run. Run once from the check loop (it needs each tracker's history)."""
-    now = now or time()
-    changed = False
-    for t in trackers:
-        s = LAST_STATE.get(t.url)
-        if not isinstance(s, dict) or "useless_since" in s or not _useless(s.get("st"), s.get("bad")):
-            continue
-        start = int(s.get("since", now))
-        if s.get("st") != "down":
-            h = list(t.historic or [])
-            newest = int(LAST_REC.get(t.url) or t.last_checked or now) // Tracker.SLOT
-            first_bad = newest - (newest - start // Tracker.SLOT)  # slot where the Up/Bad spell began
-            i = len(h) - 1 - (newest - first_bad) - 1  # the slot just before it
-            skipped = 0  # answering spells under BAD_BRIDGE (e.g. its first hours back, before 3 failed peer tests) don't count
-            while i >= 0 and float(h[i]) > 0 and skipped < BAD_BRIDGE // Tracker.SLOT:
-                skipped += 1
-                i -= 1
-            zeros = 0
-            while i >= 0 and float(h[i]) == 0:
-                zeros += 1
-                i -= 1
-            if zeros:
-                start -= (skipped + zeros) * Tracker.SLOT
-        s["useless_since"] = start
-        changed = True
-    if changed:
-        _jsave(LAST_STATE, _LAST_STATE_FILE)
 
 
 JUNK_DAYS = 30  # Up/Junk or Up/Broken this long and it's removed: long enough for overload to pass or an address to be fixed
@@ -1809,59 +1778,6 @@ def _stretch(prev, st, now, state, key, bridge, bad=None):
     if recent:
         return {since_k: int(start), left_k: int(prev[left_k])}
     return {}
-
-
-def _bad_log_seed(now=None):
-    """Fill in bad_log (closed Up/Bad spells over the last week) from the event history for states saved before it existed."""
-    now = now or time()
-    changed = False
-    for url, s in LAST_STATE.items():
-        if not isinstance(s, dict) or "bad_log" in s:
-            continue
-        log, start = [], None
-        for e in EVENTS:
-            if e.get("url") != url:
-                continue
-            txt, kind, t = str(e.get("text") or ""), e.get("type"), int(e.get("t") or 0)
-            if (kind == "bad" and txt.startswith("is Up/Bad")) or (kind == "up" and ", but Up/Bad" in txt):
-                start = t if start is None else start
-            elif start is not None and kind in ("good", "down", "up", "bad") and not txt.startswith("is still Up/Bad"):
-                log.append([start, t])
-                start = None
-        log = [x for x in log if now - x[1] <= BAD_SHARE_DAYS * 86400]
-        if log:
-            s["bad_log"] = log
-            changed = True
-    if changed:
-        _jsave(LAST_STATE, _LAST_STATE_FILE)
-
-
-def _bad_seed(now=None):
-    """Fill in bad_since/bad_left from the event history for states saved before they existed."""
-    now = now or time()
-    changed = False
-    for url, s in LAST_STATE.items():
-        if "bad_since" in s or not isinstance(s, dict):
-            continue
-        start = left = None
-        for e in EVENTS:
-            if e.get("url") != url:
-                continue
-            txt, kind, t = str(e.get("text") or ""), e.get("type"), int(e.get("t") or 0)
-            if (kind == "bad" and txt.startswith("is Up/Bad")) or (kind == "up" and ", but Up/Bad" in txt):
-                if start is None or left is None or t - left >= BAD_BRIDGE:
-                    start = t
-                left = None
-            elif start is not None and left is None and kind in ("good", "down", "up", "bad") and not txt.startswith("is still Up/Bad"):
-                left = t
-        if s.get("st") == "up_bad":
-            s["bad_since"] = start if start is not None and left is None else s.get("since", int(now))
-            changed = True
-        elif start is not None and left is not None and now - left < BAD_BRIDGE:
-            s["bad_since"], s["bad_left"] = start, left
-            changed = True
-    if changed:
-        _jsave(LAST_STATE, _LAST_STATE_FILE)
 
 
 _CLOSED_FILE = "data/closed.json"
@@ -2152,7 +2068,6 @@ LAST_STATE: dict = _url_store("LAST_STATE", _LAST_STATE_FILE)
 
 # ---- removed trackers, kept for good so their page can say what happened: {host: {url, t, reason, added, country, network}} ----
 _REMOVED_FILE = "data/removed.json"
-_REMOVED_EXISTED = _os.path.exists(_REMOVED_FILE)  # the event-history migration only runs before the file first exists
 _rm = _jload(_REMOVED_FILE)
 REMOVED: dict = _rm if isinstance(_rm, dict) else {}
 
@@ -2164,7 +2079,7 @@ def _nt_removals(rec):
     return max(0, int(rec.get("count", 1) or 0) - (1 if rec.get("fault") else 0))
 
 
-def _removed_add(t, reason, now=None):
+def _removed_add(t, reason, now=None, kind=None):
     host = (t.host or "").lower()
     if not host:
         return
@@ -2177,6 +2092,8 @@ def _removed_add(t, reason, now=None):
                      "count": (_nt_removals(prev) if prev else 0) + 1,  # removals so far, for longer bans
                      "ips": sorted(set(getattr(t, "ips", None) or []) | set((getattr(t, "recent_ips", None) or {}).keys())),
                      "hist": hist}  # its last week of uptime, restored if it's reinstated
+    if kind:
+        REMOVED[host]["kind"] = kind  # which rule (_removal_kind)
     if getattr(t, "last_uptime", None):
         REMOVED[host]["last_up"] = int(t.last_uptime)
     try:  # what the checks saw, kept for its Removed page: the stores can be cleared or overwritten later
@@ -2409,58 +2326,6 @@ def _nt_ban_ips(ips, skip_host=None, listed_ips=()):
             if b and b["active"]:
                 return host
     return None
-
-
-def _removed_ips_seed():
-    """Bans from before addresses were saved: look the banned names up once (a handful of DNS lookups) and keep the
-    public addresses. Run once from the check loop."""
-    from newtrackon import ntextra
-    n = 0
-    for host, r in REMOVED.items():
-        if "ips" in r:
-            continue
-        b = ntextra._ban(host)
-        if not (b and b["active"]):
-            continue
-        found = set()
-        try:
-            for res in socket.getaddrinfo(host, None):
-                ip = str(res[4][0])
-                if scraper.ip_is_public(ip):
-                    found.add(ip)
-        except OSError:
-            pass
-        r["ips"] = sorted(found)
-        n += 1
-    if n:
-        _jsave(REMOVED, _REMOVED_FILE)
-
-
-def _removed_seed():
-    """Removals from before this record existed, from the event history (which keeps only the last 500 events)."""
-    n = 0
-    # once removed.json exists it's the record: re-running this would recreate records deliberately deleted (trackers
-    # reinstated because our own checks were at fault) from their old "removed" events
-    for e in (EVENTS if not _REMOVED_EXISTED else []):
-        h = str(e.get("host") or "").lower()
-        if e.get("type") == "removed" and h and int(e.get("t") or 0) > int((REMOVED.get(h) or {}).get("t") or 0):
-            txt = str(e.get("text") or "")
-            why = txt[len("removed from the list ("):-1] if txt.startswith("removed from the list (") and txt.endswith(")") else txt
-            REMOVED[h] = {"url": e.get("url"), "t": int(e["t"]), "reason": why, "added": 0, "country": "", "network": ""}
-            n += 1
-    for h, r in REMOVED.items():  # how many times each was removed, for records from before the count existed
-        if "count" not in r:
-            r["count"] = max(1, sum(1 for e in EVENTS if e.get("type") == "removed" and str(e.get("host") or "").lower() == h))
-            n += 1
-    if n:
-        _jsave(REMOVED, _REMOVED_FILE)
-
-
-_removed_seed()
-# _bad_seed() and _bad_log_seed() filled in states saved before bad_since/bad_log existed (before 2026-10-07). Every state
-# has been saved since, and a missing bad_since/bad_log now means there's no spell: run at each start they rebuilt spells
-# from the event history, including a reinstated tracker's from before its removal (85% Up/Bad after a restart, and removed
-# by the 80% rule at its next bad patch). Kept for reference and their tests; not run.
 
 
 def _event(url, kind, text):
@@ -2699,7 +2564,25 @@ def _nt_signal(kind, host):
         pass
 
 
-_NT_DEL_REASON: dict = {}
+_NT_DEL_REASON: dict = {}  # url -> why the check removing it is removing it, until its event and record are written
+_NT_DEL_KIND: dict = {}  # url -> which rule it was: closed, upbad, not_working, junk, dead, unreliable, dns
+
+
+def _nt_removal_why(url, reason, kind):
+    """The check that removes a tracker says why (the words on its page, its event and /bans) and which rule it was (data:
+    ingest._keep_upbad_clock goes by it, not by the words)."""
+    if len(_NT_DEL_REASON) > 200:
+        _NT_DEL_REASON.clear()
+        _NT_DEL_KIND.clear()
+    _NT_DEL_REASON[url], _NT_DEL_KIND[url] = reason, kind
+
+
+def _removal_kind(rec):
+    """Which rule removed it (see _NT_DEL_KIND). Records from before 2026-10-13 don't say: then their reason does, and of
+    those only an Up/Bad removal ever needed telling apart (its words always said "(Up/Bad)")."""
+    if rec.get("kind"):
+        return rec["kind"]
+    return "upbad" if "(Up/Bad)" in str(rec.get("reason") or "") else None
 
 
 def _nt_dns_skip(r, i):

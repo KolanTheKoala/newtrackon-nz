@@ -48,7 +48,7 @@ class TestBadShare:
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         assert T._nt_upbad_days(t.url, now) < T.UPBAD_DAYS and T._nt_bad_share(t.url, now) >= T.BAD_SHARE
         t.update_uptime()
-        assert t.to_be_deleted is True and "% of the last 7 days (Up/Bad)" in T._NT_DEL_REASON[t.url]
+        assert t.to_be_deleted is True and "% of the last 7 days (Up/Bad)" in T._NT_DEL_REASON[t.url] and T._NT_DEL_KIND[t.url] == "upbad"
 
     def test_not_for_a_tracker_listed_under_a_week(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
         now = int(time())
@@ -155,6 +155,7 @@ class TestJunkClock:
         self._check(sample_tracker, 30.2)
         assert sample_tracker.to_be_deleted is True
         assert T._NT_DEL_REASON[sample_tracker.url] == "Up/Junk or Up/Broken for 30 days in a row; now its score is under 50"
+        assert T._NT_DEL_KIND[sample_tracker.url] == "junk"
 
     def test_kept_before_30_days(self, sample_tracker) -> None:
         self._check(sample_tracker, 29)
@@ -182,17 +183,6 @@ class TestUselessClock:
         s = {"st": "up_good", "bad": [], "since": 5 * DAY, **T._bad_track(s, "up_good", 5 * DAY + 13 * 3600, [])}
         assert "useless_since" not in s  # working for 13 h: the stretch is over
 
-    def test_seeded_like_farted(self) -> None:
-        from types import SimpleNamespace
-        now = 1_800_000_000 - 1_800_000_000 % 1800
-        url = "udp://f.example:1/announce"
-        h = [1] * 60 + [0] * 211 + [1] * 21  # up, 4.4 days down, back 10.5 h: 2.5 h on probation, then 8 h Up/Bad
-        T.LAST_REC[url] = now
-        T.LAST_STATE[url] = {"st": "up_bad", "bad": self.BAD, "dead": [], "since": now - 16 * 1800}
-        T._useless_seed([SimpleNamespace(url=url, historic=h, last_checked=now)], now)
-        assert T.LAST_STATE[url]["useless_since"] == now - (20 + 211) * 1800  # the first down slot (the newest slot is "now")
-        assert 4.8 < T._nt_useless_days(url, now) < 4.9
-
     def test_removed_after_5_days_mixed(self, sample_tracker, monkeypatch: pytest.MonkeyPatch) -> None:
         t = sample_tracker
         now = int(time())
@@ -202,7 +192,7 @@ class TestUselessClock:
         monkeypatch.setitem(T.PEER_OK, t.url, not T.PEER_FAIL_LIMIT)  # its latest test, as a check records it
         t.added, t.last_uptime, t.status, t.historic = now - 30 * DAY, now, 1, deque([1] * 48, maxlen=1440)
         t.update_uptime()
-        assert t.to_be_deleted is True and T._NT_DEL_REASON[t.url].startswith("not working for 5 days")
+        assert t.to_be_deleted is True and T._NT_DEL_REASON[t.url].startswith("not working for 5 days") and T._NT_DEL_KIND[t.url] == "not_working"
 
 
 

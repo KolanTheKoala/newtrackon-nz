@@ -1212,7 +1212,7 @@ class TestRemovalDenylist:
 
     def test_reason_says_which_rule(self, sample_tracker: Tracker) -> None:
         self._evict(sample_tracker)  # silent for 6 days
-        assert T._NT_DEL_REASON[sample_tracker.url] == "no answer for 6 days"
+        assert T._NT_DEL_REASON[sample_tracker.url] == "no answer for 6 days" and T._NT_DEL_KIND[sample_tracker.url] == "dead"
 
     def test_reason_for_too_unreliable(self, sample_tracker: Tracker) -> None:
         t = sample_tracker
@@ -1222,3 +1222,4 @@ class TestRemovalDenylist:
         t.update_uptime()
         assert t.to_be_deleted is True
         assert re.fullmatch(r"too unreliable: \d+% once dropouts are counted \(under 15%\)", T._NT_DEL_REASON[t.url])
+        assert T._NT_DEL_KIND[t.url] == "unreliable"
