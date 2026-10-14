@@ -165,14 +165,16 @@ def _repstats_note(url, status=1, now=None):
     import time as _t
     now = int(now or _t.time())
     rec = T.REPSTATS.get(url)
-    tried = scraper.stats_url(url).split("?")[0]
+    tried = scraper.stats_url(url, path=(rec or {}).get("path") or "/stats")
     if not rec:
         return {"code": "not_read", "text": "Not read yet: this site reads each tracker's public stats page once a day."}
     asked = int(rec.get("t") or (int(rec.get("next") or now) - (T.STATS_RETRY if not rec.get("ok") else T.STATS_EVERY)))
     again = max(0, round((int(rec.get("next") or now) - now) / 86400))
     when = f"asked again in {again} day{'' if again == 1 else 's'}" if again else "asked again soon"
     if not rec.get("ok"):
-        return {"code": "none", "text": f"It doesn't publish a stats page this site can read (asked {tried} {_ago(asked)} ago; {when})."}
+        base = scraper.stats_url(url, path="")
+        paths = ", ".join(x.split("?")[0] for x in scraper.STATS_PATHS)
+        return {"code": "none", "text": f"It doesn't publish a stats page this site can read (asked {base} for {paths} {_ago(asked)} ago; {when})."}
     last = (rec.get("hist") or [{}])[-1].get("t")
     if int(rec.get("fails") or 0):
         return {"code": "stopped", "text": f"Its stats page ({tried}) stopped answering: last read {_ago(int(last or asked))} ago; {when}."}

@@ -144,7 +144,7 @@
     {% endif %}
     {% if rep_lines %}
     <h5 class="mt-4">The tracker's own stats</h5>
-    <pre class="nt-rep">{{ d.host }}  read {{ nt_ago_of(d.reported_stats.t) }} ago{% if d.reported_stats.software == "opentracker" %} &middot; opentracker{% endif %}
+    <pre class="nt-rep">{{ d.host }}  read {{ nt_ago_of(d.reported_stats.t) }} ago{% if d.reported_stats.software and d.reported_stats.software != "other" %} &middot; {{ d.reported_stats.software }}{% endif %}
 {% for l in rep_lines %}{{ l }}
 {% endfor %}</pre>
     <p class="small">What the tracker's own public stats page says, read once a day: reported by the tracker, not measured by this site. &#9650;&#9660; are the change over the last {{ d.reported_stats.change_hours|round|int if d.reported_stats.change_hours else 24 }} hours{% if d.reported_stats.restarted %}; it restarted since the reading before, so its running totals start again{% endif %}. Torrent counts include made-up hashes some clients spray at trackers. &ndash;: not reported.</p>

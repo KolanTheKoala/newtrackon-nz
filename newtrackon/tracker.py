@@ -2134,7 +2134,7 @@ def _removed_add(t, reason, now=None, kind=None):
 # is asked again only after 30 days, not every day. This server's own tracker is read on loopback. ----
 _REPSTATS_FILE = "data/repstats.json"
 # url -> {"t": when it was last asked, "next": when to read it next, "fails": failed reads in a row, "ok": it has published stats,
-#         "kind": "opentracker"|"other", "hist": [{"t": when, figure: count, ...}, ...] (the last 31 days)}
+#         "kind": the software (scraper.parse_stats), "path": the stats path that answered, "hist": [{"t": when, figure: count, ...}, ...] (the last 31 days)}
 REPSTATS: dict = _url_store("REPSTATS", _REPSTATS_FILE, protocol=True)
 STATS_EVERY = 24 * 3600
 STATS_RETRY = 30 * 24 * 3600  # publishes none, or stopped: asked again this much later
@@ -2142,6 +2142,7 @@ STATS_FAILS = 3  # failed days in a row before one that published stats is asked
 STATS_GAP = 600  # one read at a time, this far apart
 STATS_KEEP = 31 * 24 * 3600
 _STATS_NEXT = [time() + 600]  # nothing in the first 10 minutes after a start
+STATS_PROBE_V = 2  # 2: every path in scraper.STATS_PATHS; a "none" found by an older probe (/stats only) is asked again now
 
 
 def _stats_local(t):
@@ -2155,8 +2156,10 @@ def stats_due(trackers, now=None):
     now = int(now or time())
     if now < _STATS_NEXT[0]:
         return
-    due = sorted((int((REPSTATS.get(t.url) or {}).get("next") or 0), t.url, t) for t in trackers
-                 if t.status == 1 and int((REPSTATS.get(t.url) or {}).get("next") or 0) <= now)
+    def nxt(url):
+        rec = REPSTATS.get(url) or {}
+        return 0 if not rec.get("ok") and int(rec.get("v") or 1) < STATS_PROBE_V else int(rec.get("next") or 0)
+    due = sorted((nxt(t.url), t.url, t) for t in trackers if t.status == 1 and nxt(t.url) <= now)
     if not due:
         return
     _STATS_NEXT[0] = now + STATS_GAP
@@ -2165,17 +2168,20 @@ def stats_due(trackers, now=None):
 
 def stats_read(t, now=None):
     now = int(now or time())
+    rec0 = REPSTATS.get(t.url) or {}
+    # the path that worked before, while it's still answering daily; a 30-day retry looks at every path again
+    path = rec0.get("path") if int(rec0.get("fails") or 0) < STATS_FAILS else None
     try:
-        got = scraper.fetch_stats(t.url, local=_stats_local(t))
+        got = scraper.fetch_stats(t.url, local=_stats_local(t), path=path)
     except Exception as e:
         logger.info("Stats of %s: none (%s)", t.url, type(e).__name__)
         got = None
     if got is None and not _monitor_online():
         return  # our own outage: nothing recorded, it stays due
     rec = REPSTATS.setdefault(t.url, {})
-    rec["t"] = now  # when it was last asked, whatever the answer
+    rec["t"], rec["v"] = now, STATS_PROBE_V  # when it was last asked (whatever the answer), and by which probe
     if got:
-        kind, fig = got
+        kind, fig, rec["path"] = got
         fig = dict(fig)
         # which running instance answered (opentracker): its id, and when it started (to the second, from its uptime)
         rec["id"], rec["start"] = fig.pop("tracker_id", None), (now - fig["uptime_s"]) if "uptime_s" in fig else None

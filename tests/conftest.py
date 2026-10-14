@@ -75,7 +75,7 @@ def nz_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[N
     from newtrackon import scraper as _scraper
     monkeypatch.setattr(_scraper, "ADDR_HEALTH", {})
     monkeypatch.setattr(_scraper, "amp_hash_test", lambda url: None)  # the daily '&' hash test: no verdict unless a test asks
-    monkeypatch.setattr(_scraper, "fetch_stats", lambda url, local=False: None)  # trackers' own stats pages: none unless a test asks
+    monkeypatch.setattr(_scraper, "fetch_stats", lambda url, local=False, path=None: None)  # trackers' own stats pages: none unless a test asks
     monkeypatch.setattr(T, "_nt_public_ips", lambda host: set())
     monkeypatch.setattr(T, "_nt_local_fault", lambda t, err: False)
     monkeypatch.setattr(T, "_notify", lambda ev: None)

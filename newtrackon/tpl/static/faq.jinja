@@ -41,7 +41,8 @@
             something's wrong, <a href="/fix">How to fix</a> explains it, and <b>Check again now</b> re-tests once you've fixed it.
             On that page you can also <b>Follow</b> its status changes (Atom feed) and copy a status badge for your site (offered while it's healthy); the same
             data is at <code>/api/tracker/&lt;host&gt;</code>.</p>
-        <p id="stats">If it publishes a stats page (opentracker's <code>/stats</code>, on the announce port; a UDP tracker's over HTTP on the same port number), it's read once a day
+        <p id="stats">If it publishes a stats page (<code>/stats</code>, <code>/stats.json</code> or <code>/metrics</code> on the announce port, as opentracker, XBT and
+            WebTorrent's tracker serve them; a UDP tracker's over HTTP on the same port number), it's read once a day
             and shown on its page as reported. If it publishes none, it's asked again only every 30 days. To keep it off,
             move or restrict the stats page (opentracker: <code>access.stats_path</code>, or <code>access.stats</code> in a
             build with <code>WANT_RESTRICT_STATS</code>).</p>

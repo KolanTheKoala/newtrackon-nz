@@ -456,28 +456,42 @@ def amp_hash_test(url: str) -> bool | None:
     return False if any(s in reason for s in ("info_hash", "info hash", "infohash")) else None
 
 
-# ---- the tracker's own published stats, read once a day (tracker.stats_due): opentracker's /stats?mode=everything XML,
-# and two JSON kinds found on listed trackers (one with active/retained torrents and an uptime 't', and the retracker
-# kind of tr2.trkb.ru and retracker.x2k.ru with 'annonces'). Read with an honest User-Agent, not a client profile. ----
+# ---- the tracker's own published stats, read once a day (tracker.stats_due). What tracker software serves on its
+# announce port (checked in each project's source, 2026-10-15): opentracker /stats?mode=everything (XML); XBT the same
+# request (it matches on the first letters: HTML table) and /metrics (Prometheus text); WebTorrent's bittorrent-tracker
+# /stats.json; and two JSON kinds found on listed trackers (one with active/retained torrents and an uptime 't', and
+# the retracker kind of tr2.trkb.ru and retracker.x2k.ru with 'annonces'). chihaya, aquatic and torrust serve theirs
+# on separate ports (torrust only with a token), so they aren't asked. Read with an honest User-Agent. ----
 STATS_UA = "newtrackon.co.nz (reads this tracker's public stats page once a day)"
 STATS_KEYS = ("uptime_s", "torrents", "peers", "seeds", "leechers", "completed", "requests", "announces", "scrapes", "refused")
+STATS_PATHS = ("/stats?mode=everything", "/stats.json", "/metrics")  # tried in turn at a first visit, first that works kept
 _STATS_MAX = 10**13  # anything bigger (or negative) is nonsense, not a count
 
 
-def stats_url(url: str, local: bool = False) -> str:
-    """The stats page for a tracker's announce URL: same host and port (a UDP tracker's over HTTP, where opentracker
+def stats_url(url: str, local: bool = False, path: str = STATS_PATHS[0]) -> str:
+    """A stats page for a tracker's announce URL: same host and port (a UDP tracker's over HTTP, where opentracker
     serves it). local: this server's own tracker, read on loopback, the only place it serves its stats."""
     p = urlparse(url)
     scheme = "https" if p.scheme == "https" and not local else "http"
     host = "127.0.0.1" if local else (p.hostname or "")
     port = p.port or (443 if scheme == "https" else 80)
-    return f"{scheme}://{'[' + host + ']' if ':' in host else host}:{port}/stats?mode=everything"
+    return f"{scheme}://{'[' + host + ']' if ':' in host else host}:{port}{path}"
 
 
 def _count(v: object) -> int | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < _STATS_MAX:
         return None
     return int(v)
+
+
+def _derive(f: dict) -> dict[str, int]:
+    """Fill peers or leechers from the other two figures, and drop what wasn't reported."""
+    p, s, le = f.get("peers"), f.get("seeds"), f.get("leechers")
+    if p is None and s is not None and le is not None:
+        f["peers"] = s + le
+    elif le is None and p is not None and s is not None and s <= p:
+        f["leechers"] = p - s
+    return {k: v for k, v in f.items() if v is not None}
 
 
 def _ot_stats(s: str) -> dict[str, int]:
@@ -500,73 +514,138 @@ def _ot_stats(s: str) -> dict[str, int]:
     f = {"uptime_s": one(r"<uptime>(\d+)</uptime>"), "torrents": one(r"<torrents>\s*<count(?:_mutex)?>(\d+)<"),
          "peers": one(r"<peers>\s*<count>(\d+)<"), "seeds": one(r"<seeds>\s*<count>(\d+)<"),
          "completed": one(r"<completed>\s*<count>(\d+)<"), "requests": both("accept", "overall"),
-         "announces": both("announce"), "scrapes": both("scrape"), "refused": one(r"<missmatch>(\d+)</missmatch>", udp)}
-    if f["peers"] is not None and f["seeds"] is not None and f["seeds"] <= f["peers"]:
-        f["leechers"] = f["peers"] - f["seeds"]
-    # random() at start-up, so the same for every name one running instance serves (new after a restart)
-    f["tracker_id"] = one(r"<tracker_id>(\d+)</tracker_id>")
-    return {k: v for k, v in f.items() if v is not None}
+         "announces": both("announce"), "scrapes": both("scrape"), "refused": one(r"<missmatch>(\d+)</missmatch>", udp),
+         # random() at start-up, so the same for every name one running instance serves (new after a restart)
+         "tracker_id": one(r"<tracker_id>(\d+)</tracker_id>")}
+    return _derive(f)
 
 
-def _json_stats(d: dict) -> dict[str, int]:
+def _json_stats(d: dict) -> tuple[str, dict[str, int]]:
     def first(*keys: str) -> int | None:
         return next((v for v in (_count(d.get(k)) for k in keys) if v is not None), None)
 
+    if "peersAll" in d:  # WebTorrent's bittorrent-tracker: a peer that's both seeding and leeching counts as a seed
+        s, sl = first("peersSeederOnly"), first("peersSeederAndLeecher")
+        return "bittorrent-tracker", _derive({"torrents": first("torrents"), "peers": first("peersAll"),
+                                              "seeds": None if s is None else s + (sl or 0), "leechers": first("peersLeecherOnly")})
     # only the names seen on real stats pages: a guess at another kind's meaning could put a figure on the wrong row
-    f = {"torrents": first("torrents"), "seeds": first("seeders", "seeds"),
-         "leechers": first("leechers"), "peers": first("peers"),
-         "completed": first("completed"), "requests": first("connections", "requests"),
-         "announces": first("announces", "annonces"), "scrapes": first("scrapes"), "refused": first("errors"),
-         # 't' is an uptime in seconds only in the kind that also has active/retained torrents
-         "uptime_s": first("uptime", *(("t",) if "active_torrents" in d else ()))}
-    if f["peers"] is None and f["seeds"] is not None and f["leechers"] is not None:
-        f["peers"] = f["seeds"] + f["leechers"]
-    elif f["leechers"] is None and f["peers"] is not None and f["seeds"] is not None and f["seeds"] <= f["peers"]:
-        f["leechers"] = f["peers"] - f["seeds"]
-    return {k: v for k, v in f.items() if v is not None}
+    return "other", _derive({"torrents": first("torrents"), "seeds": first("seeders", "seeds"), "leechers": first("leechers"),
+                             "peers": first("peers"), "completed": first("completed"),
+                             "requests": first("connections", "requests"), "announces": first("announces", "annonces"),
+                             "scrapes": first("scrapes"), "refused": first("errors"),
+                             # 't' is an uptime in seconds only in the kind that also has active/retained torrents
+                             "uptime_s": first("uptime", *(("t",) if "active_torrents" in d else ()))})
+
+
+def _prom(s: str) -> dict[str, list[tuple[dict[str, str], float]]]:
+    """Prometheus text: metric name -> [(labels, value), ...]."""
+    import re
+    out: dict[str, list[tuple[dict[str, str], float]]] = {}
+    for line in s.splitlines():
+        m = re.match(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(-?[0-9.eE+]+)(?:\s+\d+)?\s*$', line.strip())
+        if m:
+            try:
+                v = float(m.group(3))
+            except ValueError:
+                continue
+            labels = dict(re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"', m.group(2) or ""))
+            out.setdefault(m.group(1), []).append((labels, v))
+    return out
+
+
+def _prom_stats(s: str) -> tuple[str, dict[str, int]] | None:
+    m = _prom(s)
+
+    def total(name: str, **want: str) -> int | None:
+        xs = [v for lab, v in m.get(name, []) if all(lab.get(k) == x for k, x in want.items())]
+        return _count(sum(xs)) if xs else None
+
+    if "xbt_infohashes_count" in m:
+        a = [total("xbt_requests_count", proto=p, method="announce") for p in ("http", "udp")]
+        sc = [total("xbt_requests_count", proto=p, method="scrape") for p in ("http", "udp")]
+        rq = [total("xbt_connections_count", proto="tcp", type="accepted"), total("xbt_connections_count", proto="udp", type="received")]
+        add = lambda xs: None if all(x is None for x in xs) else sum(x or 0 for x in xs)
+        return "XBT", _derive({"uptime_s": total("xbt_uptime"), "torrents": total("xbt_infohashes_count"),
+                               "seeds": total("xbt_peers_count", type="seeders"), "leechers": total("xbt_peers_count", type="leechers"),
+                               "announces": add(a), "scrapes": add(sc), "requests": add(rq)})
+    if "chihaya_storage_infohashes_count" in m:
+        dur = [x for n in ("chihaya_http_response_duration_milliseconds_count", "chihaya_udp_response_duration_milliseconds_count")
+               for x in m.get(n, [])]
+        by = lambda f: _count(sum(v for lab, v in dur if f(lab))) if dur else None
+        return "chihaya", _derive({"torrents": total("chihaya_storage_infohashes_count"),
+                                   "seeds": total("chihaya_storage_seeders_count"), "leechers": total("chihaya_storage_leechers_count"),
+                                   "requests": by(lambda lab: True), "announces": by(lambda lab: lab.get("action") == "announce"),
+                                   "scrapes": by(lambda lab: lab.get("action") == "scrape"),
+                                   "refused": by(lambda lab: bool(lab.get("error")))})
+    if "aquatic_torrents" in m:
+        return "aquatic", _derive({"torrents": total("aquatic_torrents"), "peers": total("aquatic_peers"),
+                                   "requests": total("aquatic_requests_total"),
+                                   "announces": total("aquatic_responses_total", type="announce"),
+                                   "scrapes": total("aquatic_responses_total", type="scrape")})
+    return None
+
+
+def _xbt_html(s: str) -> dict[str, int]:
+    import re
+    row = lambda label: next((_count(int(re.sub(r"\D", "", v))) for v in
+                              re.findall(rf"<tr><td>{label}\s*<td class=ar>([\d,. ]+)", s) if re.sub(r"\D", "", v)), None)
+    return _derive({"torrents": row("torrents"), "peers": row("peers"), "seeds": row("seeders"),
+                    "leechers": row("leechers"), "announces": row("announced")})
 
 
 def parse_stats(body: bytes) -> tuple[str, dict[str, int]] | None:
-    """("opentracker"|"other", figures) from a stats page, or None if it isn't one we can read. The page is the
-    tracker's own text: read with patterns for the few tags wanted, never an XML parser."""
+    """(software, figures) from a stats page: software is "opentracker", "XBT", "chihaya", "aquatic",
+    "bittorrent-tracker" or "other"; None if it isn't one we can read. The page is the tracker's own text: read with
+    patterns for the few figures wanted, never an XML or HTML parser."""
     import json
 
     s = body.decode("utf-8", "replace").strip()
     if "<stats>" in s:
-        kind, f = "opentracker", _ot_stats(s)
+        got: tuple[str, dict[str, int]] | None = ("opentracker", _ot_stats(s))
+    elif "<title>XBT Tracker</title>" in s:
+        got = ("XBT", _xbt_html(s))
     elif s.startswith("{"):
         try:
             d = json.loads(s)
         except ValueError:
             return None
-        if not isinstance(d, dict):
-            return None
-        kind, f = "other", _json_stats(d)
+        got = _json_stats(d) if isinstance(d, dict) else None
     else:
-        return None
-    return (kind, f) if "torrents" in f or "peers" in f else None
+        got = _prom_stats(s)
+    return got if got and ("torrents" in got[1] or "peers" in got[1]) else None
 
 
-def fetch_stats(url: str, local: bool = False) -> tuple[str, dict[str, int]] | None:
-    """A tracker's own stats (parse_stats), or None if it publishes none we can read (or doesn't answer). Public
-    addresses only (the urllib3 connect rule); local reads this server's own tracker on loopback instead."""
-    target = stats_url(url, local)
+def _stats_get(url: str, path: str, local: bool) -> tuple[int, bytes]:
     if local:
         import http.client
 
-        c = http.client.HTTPConnection("127.0.0.1", urlparse(target).port, timeout=10)
+        c = http.client.HTTPConnection("127.0.0.1", urlparse(stats_url(url, True)).port, timeout=10)
         try:
-            c.request("GET", "/stats?mode=everything", headers={"User-Agent": STATS_UA})
+            c.request("GET", path, headers={"User-Agent": STATS_UA})
             r = c.getresponse()
-            status, body = r.status, r.read(MAX_RESPONSE_SIZE + 1)
+            return r.status, r.read(MAX_RESPONSE_SIZE + 1)
         finally:
             c.close()
-    else:
-        resp = requests.get(target, headers={"User-Agent": STATS_UA}, timeout=10, stream=True, allow_redirects=False)
-        status, body = resp.status_code, cast(HTTPResponse, resp.raw).read(MAX_RESPONSE_SIZE + 1, decode_content=True)
-    if status != 200 or not body or len(body) > MAX_RESPONSE_SIZE:
-        return None
-    return parse_stats(body)
+    resp = requests.get(stats_url(url, False, path), headers={"User-Agent": STATS_UA}, timeout=10, stream=True,
+                        allow_redirects=False)
+    return resp.status_code, cast(HTTPResponse, resp.raw).read(MAX_RESPONSE_SIZE + 1, decode_content=True)
+
+
+def fetch_stats(url: str, local: bool = False, path: str | None = None) -> tuple[str, dict[str, int], str] | None:
+    """A tracker's own stats: (software, figures, the path that answered), or None if it publishes none we can read.
+    path: the one that worked before (one request); without it, STATS_PATHS in turn, stopping at the first that works,
+    and at once if nothing answers HTTP there (no point asking for other paths). Public addresses only (the urllib3
+    connect rule); local reads this server's own tracker on loopback instead (opentracker: one path)."""
+    for p in [path] if path else (STATS_PATHS[:1] if local else STATS_PATHS):
+        try:
+            status, body = _stats_get(url, p, local)
+        except (OSError, requests.RequestException, HTTPError):
+            return None
+        if status == 200 and body and len(body) <= MAX_RESPONSE_SIZE:
+            got = parse_stats(body)
+            if got:
+                return got[0], got[1], p
+    return None
 
 
 def _announce_http_once(url: str) -> HTTPAnnounceResponse:

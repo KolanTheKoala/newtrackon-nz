@@ -126,8 +126,9 @@ def _t(url=NYC, status=1, ips=("93.184.216.34",)):
 class TestSchedule:
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch: pytest.MonkeyPatch):
-        self.calls, self.answer = [], ("opentracker", {"torrents": 10, "peers": 20})
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False: self.calls.append((url, local)) or self.answer)
+        self.calls, self.paths, self.answer = [], [], ("opentracker", {"torrents": 10, "peers": 20}, "/stats?mode=everything")
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: self.calls.append((url, local))
+                            or self.paths.append(path) or self.answer)
         monkeypatch.setattr(T, "_STATS_NEXT", [0])
 
     def test_one_per_gap_and_daily(self) -> None:
@@ -290,7 +291,7 @@ class TestSameInstance:
         assert T._same_instance([self._trk(a), self._trk(b)], now=self.NOW) == []
 
     def test_read_keeps_id_and_start_out_of_the_figures(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False: scraper.parse_stats(OT_XML))
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: scraper.parse_stats(OT_XML) + ("/stats?mode=everything",))
         T.stats_read(_t(), now=self.NOW)
         rec = T.REPSTATS[NYC]
         assert rec["id"] == 1801921171 and rec["start"] == self.NOW - 3203 and "tracker_id" not in rec["hist"][-1]
@@ -315,7 +316,8 @@ class TestNote:
         assert note()["code"] == "not_read"
         T.REPSTATS[NYC] = {"t": self.NOW - 3 * DAY, "next": self.NOW + 27 * DAY, "fails": 1}
         n = note()
-        assert n["code"] == "none" and "http://nyc.example:80/stats" in n["text"] and "asked again in 27 days" in n["text"]
+        assert n["code"] == "none" and "asked http://nyc.example:80 for /stats, /stats.json, /metrics" in n["text"]
+        assert "asked again in 27 days" in n["text"]
         T.REPSTATS[NYC] = {"t": self.NOW - 4 * DAY, "next": self.NOW + 26 * DAY, "fails": 3, "ok": True,
                            "hist": [{"t": self.NOW - 6 * DAY, "torrents": 1}]}
         assert note()["code"] == "stopped" and "stopped answering" in note()["text"]
@@ -324,7 +326,7 @@ class TestNote:
         assert note(status=0)["code"] == "down" and note()["code"] == "stale"
 
     def test_read_records_when_it_was_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False: None)
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: None)
         T.stats_read(_t(), now=self.NOW)
         assert T.REPSTATS[NYC]["t"] == self.NOW
 
@@ -336,3 +338,131 @@ def test_page_and_api_say_why_there_are_none(flask_client: FlaskClient) -> None:
     rec = flask_client.get("/api/tracker/nyc.example").get_json()
     assert rec["reported_stats"] is None and rec["reported_stats_note"]["code"] == "not_read"
     assert 'id="stats"' in flask_client.get("/faq").get_data(as_text=True)
+
+
+XBT_METRICS = """xbt_uptime 86400
+xbt_infohashes_count 1200
+xbt_peers_count{type="seeders"} 300
+xbt_peers_count{type="leechers"} 700
+xbt_connections_count{proto="tcp",type="accepted"} 5000
+xbt_connections_count{proto="tcp",type="slow"} 3
+xbt_connections_count{proto="udp",type="received"} 9000
+xbt_requests_count{proto="http",method="announce"} 4000
+xbt_requests_count{proto="udp",method="announce"} 8000
+xbt_requests_count{proto="http",method="scrape"} 10
+xbt_requests_count{proto="udp",method="scrape"} 20
+"""
+XBT_HTML = ("<!DOCTYPE HTML><meta http-equiv=refresh content=60><title>XBT Tracker</title><table><tr><td>peers<td class=ar>1000"
+            "<tr><td>seeders<td class=ar>300<td class=ar>30 %<tr><td>leechers<td class=ar>700<td class=ar>70 %"
+            "<tr><td>torrents<td class=ar>1,200<tr><td><tr><td>announced<td class=ar>12000<td class=ar>99 %</table>")
+CHIHAYA = """# HELP chihaya_storage_infohashes_count The number of Infohashes tracked
+# TYPE chihaya_storage_infohashes_count gauge
+chihaya_storage_infohashes_count 500
+chihaya_storage_seeders_count 120
+chihaya_storage_leechers_count 380
+chihaya_http_response_duration_milliseconds_count{action="announce",address_family="IPv4",error=""} 1000
+chihaya_http_response_duration_milliseconds_count{action="scrape",address_family="IPv4",error=""} 40
+chihaya_udp_response_duration_milliseconds_count{action="announce",address_family="IPv6",error=""} 2000
+chihaya_udp_response_duration_milliseconds_count{action="announce",address_family="IPv4",error="bad request"} 7
+chihaya_udp_response_duration_milliseconds_bucket{action="announce",address_family="IPv4",error="",le="1"} 9999
+"""
+AQUATIC = """aquatic_torrents{ip_version="4",worker_index="0"} 600
+aquatic_torrents{ip_version="6",worker_index="0"} 50
+aquatic_peers{ip_version="4",worker_index="0"} 2000
+aquatic_requests_total{ip_version="4",worker_index="0"} 30000
+aquatic_responses_total{type="announce",ip_version="4",worker_index="0"} 25000
+aquatic_responses_total{type="scrape",ip_version="4",worker_index="0"} 100
+aquatic_responses_total{type="connect",ip_version="4",worker_index="0"} 4800
+"""
+WEBTORRENT = {"torrents": 30, "activeTorrents": 20, "peersAll": 90, "peersSeederOnly": 40, "peersLeecherOnly": 45,
+              "peersSeederAndLeecher": 5, "peersIPv4": 80, "peersIPv6": 10, "clients": {}}
+
+
+class TestOtherSoftware:
+    def test_xbt_metrics(self) -> None:
+        assert scraper.parse_stats(XBT_METRICS.encode()) == ("XBT", {
+            "uptime_s": 86400, "torrents": 1200, "seeds": 300, "leechers": 700, "peers": 1000, "announces": 12000,
+            "scrapes": 30, "requests": 14000})
+
+    def test_xbt_html_page(self) -> None:
+        assert scraper.parse_stats(XBT_HTML.encode()) == ("XBT", {
+            "torrents": 1200, "peers": 1000, "seeds": 300, "leechers": 700, "announces": 12000})
+
+    def test_chihaya(self) -> None:
+        assert scraper.parse_stats(CHIHAYA.encode()) == ("chihaya", {
+            "torrents": 500, "seeds": 120, "leechers": 380, "peers": 500, "requests": 3047, "announces": 3007,
+            "scrapes": 40, "refused": 7})
+
+    def test_aquatic(self) -> None:
+        assert scraper.parse_stats(AQUATIC.encode()) == ("aquatic", {
+            "torrents": 650, "peers": 2000, "requests": 30000, "announces": 25000, "scrapes": 100})
+
+    def test_webtorrent(self) -> None:
+        assert scraper.parse_stats(json.dumps(WEBTORRENT).encode()) == ("bittorrent-tracker", {
+            "torrents": 30, "peers": 90, "seeds": 45, "leechers": 45})
+
+    def test_unknown_metrics_arent_read(self) -> None:
+        assert scraper.parse_stats(b"go_goroutines 12\nprocess_cpu_seconds_total 3.5\n") is None
+
+
+class TestProbe:
+    def _get(self, monkeypatch, answers):
+        asked = []
+
+        def get(url, **kw):
+            asked.append(url)
+            a = answers.get("/" + url.split("/", 3)[3], (404, b""))
+            if isinstance(a, Exception):
+                raise a
+            return SimpleNamespace(status_code=a[0], raw=SimpleNamespace(read=lambda n, decode_content, b=a[1]: b))
+        monkeypatch.setattr(scraper.requests, "get", get)
+        return asked
+
+    def test_paths_in_turn_until_one_answers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._get(monkeypatch, {"/metrics": (200, XBT_METRICS.encode())})
+        got = REAL_FETCH("udp://t.example:6969/announce")
+        assert got[0] == "XBT" and got[2] == "/metrics"
+        assert asked == ["http://t.example:6969/stats?mode=everything", "http://t.example:6969/stats.json",
+                         "http://t.example:6969/metrics"]
+
+    def test_stops_at_the_first_that_works(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._get(monkeypatch, {"/stats?mode=everything": (200, OT_XML)})
+        assert REAL_FETCH("udp://t.example:6969/announce")[2] == "/stats?mode=everything" and len(asked) == 1
+
+    def test_nothing_listening_means_one_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._get(monkeypatch, {"/stats?mode=everything": scraper.requests.ConnectionError("refused")})
+        assert REAL_FETCH("udp://t.example:6969/announce") is None and len(asked) == 1
+
+    def test_a_known_path_is_one_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._get(monkeypatch, {"/stats.json": (200, json.dumps(WEBTORRENT).encode())})
+        assert REAL_FETCH("https://t.example/announce", path="/stats.json")[0] == "bittorrent-tracker"
+        assert asked == ["https://t.example:443/stats.json"]
+
+
+class TestPathKept:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch: pytest.MonkeyPatch):
+        self.paths, self.answer = [], ("XBT", {"torrents": 1}, "/metrics")
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: self.paths.append(path) or self.answer)
+
+    def test_daily_reads_use_the_path_that_worked_and_a_retry_looks_again(self) -> None:
+        t, b = _t(), 10 * DAY
+        T.stats_read(t, now=b)
+        assert T.REPSTATS[NYC]["path"] == "/metrics" and T.REPSTATS[NYC]["kind"] == "XBT"
+        self.answer = None
+        for n in (1, 2, 3):
+            T.stats_read(t, now=b + n * DAY)
+        T.stats_read(t, now=b + 33 * DAY)  # the 30-day retry
+        assert self.paths == [None, "/metrics", "/metrics", "/metrics", None]
+
+
+def test_a_none_from_the_old_one_path_probe_is_asked_again_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: calls.append(url))
+    monkeypatch.setattr(T, "_STATS_NEXT", [0])
+    T.REPSTATS[NYC] = {"t": 1000, "next": 1000 + T.STATS_RETRY, "fails": 1}  # before the version mark
+    T.stats_due([_t()], now=2000)
+    assert calls == [NYC] and T.REPSTATS[NYC]["v"] == T.STATS_PROBE_V and T.REPSTATS[NYC]["next"] == 2000 + T.STATS_RETRY
+    T._STATS_NEXT[0] = 0
+    T.stats_due([_t()], now=3000)
+    assert calls == [NYC]  # this time it waits the 30 days
