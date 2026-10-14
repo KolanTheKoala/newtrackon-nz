@@ -832,7 +832,12 @@ def redact_origin(response: str) -> str:
 
 
 def _probe_peers(resp):
-    return [x for x in list(resp.get("peers", []) or []) + list(resp.get("peers6", []) or []) if isinstance(x, dict)]
+    """Every peer in a reply as a dict with str keys. A non-compact reply (a list of dictionaries, which some trackers send
+    even when asked for compact, e.g. l2.mxrepo.com) comes back from bdecode with bytes keys (b'ip', b'port'): read as
+    str keys they had no address and no port, so our own two test clients counted as fake peers (a false Up/Bad)."""
+    def norm(x):
+        return {(k.decode("ascii", "replace") if isinstance(k, bytes) else k): v for k, v in x.items()}
+    return [norm(x) for x in list(resp.get("peers", []) or []) + list(resp.get("peers6", []) or []) if isinstance(x, dict)]
 
 
 def _peer_ip(x):
