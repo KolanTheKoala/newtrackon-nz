@@ -431,6 +431,31 @@ def decode_binary_peers_list(buf: bytes, offset: int, ip_family: int) -> list[Pe
     return peers
 
 
+def amp_hash_test(url: str) -> bool | None:
+    """Whether an HTTP(S) tracker accepts an info hash holding byte 0x26 ('&'), sent as %26 like every client sends it.
+    Some trackers percent-decode the query before splitting it on '&', so that hash reaches them cut short and is
+    refused: about 1 in 13 real torrents (any hash with that byte) can't use them. True: answered normally. False:
+    refused it as an invalid info hash. None: no verdict (network trouble, or refused for some other reason).
+    Sent as 'stopped' so it never registers a peer; asked once a day per tracker (tracker.AMP_EVERY)."""
+    h = bytearray(test_info_hash())
+    h[random.randrange(20)] = 0x26
+    pid = generate_peer_id()
+    q = urlencode({"info_hash": bytes(h), "peer_id": pid, "port": probe_port(HTTP_PORT), "uploaded": 0, "downloaded": 0,
+                   "left": 0, "compact": 1, "event": "stopped", **client_args(pid, "stopped")})
+    try:
+        response, content = memory_limited_get(url + "?" + q)
+        if response.status_code != 200 or not content:
+            return None
+        reply = parse_http_tracker_response(content)
+    except Exception:
+        return None
+    reason = reply.get("failure reason")
+    if reason is None:
+        return True
+    reason = (reason.decode("utf-8", "replace") if isinstance(reason, bytes) else str(reason)).lower()
+    return False if any(s in reason for s in ("info_hash", "info hash", "infohash")) else None
+
+
 def _announce_http_once(url: str) -> HTTPAnnounceResponse:
     logger.info("%s Scraping HTTP(S)", url)
     new_client()

@@ -64,6 +64,16 @@
         <a href="/fix#dead-address" class="btn btn-sm btn-warning"><i class="fa-solid fa-wrench"></i> How to fix it</a>
     </div>
     {% endif %}
+    {% if d.ampersand_hash_ok is sameas false %}
+    <div class="nt-problem">
+        <h5>Refuses about 1 in 13 torrents</h5>
+        <p class="mb-2">It rejects every torrent whose info hash contains the byte 0x26 (the &ldquo;&amp;&rdquo; character)
+            with an &ldquo;invalid info_hash&rdquo; error: about 7.5% of all torrents. It decodes the announce URL before
+            splitting it into its parts, so the <code>%26</code> every client sends for that byte cuts the hash short.
+            It works for every other torrent, so it stays listed and Up, but it's left out of the clean lists.</p>
+        <a href="/fix#ampersand-hash" class="btn btn-sm btn-warning"><i class="fa-solid fa-wrench"></i> How to fix it</a>
+    </div>
+    {% endif %}
     {% if fix %}
     <div class="nt-problem">
         <h5>What's wrong: {{ fix_title }}</h5>

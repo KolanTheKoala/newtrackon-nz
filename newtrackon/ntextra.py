@@ -154,6 +154,9 @@ def _detail(t):
         "fake_peers": {"latest": T.FAKE_N.get(t.url), "streak": T.FAKE_FAILS.get(t.url, 0)},
         "stale_peers": bool(T.STALE.get(t.url)),
         "spoof_proof": True if t.url.startswith("http") else T.CID_OK.get(t.url),
+        # HTTP(S) only: True if it accepts an info hash holding byte 0x26 ('&'), False if it refuses one (about 1 in 13
+        # torrents can't use it, so it's left out of the clean lists), None if not tested yet (or UDP: not affected)
+        "ampersand_hash_ok": T.AMP_OK.get(t.url) if t.url.startswith("http") else None,
         "announce_interval_s": T.ANN_IV.get(t.url),
         "warning_message": (T.WARNINGS.get(t.url) or {}).get("msg"),
         "check_interval_s": t.interval,
@@ -242,8 +245,8 @@ def quality_filter(args):
         return None
     ok = set()
     for t in _trackers():
-        if good and _state(t)[0] not in ("up_good", "up_new"):
-            continue
+        if good and (_state(t)[0] not in ("up_good", "up_new") or T.AMP_OK.get(t.url) is False):
+            continue  # good = a clean list: not a tracker that refuses info hashes holding '&' (1 in 13 torrents)
         if proto and ("udp" if t.url.startswith("udp:") else "http") != proto:
             continue
         fams = _fams(t)
@@ -358,7 +361,8 @@ FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peer
               "unreliable": "Drops out (Up/Unreliable, Up/Junk)", "slow": "Slow (Up/Slow)", "down-timeout": "Down: timeout",
               "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
               "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer",
-              "interval": "Announce interval too short or too long", "removed": "Removed and banned",
+              "interval": "Announce interval too short or too long", "ampersand-hash": "Refuses torrents whose info hash contains \"&\"",
+              "removed": "Removed and banned",
               "split-swarm": "Separate servers that don't share swarms (Up/Broken)",
               "answers-elsewhere": "Down from New Zealand only (answers elsewhere)",
               "hidden-address": "Hands out an address nobody can reach"}
@@ -1029,6 +1033,8 @@ def register(app):
                 continue
             fam = _fams(t)
             if "dead" in fam.values() or (need_v4 and fam["v4"] != "ok"):
+                continue
+            if T.AMP_OK.get(t.url) is False:  # refuses info hashes holding '&': about 1 in 13 torrents can't use it
                 continue
             if max_ms and (t.latency is None or t.latency >= max_ms):
                 continue

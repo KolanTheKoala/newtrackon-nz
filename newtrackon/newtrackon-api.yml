@@ -59,7 +59,8 @@ paths:
       tags: [Recommended]
       description: >-
         Trackers that are up and not Junk, Bad or Broken (Up/Good or Up/Slow; also Up/New or Up/Unreliable if they still reach min_score), listed at least min_age_days days, with a score of at least min_score, no confirmed
-        dead IP family, and by default only the best tracker from each operator. The list to paste into a client.
+        dead IP family, not refusing info hashes that contain the byte 0x26 ('&', about 1 in 13 torrents: see
+        ampersand_hash_ok), and by default only the best tracker from each operator. The list to paste into a client.
       parameters:
         - name: min_score
           in: query
@@ -189,6 +190,7 @@ paths:
                       fake_peers: {type: object, description: "latest: fake peers in the last check; streak: of the last 6."}
                       stale_peers: {description: "Keeps handing out a peer after it sent 'stopped' (flag only)."}
                       spoof_proof: {description: "UDP: enforces the BEP 15 connection ID. HTTP(S) always true."}
+                      ampersand_hash_ok: {type: [boolean, "null"], description: "HTTP(S): false if it refuses info hashes containing the byte 0x26 ('&', sent as %26), about 1 in 13 torrents; such trackers are left out of /clean and good=true. Tested once a day. Null if not tested yet, or UDP (not affected)."}
                       announce_interval_s: {type: [integer, "null"], description: "The interval it asks clients for. Outside 15 min - 3 h costs up to 5 points."}
                       check_interval_s: {type: integer, description: "How often this site checks it."}
                       stats: {type: object}
@@ -522,7 +524,7 @@ components:
     Good:
       in: query
       name: good
-      description: Only Up/Good trackers (including Up/New ones still building their first week).
+      description: Only Up/Good trackers (including Up/New ones still building their first week), leaving out any that refuse info hashes containing the byte 0x26 ('&').
       schema: {type: boolean, default: false}
     Protocol:
       in: query

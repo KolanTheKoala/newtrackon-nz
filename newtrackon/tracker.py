@@ -204,6 +204,12 @@ class Tracker:
                 STALE[self.url] = _ex.get("stale")
                 if _ex.get("cid_ok") is not None:  # tested this time: otherwise the last day's result stands
                     CID_OK[self.url], CID_T[self.url] = _ex["cid_ok"], int(time())
+                if self.url.startswith("http") and time() - AMP_T.get(self.url, 0) >= AMP_EVERY:
+                    _amp = scraper.amp_hash_test(self.url)
+                    if _amp is not None:  # no verdict: asked again next check; otherwise the last day's result stands
+                        AMP_OK[self.url], AMP_T[self.url] = _amp, int(time())
+                        if _amp is False:
+                            logger.info("%s AMPERSAND HASH REFUSED: rejects info hashes holding byte 0x26 (about 1 in 13 torrents)", self.url)
                 _fr = scraper.family_probe(self.url)
                 _df = next((k for k, v in _fr.items() if not v), None) if len(_fr) == 2 and sum(_fr.values()) == 1 else None
                 _fam_set(self.url, _df, _fr)
@@ -214,7 +220,7 @@ class Tracker:
                 if _df:
                     logger.info("%s DEAD FAMILY: published %s address does not answer", self.url, _df)
                 _probe_save()
-                debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": CID_OK.get(self.url)}
+                debug["flags"] = {"peer_ok": self.peer_ok, "fake": _ex.get("foreign"), "fake3": FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "peer3": PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT, "inflated": _ex.get("inflated"), "stale": _ex.get("stale"), "cid_ok": CID_OK.get(self.url), "amp_ok": AMP_OK.get(self.url)}
                 if _ex.get("stale"):
                     logger.info("%s STALE PEERS: still hands out a peer after it sent stopped", self.url)
                 if _ex.get("cid_ok") is False:
@@ -759,6 +765,7 @@ def format_uptime_and_downtime_time(trackers_unprocessed: list[Tracker]) -> list
             tracker.inflated = INFLATED.get(tracker.url)
             tracker.stale = STALE.get(tracker.url)
             tracker.cid_ok = CID_OK.get(tracker.url)
+            tracker.amp_ok = AMP_OK.get(tracker.url)
             tracker.status_epoch = tracker.last_downtime
             if not tracker.last_downtime:
                 tracker.status_readable = "Up"
@@ -890,6 +897,12 @@ STALE: dict = _url_store("STALE", probe="stale", peer=True)  # url -> True if it
 CID_OK: dict = _url_store("CID_OK", probe="cid_ok", protocol=True)  # url -> True if it rejects a made-up UDP connection ID, False if it accepts one
 CID_T: dict = _url_store("CID_T", probe="cid_t", protocol=True)  # url -> when that was last tested
 CID_EVERY = 86400  # once a day: the made-up ID is the one request no real client sends
+# HTTP(S): does it accept an info hash holding byte 0x26 ('&')? Some decode the query before splitting it on '&' and
+# refuse such hashes: about 1 in 13 real torrents can't use them. Not a status or score matter (it works for the
+# rest), but it keeps the tracker out of the clean lists (/api/clean, good=true): user's call 2026-10-14.
+AMP_OK: dict = _url_store("AMP_OK", probe="amp_ok", protocol=True)  # url -> True if accepted, False if refused
+AMP_T: dict = _url_store("AMP_T", probe="amp_t", protocol=True)  # url -> when that was last tested
+AMP_EVERY = 86400  # once a day per tracker, like the connection-ID test
 
 
 # Persist latest probe results so restarts don't blank the status marks.
