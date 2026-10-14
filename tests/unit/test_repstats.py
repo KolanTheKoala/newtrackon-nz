@@ -68,7 +68,7 @@ class TestParse:
         assert kind == "opentracker"
         assert f == {"uptime_s": 3203, "torrents": 780590, "peers": 1313781, "seeds": 179685, "leechers": 1313781 - 179685,
                      "completed": 4614, "requests": 4609321 + 39, "announces": 2350042 + 2, "scrapes": 26127 + 1,
-                     "refused": 1029968}
+                     "refused": 1029968, "tracker_id": 1801921171}
 
     def test_the_kind_with_active_and_retained_torrents(self) -> None:
         kind, f = scraper.parse_stats(json.dumps(DUCKS).encode())
@@ -261,3 +261,47 @@ class TestPageAndApi:
         _hist({"t": int(time.time()), "torrents": 1})
         T.REPSTATS[NYC]["kind"] = "<script>x</script>"
         assert "<script>x" not in flask_client.get("/tracker/nyc.example").get_data(as_text=True)
+
+
+class TestSameInstance:
+    """Two names served by one running opentracker are grouped as the same operator (user's call 2026-10-15), by its
+    tracker_id and start time; that feeds the page's 'Same operator as', the rankings and /api/clean's one per operator."""
+    NOW = 10 * DAY
+
+    def _read(self, url, tid, start, t=None):
+        T.REPSTATS[url] = {"kind": "opentracker", "id": tid, "start": start, "hist": [{"t": t or self.NOW - 3600, "torrents": 1}]}
+
+    def _trk(self, url):
+        return SimpleNamespace(url=url)
+
+    def test_same_id_and_start_is_one_instance(self) -> None:
+        a, b, c = "udp://a.example:1/announce", "https://b.example:443/announce", "udp://c.example:1/announce"
+        self._read(a, 7, 1000)
+        self._read(b, 7, 1030)  # read later, uptime a few seconds out: still the same start
+        self._read(c, 7, 1000 + 3600)  # same id by chance, started an hour apart: not the same
+        assert T._same_instance([self._trk(x) for x in (a, b, c)], now=self.NOW) == [(a, b)]
+
+    def test_stale_or_without_uptime_isnt_used(self) -> None:
+        a, b = "udp://a.example:1/announce", "udp://b.example:1/announce"
+        self._read(a, 7, 1000, t=self.NOW - 4 * DAY)
+        self._read(b, 7, 1000)
+        assert T._same_instance([self._trk(a), self._trk(b)], now=self.NOW) == []
+        self._read(a, 7, None)
+        assert T._same_instance([self._trk(a), self._trk(b)], now=self.NOW) == []
+
+    def test_read_keeps_id_and_start_out_of_the_figures(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False: scraper.parse_stats(OT_XML))
+        T.stats_read(_t(), now=self.NOW)
+        rec = T.REPSTATS[NYC]
+        assert rec["id"] == 1801921171 and rec["start"] == self.NOW - 3203 and "tracker_id" not in rec["hist"][-1]
+
+
+@pytest.mark.usefixtures("region_db")
+def test_grouped_on_the_page_as_the_same_operator(flask_client: FlaskClient) -> None:
+    import time
+    now = int(time.time())
+    page = lambda: flask_client.get("/api/tracker/nyc.example").get_json()["same_operator_as"]
+    assert "udp://akl.example:1/announce" not in page()
+    for u in (NYC, "udp://akl.example:1/announce"):
+        T.REPSTATS[u] = {"kind": "opentracker", "id": 42, "start": now - 5000, "hist": [{"t": now - 60, "torrents": 1}]}
+    assert "udp://akl.example:1/announce" in page()

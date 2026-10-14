@@ -2070,6 +2070,8 @@ def _attach_extras(trackers):
                 parent[find(u)] = find(seen_dom[d])
             else:
                 seen_dom[d] = u
+    for a, b in _same_instance(trackers):  # the same running tracker under two names (its own stats say so)
+        parent[find(a)] = find(b)
     groups = {}
     for t in trackers:
         groups.setdefault(find(t.url), []).append(t.url)
@@ -2173,6 +2175,9 @@ def stats_read(t, now=None):
     rec = REPSTATS.setdefault(t.url, {})
     if got:
         kind, fig = got
+        fig = dict(fig)
+        # which running instance answered (opentracker): its id, and when it started (to the second, from its uptime)
+        rec["id"], rec["start"] = fig.pop("tracker_id", None), (now - fig["uptime_s"]) if "uptime_s" in fig else None
         hist = [h for h in rec.get("hist", []) if now - int(h.get("t", 0)) <= STATS_KEEP] + [dict(fig, t=now)]
         rec.update(kind=kind, ok=True, fails=0, next=now + STATS_EVERY, hist=hist)
         logger.info("Stats of %s: %s torrents, %s peers (%s)", t.url, fig.get("torrents", "-"), fig.get("peers", "-"), kind)
@@ -2182,6 +2187,28 @@ def stats_read(t, now=None):
         rec["next"] = now + (STATS_EVERY if again else STATS_RETRY)
         logger.info("Stats of %s: none published, asked again in %d days", t.url, 1 if again else STATS_RETRY // 86400)
     _jsave(REPSTATS, _REPSTATS_FILE)
+
+
+STATS_SAME_START = 60  # two names whose instance has the same id and started within this many seconds are one tracker
+STATS_FRESH = 3 * 24 * 3600
+
+
+def _same_instance(trackers, now=None):
+    """Pairs of listed trackers whose own stats show one running instance: the same opentracker tracker_id (random at
+    its start) and the same start time (from its uptime), from readings under 3 days old. Two unrelated instances
+    would have to draw the same 32-bit id and start in the same minute."""
+    now = int(now or time())
+    seen, pairs = [], []
+    for t in trackers:
+        rec = REPSTATS.get(t.url) or {}
+        hist = rec.get("hist") or []
+        if rec.get("id") is None or rec.get("start") is None or not hist or now - int(hist[-1]["t"]) > STATS_FRESH:
+            continue
+        for u, i, s in seen:
+            if i == rec["id"] and abs(s - rec["start"]) <= STATS_SAME_START:
+                pairs.append((u, t.url))
+        seen.append((t.url, rec["id"], rec["start"]))
+    return pairs
 
 
 # ---- removed trackers tested again: once a day while the ban runs, the site's own checks are run on it and what they see

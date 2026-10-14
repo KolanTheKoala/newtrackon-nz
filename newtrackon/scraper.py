@@ -503,6 +503,8 @@ def _ot_stats(s: str) -> dict[str, int]:
          "announces": both("announce"), "scrapes": both("scrape"), "refused": one(r"<missmatch>(\d+)</missmatch>", udp)}
     if f["peers"] is not None and f["seeds"] is not None and f["seeds"] <= f["peers"]:
         f["leechers"] = f["peers"] - f["seeds"]
+    # random() at start-up, so the same for every name one running instance serves (new after a restart)
+    f["tracker_id"] = one(r"<tracker_id>(\d+)</tracker_id>")
     return {k: v for k, v in f.items() if v is not None}
 
 
