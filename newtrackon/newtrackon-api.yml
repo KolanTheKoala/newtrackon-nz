@@ -196,7 +196,7 @@ paths:
                       stats: {type: object}
                       reported_stats:
                         type: [object, "null"]
-                        description: "What the tracker's own public stats page said at its latest daily reading (asked on its announce port for /stats?mode=everything, /stats.json and /metrics at a first visit, then the one that answered): reported by the tracker, not measured by this site. Null if it publishes none this site can read (asked again every 30 days), or the latest reading is over 3 days old. Torrent counts include made-up hashes some clients spray at trackers."
+                        description: "What the tracker's own public stats page said at its latest daily reading (asked on its announce port for /stats?mode=everything, /stats.json and /metrics at a first visit, then /metrics on ports 6880 and 9000, then the one that answered): reported by the tracker, not measured by this site. Null if it publishes none this site can read (asked again every 30 days), or the latest reading is over 3 days old. Torrent counts include made-up hashes some clients spray at trackers."
                         properties:
                           t: {type: integer, description: "When it was read (Unix time)."}
                           software: {type: string, enum: [opentracker, XBT, chihaya, aquatic, bittorrent-tracker, other]}

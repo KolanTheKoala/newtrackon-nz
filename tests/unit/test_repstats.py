@@ -127,7 +127,7 @@ class TestSchedule:
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch: pytest.MonkeyPatch):
         self.calls, self.paths, self.answer = [], [], ("opentracker", {"torrents": 10, "peers": 20}, "/stats?mode=everything")
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: self.calls.append((url, local))
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: self.calls.append((url, local))
                             or self.paths.append(path) or self.answer)
         monkeypatch.setattr(T, "_STATS_NEXT", [0])
 
@@ -291,7 +291,7 @@ class TestSameInstance:
         assert T._same_instance([self._trk(a), self._trk(b)], now=self.NOW) == []
 
     def test_read_keeps_id_and_start_out_of_the_figures(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: scraper.parse_stats(OT_XML) + ("/stats?mode=everything",))
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: scraper.parse_stats(OT_XML) + ("/stats?mode=everything",))
         T.stats_read(_t(), now=self.NOW)
         rec = T.REPSTATS[NYC]
         assert rec["id"] == 1801921171 and rec["start"] == self.NOW - 3203 and "tracker_id" not in rec["hist"][-1]
@@ -326,7 +326,7 @@ class TestNote:
         assert note(status=0)["code"] == "down" and note()["code"] == "stale"
 
     def test_read_records_when_it_was_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: None)
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: None)
         T.stats_read(_t(), now=self.NOW)
         assert T.REPSTATS[NYC]["t"] == self.NOW
 
@@ -429,9 +429,28 @@ class TestProbe:
         asked = self._get(monkeypatch, {"/stats?mode=everything": (200, OT_XML)})
         assert REAL_FETCH("udp://t.example:6969/announce")[2] == "/stats?mode=everything" and len(asked) == 1
 
-    def test_nothing_listening_means_one_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        asked = self._get(monkeypatch, {"/stats?mode=everything": scraper.requests.ConnectionError("refused")})
-        assert REAL_FETCH("udp://t.example:6969/announce") is None and len(asked) == 1
+    def test_nothing_listening_skips_that_ports_other_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._get(monkeypatch, {"/stats?mode=everything": scraper.requests.ConnectionError("refused"),
+                                        "/metrics": scraper.requests.ConnectionError("refused")})
+        assert REAL_FETCH("udp://t.example:6969/announce") is None
+        assert asked == ["http://t.example:6969/stats?mode=everything", "http://t.example:6880/metrics", "http://t.example:9000/metrics"]
+
+    def test_the_metrics_ports_after_the_announce_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def get(url, **kw):
+            asked.append((url, kw["timeout"]))
+            ok = url == "http://t.example:6880/metrics"
+            return SimpleNamespace(status_code=200 if ok else 404,
+                                   raw=SimpleNamespace(read=lambda n, decode_content: CHIHAYA.encode() if ok else b""))
+        asked: list = []
+        monkeypatch.setattr(scraper.requests, "get", get)
+        got = REAL_FETCH("https://t.example/announce")
+        assert got[0] == "chihaya" and got[2] == ":6880/metrics"
+        assert asked[-1] == ("http://t.example:6880/metrics", 5) and len(asked) == 4
+        assert scraper.stats_url("https://t.example/announce", path=":6880/metrics") == "http://t.example:6880/metrics"
+
+    def test_no_other_ports_when_told_not_to(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._get(monkeypatch, {})
+        assert REAL_FETCH("udp://t.example:6969/announce", ports=False) is None and len(asked) == 3
 
     def test_a_known_path_is_one_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
         asked = self._get(monkeypatch, {"/stats.json": (200, json.dumps(WEBTORRENT).encode())})
@@ -443,7 +462,7 @@ class TestPathKept:
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch: pytest.MonkeyPatch):
         self.paths, self.answer = [], ("XBT", {"torrents": 1}, "/metrics")
-        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: self.paths.append(path) or self.answer)
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: self.paths.append(path) or self.answer)
 
     def test_daily_reads_use_the_path_that_worked_and_a_retry_looks_again(self) -> None:
         t, b = _t(), 10 * DAY
@@ -458,7 +477,7 @@ class TestPathKept:
 
 def test_a_none_from_the_old_one_path_probe_is_asked_again_now(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
-    monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None: calls.append(url))
+    monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: calls.append(url))
     monkeypatch.setattr(T, "_STATS_NEXT", [0])
     T.REPSTATS[NYC] = {"t": 1000, "next": 1000 + T.STATS_RETRY, "fails": 1}  # before the version mark
     T.stats_due([_t()], now=2000)
@@ -466,3 +485,14 @@ def test_a_none_from_the_old_one_path_probe_is_asked_again_now(monkeypatch: pyte
     T._STATS_NEXT[0] = 0
     T.stats_due([_t()], now=3000)
     assert calls == [NYC]  # this time it waits the 30 days
+
+
+def test_cdn_fronted_trackers_are_not_asked_on_other_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = []
+    monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: seen.append(ports))
+    t = _t()
+    t.networks = ["Cloudflare, Inc."]
+    T.stats_read(t, now=1000)
+    t.networks = ["Hetzner Online GmbH"]
+    T.stats_read(t, now=2000)
+    assert seen == [False, True]

@@ -2142,7 +2142,7 @@ STATS_FAILS = 3  # failed days in a row before one that published stats is asked
 STATS_GAP = 600  # one read at a time, this far apart
 STATS_KEEP = 31 * 24 * 3600
 _STATS_NEXT = [time() + 600]  # nothing in the first 10 minutes after a start
-STATS_PROBE_V = 2  # 2: every path in scraper.STATS_PATHS; a "none" found by an older probe (/stats only) is asked again now
+STATS_PROBE_V = 3  # 2: every path in STATS_PATHS, 3: and STATS_PORTS; a "none" found by an older probe is asked again now
 
 
 def _stats_local(t):
@@ -2172,7 +2172,9 @@ def stats_read(t, now=None):
     # the path that worked before, while it's still answering daily; a 30-day retry looks at every path again
     path = rec0.get("path") if int(rec0.get("fails") or 0) < STATS_FAILS else None
     try:
-        got = scraper.fetch_stats(t.url, local=_stats_local(t), path=path)
+        # never another port of a CDN-fronted tracker (that's the CDN, not the tracker)
+        cdn = any("cloudflare" in str(n).lower() for n in (getattr(t, "networks", None) or []))
+        got = scraper.fetch_stats(t.url, local=_stats_local(t), path=path, ports=not cdn)
     except Exception as e:
         logger.info("Stats of %s: none (%s)", t.url, type(e).__name__)
         got = None

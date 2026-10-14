@@ -460,11 +460,13 @@ def amp_hash_test(url: str) -> bool | None:
 # announce port (checked in each project's source, 2026-10-15): opentracker /stats?mode=everything (XML); XBT the same
 # request (it matches on the first letters: HTML table) and /metrics (Prometheus text); WebTorrent's bittorrent-tracker
 # /stats.json; and two JSON kinds found on listed trackers (one with active/retained torrents and an uptime 't', and
-# the retracker kind of tr2.trkb.ru and retracker.x2k.ru with 'annonces'). chihaya, aquatic and torrust serve theirs
-# on separate ports (torrust only with a token), so they aren't asked. Read with an honest User-Agent. ----
+# the retracker kind of tr2.trkb.ru and retracker.x2k.ru with 'annonces'). chihaya and aquatic serve theirs on their
+# own default ports (6880, 9000: STATS_PORTS, user's call 2026-10-15), asked only when the announce port has none;
+# torrust's needs a token, so it isn't asked. Read with an honest User-Agent. ----
 STATS_UA = "newtrackon.co.nz (reads this tracker's public stats page once a day)"
 STATS_KEYS = ("uptime_s", "torrents", "peers", "seeds", "leechers", "completed", "requests", "announces", "scrapes", "refused")
 STATS_PATHS = ("/stats?mode=everything", "/stats.json", "/metrics")  # tried in turn at a first visit, first that works kept
+STATS_PORTS = (":6880/metrics", ":9000/metrics")  # chihaya's and aquatic's default metrics ports, after STATS_PATHS
 _STATS_MAX = 10**13  # anything bigger (or negative) is nonsense, not a count
 
 
@@ -475,6 +477,8 @@ def stats_url(url: str, local: bool = False, path: str = STATS_PATHS[0]) -> str:
     scheme = "https" if p.scheme == "https" and not local else "http"
     host = "127.0.0.1" if local else (p.hostname or "")
     port = p.port or (443 if scheme == "https" else 80)
+    if path.startswith(":"):  # another port (STATS_PORTS): plain HTTP, like the metrics servers
+        port, path, scheme = int(path[1:].split("/", 1)[0]), "/" + path.split("/", 1)[1], "http"
     return f"{scheme}://{'[' + host + ']' if ':' in host else host}:{port}{path}"
 
 
@@ -626,21 +630,29 @@ def _stats_get(url: str, path: str, local: bool) -> tuple[int, bytes]:
             return r.status, r.read(MAX_RESPONSE_SIZE + 1)
         finally:
             c.close()
-    resp = requests.get(stats_url(url, False, path), headers={"User-Agent": STATS_UA}, timeout=10, stream=True,
-                        allow_redirects=False)
+    # another port may be closed or filtered (no answer at all): a shorter wait there
+    resp = requests.get(stats_url(url, False, path), headers={"User-Agent": STATS_UA}, timeout=5 if path.startswith(":") else 10,
+                        stream=True, allow_redirects=False)
     return resp.status_code, cast(HTTPResponse, resp.raw).read(MAX_RESPONSE_SIZE + 1, decode_content=True)
 
 
-def fetch_stats(url: str, local: bool = False, path: str | None = None) -> tuple[str, dict[str, int], str] | None:
+def fetch_stats(url: str, local: bool = False, path: str | None = None, ports: bool = True) -> tuple[str, dict[str, int], str] | None:
     """A tracker's own stats: (software, figures, the path that answered), or None if it publishes none we can read.
-    path: the one that worked before (one request); without it, STATS_PATHS in turn, stopping at the first that works,
-    and at once if nothing answers HTTP there (no point asking for other paths). Public addresses only (the urllib3
-    connect rule); local reads this server's own tracker on loopback instead (opentracker: one path)."""
-    for p in [path] if path else (STATS_PATHS[:1] if local else STATS_PATHS):
+    path: the one that worked before (one request). Without it: STATS_PATHS on the announce port in turn, then (ports)
+    STATS_PORTS, stopping at the first that works; when a port doesn't answer HTTP at all, its other paths are skipped.
+    Public addresses only (the urllib3 connect rule); local reads this server's own tracker on loopback instead
+    (opentracker: one path)."""
+    cands = [path] if path else (list(STATS_PATHS[:1]) if local else list(STATS_PATHS) + (list(STATS_PORTS) if ports else []))
+    dead: set[str] = set()
+    for p in cands:
+        port = p.split("/", 1)[0] if p.startswith(":") else ""
+        if port in dead:
+            continue
         try:
             status, body = _stats_get(url, p, local)
         except (OSError, requests.RequestException, HTTPError):
-            return None
+            dead.add(port)
+            continue
         if status == 200 and body and len(body) <= MAX_RESPONSE_SIZE:
             got = parse_stats(body)
             if got:
