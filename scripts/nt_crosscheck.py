@@ -142,6 +142,13 @@ def ours(ip):
     return a == ipaddress.ip_address(want) if a.version == 4 else a in ipaddress.ip_network(want + "/64", strict=False)
 
 
+def info_hash():   # never byte 0x26 ('&'): some trackers decode the query before splitting it (see scraper.test_info_hash)
+    while True:
+        h = os.urandom(20)
+        if 0x26 not in h:
+            return h
+
+
 def pid():
     return b"-qB5000-" + os.urandom(6).hex()[:12].encode()
 
@@ -159,7 +166,7 @@ def probe(u):
             tries = []
             for _ in range(3):
                 try:
-                    announce(u, ad, fam, None, os.urandom(20), pid(), 51001, 0, 2 if udp else "started")
+                    announce(u, ad, fam, None, info_hash(), pid(), 51001, 0, 2 if udp else "started")
                     tries.append(True)
                     good = good or ad
                 except Exception:
@@ -174,7 +181,7 @@ def probe(u):
             src = e.get("ip4" if fk == "v4" else "ip6")
             if not src:
                 continue
-            th, pa, pb = os.urandom(20), pid(), pid()
+            th, pa, pb = info_hash(), pid(), pid()
             try:
                 announce(u, good, fam, None, th, pa, 51001, 0, 2 if udp else "started")
                 time.sleep(1)

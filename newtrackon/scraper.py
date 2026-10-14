@@ -340,6 +340,16 @@ def generate_peer_id() -> bytes:
     return ((prof[0] if prof else PEER_ID_PREFIX) + "".join(random.choices(PEER_ID_CHARS, k=12))).encode()
 
 
+def test_info_hash() -> bytes:
+    """A random info hash for a test announce, never containing byte 0x26 ('&'). Some trackers (retracker.x2k.ru,
+    tr2.trkb.ru) percent-decode the query string before splitting it on '&', so a hash holding that byte (7.5% of
+    random ones) reaches them cut short and is refused as "Invalid info_hash": a false Down, not a fault we can see."""
+    while True:
+        h = urandom(20)
+        if 0x26 not in h:
+            return h
+
+
 NUMWANT = {"-qB": 200, "-TR": 80}  # peers each client asks for (qBittorrent/libtorrent 200, Transmission 80)
 
 
@@ -424,7 +434,7 @@ def decode_binary_peers_list(buf: bytes, offset: int, ip_family: int) -> list[Pe
 def _announce_http_once(url: str) -> HTTPAnnounceResponse:
     logger.info("%s Scraping HTTP(S)", url)
     new_client()
-    thash = urandom(20)
+    thash = test_info_hash()
 
     _pid = generate_peer_id()
     args_dict = {
@@ -604,7 +614,7 @@ def announce_udp(udp_url: str) -> tuple[UDPAnnounceResponse, str | None]:
     parsed_tracker = urlparse(udp_url)
     logger.info("%s Scraping UDP", udp_url)
     new_client()
-    thash = urandom(20)
+    thash = test_info_hash()
     peer_id = generate_peer_id()
     ip: str | None = None
     try:
@@ -906,7 +916,7 @@ def delayed_start(url: str, fam_name: str) -> dict | None:
     fam = socket.AF_INET6 if fam_name == "v6" else socket.AF_INET
     saved = (getattr(rtt, "profile", None), getattr(rtt, "probe_port", None))  # the running check keeps its own client
     new_client()
-    port, thash, pid = probe_port(0x76FD), urandom(20), generate_peer_id()
+    port, thash, pid = probe_port(0x76FD), test_info_hash(), generate_peer_id()
     prof = list(getattr(rtt, "profile", None) or ())
     try:
         if p.scheme == "udp":
@@ -1097,7 +1107,7 @@ def peer_probe(only_family: int | None = None, cid: bool = False) -> bool | None
             if cid:
                 try:
                     bogus = struct.unpack("!q", urandom(8))[0]
-                    rq, t = udp_create_announce_request(bogus, urandom(20), generate_peer_id(), left=1, port=want + 2, event=2)
+                    rq, t = udp_create_announce_request(bogus, test_info_hash(), generate_peer_id(), left=1, port=want + 2, event=2)
                     sa_.settimeout(3)
                     sa_.sendall(rq)
                     try:
@@ -1302,7 +1312,7 @@ def peer_probe_exits(url):
         if not addrs:
             continue
         sa = addrs[0][4]
-        want, thash = probe_port(0x76FD if udp else HTTP_PORT), urandom(20)
+        want, thash = probe_port(0x76FD if udp else HTTP_PORT), test_info_hash()
         pid_a, pid_b = generate_peer_id(), generate_peer_id()
         for (src_a, pub_a), (src_b, _pub_b) in ((pairs[0], pairs[1]), (pairs[1], pairs[0])):
             try:
@@ -1387,7 +1397,7 @@ def _genuine(url, fam, src):
     p = urlparse(url)
     port = p.port or (443 if p.scheme == "https" else 80)
     new_client()  # this thread's own client: the check running in the caller's thread keeps its own
-    thash, pid = urandom(20), generate_peer_id()
+    thash, pid = test_info_hash(), generate_peer_id()
     t0 = time()
     if p.scheme == "udp":
         prt = probe_port(0x76FD)
@@ -1459,7 +1469,7 @@ def peer_probe_family(url, fam_name):
         rtt.family_extra = None
         if p.scheme == "udp":
             sa = ordered_addrs(p.hostname, p.port, fam)[0][4]
-            thash, pid = urandom(20), generate_peer_id()
+            thash, pid = test_info_hash(), generate_peer_id()
             s_, ann = _udp_session(fam, sa, None)
             try:
                 ann(pid, 0, probe_port(0x76FD), 2, thash)
@@ -1468,7 +1478,7 @@ def peer_probe_family(url, fam_name):
             rtt.probe = ("udp", thash, fam, sa, pid)
             ok = peer_probe()
         else:
-            rtt.probe = ("http", urandom(20), url, None, generate_peer_id())
+            rtt.probe = ("http", test_info_hash(), url, None, generate_peer_id())
             ok = peer_probe(only_family=fam)
         rtt.family_extra = dict(getattr(rtt, "probe_extra", None) or {})  # what this family's test saw (nat_ip...)
         return ok
@@ -1505,7 +1515,7 @@ def family_probe(url):
                         try:
                             s_, an = _udp_session(fam, a_, src)
                             try:
-                                an(generate_peer_id(), 1, probe_port(0x76FF), 0, urandom(20))  # a random port, like every test
+                                an(generate_peer_id(), 1, probe_port(0x76FF), 0, test_info_hash())  # a random port, like every test
                             finally:
                                 s_.close()
                             answered = True
@@ -1525,7 +1535,7 @@ def family_probe(url):
                     ss.mount("https://", ad)
                     new_client()
                     pid = generate_peer_id()
-                    q = {"info_hash": urandom(20), "peer_id": pid, "port": probe_port(0x76FF), "uploaded": 0,
+                    q = {"info_hash": test_info_hash(), "peer_id": pid, "port": probe_port(0x76FF), "uploaded": 0,
                          "downloaded": 0, "left": 1, "compact": 1, **client_args(pid)}
                     r = ss.get(url + "?" + urlencode(q), headers=headers(), timeout=6, allow_redirects=False)
                     parse_http_tracker_response(r.content[:65536])
@@ -1621,7 +1631,7 @@ def _http_rtt(url, p, addr, src):
     import ssl
     new_client()
     pid = generate_peer_id()
-    q = urlencode({"info_hash": urandom(20), "peer_id": pid, "port": probe_port(0x76FF), "uploaded": 0,
+    q = urlencode({"info_hash": test_info_hash(), "peer_id": pid, "port": probe_port(0x76FF), "uploaded": 0,
                    "downloaded": 0, "left": 1, "compact": 1, **client_args(pid)})
     host = p.hostname if not p.port else f"{p.hostname}:{p.port}"
     ua = headers().get("User-Agent", "newTrackon")
