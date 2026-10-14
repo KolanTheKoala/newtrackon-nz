@@ -12,6 +12,9 @@
     .nt-rank td.v { white-space: nowrap; text-align: right; font-weight: 600; }
     .nt-rank td.s { white-space: nowrap; font-size: .85rem; }
     .nt-rank a.nt-tl { color: #c15cff; margin-left: .35em; font-size: .85em; }
+    /* purple like the status page's icon: beats base.jinja's white table-link rules (one more :not(#id) = higher specificity) */
+    table tbody tr:not(#_nt) > *:not(#_nt) a.nt-tl:not(#_nt):not(#_nt2), table tbody tr:not(#_nt) > *:not(#_nt) a.nt-tl:not(#_nt):not(#_nt2):visited { color: #c15cff !important; }
+    table tbody tr:not(#_nt) > *:not(#_nt) a.nt-tl:not(#_nt):not(#_nt2):hover { color: #e0a8ff !important; }
     .nt-rank .nt-grp { color: #8ab4f8; font-size: .8em; margin-left: .3em; }
     .nt-rank .nt-fastgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr)); gap: 0 2rem; }
     .nt-rank .nt-fastgrid h5 { margin-top: 1rem; font-size: 1rem; }
