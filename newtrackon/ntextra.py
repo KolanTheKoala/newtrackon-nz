@@ -1,7 +1,7 @@
 """NZ fork extras: /api/details (full JSON state per tracker) and /api/clean (Up/Good, filtered, one per operator)."""
 from flask import Response, jsonify, request
 
-from newtrackon import db
+from newtrackon import db, scraper
 from newtrackon import tracker as T
 from newtrackon.regions import DEFAULT_FAST_FROM_MS, FAST_FROM, MEASURED_FROM, parse_region_filter, regions_of
 
@@ -128,6 +128,67 @@ def _fams(t):
     return out
 
 
+_REP_GAUGES = ("torrents", "peers", "seeds", "leechers")  # can go down without a restart; the rest are running totals
+_REP_STALE = 3 * 86400  # an older reading isn't shown
+
+
+def _repstats(url, now=None):
+    """The tracker's own latest stats (tracker.REPSTATS) with the change since the reading about a day before it, or
+    None. A running total that went down, or an uptime shorter than the gap, means it restarted: no change shown."""
+    import time as _t
+    now = int(now or _t.time())
+    rec = T.REPSTATS.get(url) or {}
+    hist = rec.get("hist") or []
+    if not hist or now - int(hist[-1]["t"]) > _REP_STALE:
+        return None
+    last = hist[-1]
+    prev = min((h for h in hist[:-1] if 18 * 3600 <= int(last["t"]) - int(h["t"]) <= 30 * 3600),
+               key=lambda h: abs(int(last["t"]) - int(h["t"]) - 86400), default=None)
+    gap = int(last["t"]) - int(prev["t"]) if prev else 0
+    restarted = bool(prev) and (("uptime_s" in last and last["uptime_s"] < gap) or
+                                any(k in last and k in prev and last[k] < prev[k] for k in scraper.STATS_KEYS if k not in _REP_GAUGES))
+    delta = {k: last[k] - prev[k] for k in scraper.STATS_KEYS
+             if prev and k != "uptime_s" and k in last and k in prev and (k in _REP_GAUGES or not restarted)}
+
+    def share(a, b):
+        return round(100.0 * a / b, 3) if a is not None and b else None
+    return {"t": int(last["t"]), "software": rec.get("kind"), "values": {k: last[k] for k in scraper.STATS_KEYS if k in last},
+            "change_24h": delta, "change_hours": round(gap / 3600, 1) if prev else None, "restarted": restarted,
+            "refused_pct": share(last.get("refused"), last.get("requests")),
+            "refused_pct_24h": share(delta.get("refused"), delta.get("requests")),
+            "requests_per_s": round(delta["requests"] / gap) if "requests" in delta and gap else None}
+
+
+def _hn(n):
+    """722.7k, 1.1M, 3.6G; under 1000 as it is."""
+    for d, u in ((10**9, "G"), (10**6, "M"), (10**3, "k")):
+        if abs(n) >= d:
+            return f"{n / d:.1f}{u}"
+    return str(n)
+
+
+def _repstats_lines(r):
+    """The page's text block: the same rows for every tracker, '–' for a figure it doesn't report."""
+    v, c = r["values"], r["change_24h"]
+
+    def row(label, k):
+        val = _hn(v[k]) if k in v else "–"
+        ch = ("" if k not in c else ("▲" if c[k] >= 0 else "▼") + _hn(abs(c[k])))
+        return f"{label:<12}{val:>8}  {ch}".rstrip()
+    up = v.get("uptime_s")
+    sep = "-" * 32
+    upt = "–" if up is None else (f"{up / 3600:.1f} h" if up < 2 * 86400 else f"{up / 86400:.1f} d")
+    lines = [f"{'uptime':<12}{upt:>8}", sep]
+    lines += [row(*x) for x in (("torrents", "torrents"), ("peers", "peers"), ("seeds", "seeds"),
+                                ("leechers", "leechers"), ("completed", "completed"))]
+    lines += [sep] + [row(*x) for x in (("requests", "requests"), ("announces", "announces"), ("scrapes", "scrapes"),
+                                        ("refused", "refused"))]
+    pct = lambda p: "–" if p is None else ("<0.1%" if 0 < p < 0.1 else f"{p:.1f}%")
+    lines += [f"{'refused %':<12}{pct(r['refused_pct']):>8}  last 24 h {pct(r['refused_pct_24h'])}",
+              f"{'requests/s':<12}{'–' if r['requests_per_s'] is None else str(r['requests_per_s']):>8}"]
+    return lines
+
+
 def _detail(t):
     st, bad = _state(t)
     ph = T.PEER_HIST.get(t.url) or []
@@ -161,6 +222,9 @@ def _detail(t):
         "warning_message": (T.WARNINGS.get(t.url) or {}).get("msg"),
         "check_interval_s": t.interval,
         "stats": getattr(t, "stats", {}),
+        # what the tracker's own public stats page said at its latest daily reading (as reported, not measured), with
+        # the change over about 24 h; None if it publishes none we can read (_repstats)
+        "reported_stats": _repstats(t.url),
         "down_reason": (T._nt_down_label(T.DOWN_WHY.get(t.url)) if t.status != 1 else None),
         "down_cause": (T.DOWN_WHY.get(t.url) if t.status != 1 else None),
         "same_operator_as": getattr(t, "operator_peers", []),
@@ -826,6 +890,7 @@ def _tracker_page(host):
           "dateModified": datetime.fromtimestamp(int(t.last_checked or now), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     return render_template(
         "tracker.jinja", t=t, d=d, fam_answers=_fam_answers(t.url), row=_rowcls(t),
+        rep_lines=_repstats_lines(d["reported_stats"]) if d["reported_stats"] else None,
         status_text="Down from NZ (answers elsewhere)" if abroad else _STATUS_TEXT.get(d["status"], d["status"]),
         days=_uptime_days(t.historic), recent=h[-96:], history_days=round(len(h) / _SLOTS_PER_DAY, 1),
         chart=_latency_chart(T.LAT_HIST.get(t.url), now), long=_long_term(t.url),

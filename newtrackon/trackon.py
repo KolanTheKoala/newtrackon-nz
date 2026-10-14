@@ -57,6 +57,10 @@ def update_outdated_trackers() -> NoReturn:
             _T.removed_retest_due(trackers_all, now)
         except Exception:
             logger.exception("retest of removed trackers failed")
+        try:
+            _T.stats_due(trackers_all, now)
+        except Exception:
+            logger.exception("reading trackers' stats failed")
         trackers_outdated: list[Tracker] = []
         forced = set(_T.FORCE_CHECK)
         for tracker in trackers_all:

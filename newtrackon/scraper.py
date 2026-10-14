@@ -456,6 +456,117 @@ def amp_hash_test(url: str) -> bool | None:
     return False if any(s in reason for s in ("info_hash", "info hash", "infohash")) else None
 
 
+# ---- the tracker's own published stats, read once a day (tracker.stats_due): opentracker's /stats?mode=everything XML,
+# and two JSON kinds found on listed trackers (one with active/retained torrents and an uptime 't', and the retracker
+# kind of tr2.trkb.ru and retracker.x2k.ru with 'annonces'). Read with an honest User-Agent, not a client profile. ----
+STATS_UA = "newtrackon.co.nz (reads this tracker's public stats page once a day)"
+STATS_KEYS = ("uptime_s", "torrents", "peers", "seeds", "leechers", "completed", "requests", "announces", "scrapes", "refused")
+_STATS_MAX = 10**13  # anything bigger (or negative) is nonsense, not a count
+
+
+def stats_url(url: str, local: bool = False) -> str:
+    """The stats page for a tracker's announce URL: same host and port (a UDP tracker's over HTTP, where opentracker
+    serves it). local: this server's own tracker, read on loopback, the only place it serves its stats."""
+    p = urlparse(url)
+    scheme = "https" if p.scheme == "https" and not local else "http"
+    host = "127.0.0.1" if local else (p.hostname or "")
+    port = p.port or (443 if scheme == "https" else 80)
+    return f"{scheme}://{'[' + host + ']' if ':' in host else host}:{port}/stats?mode=everything"
+
+
+def _count(v: object) -> int | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < _STATS_MAX:
+        return None
+    return int(v)
+
+
+def _ot_stats(s: str) -> dict[str, int]:
+    import re
+
+    def one(pat: str, txt: str = s) -> int | None:
+        m = re.search(pat, txt, re.S)
+        return _count(int(m.group(1))) if m else None
+
+    def block(name: str) -> str:
+        m = re.search(rf"<{name}>(.*?)</{name}>", s, re.S)
+        return m.group(1) if m else ""
+
+    tcp, udp = block("tcp"), block("udp")
+
+    def both(tag: str, utag: str | None = None) -> int | None:
+        a, b = one(rf"<{tag}>(\d+)</{tag}>", tcp), one(rf"<{utag or tag}>(\d+)</{utag or tag}>", udp)
+        return None if a is None and b is None else (a or 0) + (b or 0)
+
+    f = {"uptime_s": one(r"<uptime>(\d+)</uptime>"), "torrents": one(r"<torrents>\s*<count(?:_mutex)?>(\d+)<"),
+         "peers": one(r"<peers>\s*<count>(\d+)<"), "seeds": one(r"<seeds>\s*<count>(\d+)<"),
+         "completed": one(r"<completed>\s*<count>(\d+)<"), "requests": both("accept", "overall"),
+         "announces": both("announce"), "scrapes": both("scrape"), "refused": one(r"<missmatch>(\d+)</missmatch>", udp)}
+    if f["peers"] is not None and f["seeds"] is not None and f["seeds"] <= f["peers"]:
+        f["leechers"] = f["peers"] - f["seeds"]
+    return {k: v for k, v in f.items() if v is not None}
+
+
+def _json_stats(d: dict) -> dict[str, int]:
+    def first(*keys: str) -> int | None:
+        return next((v for v in (_count(d.get(k)) for k in keys) if v is not None), None)
+
+    # only the names seen on real stats pages: a guess at another kind's meaning could put a figure on the wrong row
+    f = {"torrents": first("torrents"), "seeds": first("seeders", "seeds"),
+         "leechers": first("leechers"), "peers": first("peers"),
+         "completed": first("completed"), "requests": first("connections", "requests"),
+         "announces": first("announces", "annonces"), "scrapes": first("scrapes"), "refused": first("errors"),
+         # 't' is an uptime in seconds only in the kind that also has active/retained torrents
+         "uptime_s": first("uptime", *(("t",) if "active_torrents" in d else ()))}
+    if f["peers"] is None and f["seeds"] is not None and f["leechers"] is not None:
+        f["peers"] = f["seeds"] + f["leechers"]
+    elif f["leechers"] is None and f["peers"] is not None and f["seeds"] is not None and f["seeds"] <= f["peers"]:
+        f["leechers"] = f["peers"] - f["seeds"]
+    return {k: v for k, v in f.items() if v is not None}
+
+
+def parse_stats(body: bytes) -> tuple[str, dict[str, int]] | None:
+    """("opentracker"|"other", figures) from a stats page, or None if it isn't one we can read. The page is the
+    tracker's own text: read with patterns for the few tags wanted, never an XML parser."""
+    import json
+
+    s = body.decode("utf-8", "replace").strip()
+    if "<stats>" in s:
+        kind, f = "opentracker", _ot_stats(s)
+    elif s.startswith("{"):
+        try:
+            d = json.loads(s)
+        except ValueError:
+            return None
+        if not isinstance(d, dict):
+            return None
+        kind, f = "other", _json_stats(d)
+    else:
+        return None
+    return (kind, f) if "torrents" in f or "peers" in f else None
+
+
+def fetch_stats(url: str, local: bool = False) -> tuple[str, dict[str, int]] | None:
+    """A tracker's own stats (parse_stats), or None if it publishes none we can read (or doesn't answer). Public
+    addresses only (the urllib3 connect rule); local reads this server's own tracker on loopback instead."""
+    target = stats_url(url, local)
+    if local:
+        import http.client
+
+        c = http.client.HTTPConnection("127.0.0.1", urlparse(target).port, timeout=10)
+        try:
+            c.request("GET", "/stats?mode=everything", headers={"User-Agent": STATS_UA})
+            r = c.getresponse()
+            status, body = r.status, r.read(MAX_RESPONSE_SIZE + 1)
+        finally:
+            c.close()
+    else:
+        resp = requests.get(target, headers={"User-Agent": STATS_UA}, timeout=10, stream=True, allow_redirects=False)
+        status, body = resp.status_code, cast(HTTPResponse, resp.raw).read(MAX_RESPONSE_SIZE + 1, decode_content=True)
+    if status != 200 or not body or len(body) > MAX_RESPONSE_SIZE:
+        return None
+    return parse_stats(body)
+
+
 def _announce_http_once(url: str) -> HTTPAnnounceResponse:
     logger.info("%s Scraping HTTP(S)", url)
     new_client()

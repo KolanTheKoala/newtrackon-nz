@@ -1,0 +1,263 @@
+"""The tracker's own stats (scraper.fetch_stats, tracker.stats_due, ntextra._repstats): once a day each listed, up
+tracker's public stats page is read and shown on its page and in its API record, as reported. A tracker that publishes
+none is asked again only after 30 days (user's call 2026-10-15: "dont repeatedy retry trackers that dont report stats"),
+and every tracker gets the same rows ('–' for what it doesn't report)."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+from flask.testing import FlaskClient
+
+from newtrackon import ntextra, scraper
+from newtrackon import tracker as T
+
+from .test_regions import region_db  # noqa: F401  (fixture)
+
+REAL_FETCH = scraper.fetch_stats  # conftest replaces it with "none published" for every other test
+DAY = 86400
+NYC = "http://nyc.example:80/announce"
+
+OT_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<stats>
+  <tracker_id>1801921171</tracker_id>
+  <version>
+https://erdgeist.org/gitweb/opentracker/commit/?id=7ee8a8e
+  </version>
+  <uptime>3203</uptime>
+  <torrents>
+    <count_mutex>780590</count_mutex>
+    <count_iterator>780592</count_iterator>
+  </torrents>
+  <peers>
+    <count>1313781</count>
+  </peers>
+  <seeds>
+    <count>179685</count>
+  </seeds>
+  <completed>
+    <count>4614</count>
+  </completed>
+  <connections>
+    <tcp>
+      <accept>39</accept>
+      <announce>2</announce>
+      <scrape>1</scrape>
+    </tcp>
+    <udp>
+      <overall>4609321</overall>
+      <connect>1199936</connect>
+      <announce>2350042</announce>
+      <scrape>26127</scrape>
+      <missmatch>1029968</missmatch>
+    </udp>
+  </connections>
+</stats>"""
+DUCKS = {"torrents": 13295490, "active_torrents": 2842507, "retained_torrents": 10452983, "peers": 5587381,
+         "seeders": 1455770, "t": 3769201, "connections": 717598539674, "announces": 355876343768, "scrapes": 234524726,
+         "errors": 18547713}
+RETRACKER = {"ann_req": 134.99, "annonces": 4619911274, "leechers": 59932, "scrapes": 1283180549, "seeders": 38941,
+             "torrents": 62344, "users": 67201}
+
+
+class TestParse:
+    def test_opentracker(self) -> None:
+        kind, f = scraper.parse_stats(OT_XML)
+        assert kind == "opentracker"
+        assert f == {"uptime_s": 3203, "torrents": 780590, "peers": 1313781, "seeds": 179685, "leechers": 1313781 - 179685,
+                     "completed": 4614, "requests": 4609321 + 39, "announces": 2350042 + 2, "scrapes": 26127 + 1,
+                     "refused": 1029968}
+
+    def test_the_kind_with_active_and_retained_torrents(self) -> None:
+        kind, f = scraper.parse_stats(json.dumps(DUCKS).encode())
+        assert kind == "other"
+        assert f == {"torrents": 13295490, "peers": 5587381, "seeds": 1455770, "leechers": 5587381 - 1455770,
+                     "uptime_s": 3769201, "requests": 717598539674, "announces": 355876343768, "scrapes": 234524726,
+                     "refused": 18547713}
+
+    def test_the_retracker_kind(self) -> None:
+        kind, f = scraper.parse_stats(json.dumps(RETRACKER).encode())
+        assert kind == "other"
+        assert f == {"torrents": 62344, "seeds": 38941, "leechers": 59932, "peers": 38941 + 59932,
+                     "announces": 4619911274, "scrapes": 1283180549}
+        assert "uptime_s" not in f  # it has no uptime, and a bare 't' elsewhere isn't read as one
+
+    def test_not_a_stats_page(self) -> None:
+        for body in (b"<h1>MyWaifu</h1> a public tracker", b"d14:failure reason4:nopee", b"[1, 2]", b"{not json",
+                     b'{"users": 5}', b"", b"<stats></stats>"):
+            assert scraper.parse_stats(body) is None, body
+
+    def test_nonsense_counts_are_dropped(self) -> None:
+        kind, f = scraper.parse_stats(json.dumps({"torrents": 5, "peers": -3, "seeders": 10**15, "scrapes": True}).encode())
+        assert f == {"torrents": 5}
+
+    def test_stats_url(self) -> None:
+        assert scraper.stats_url("udp://t.example:6969/announce") == "http://t.example:6969/stats?mode=everything"
+        assert scraper.stats_url("https://t.example/announce") == "https://t.example:443/stats?mode=everything"
+        assert scraper.stats_url("udp://[2001:db8::1]:1337/announce") == "http://[2001:db8::1]:1337/stats?mode=everything"
+        assert scraper.stats_url("udp://ours.example:1337/announce", local=True) == "http://127.0.0.1:1337/stats?mode=everything"
+
+
+class TestFetch:
+    def test_public_read_uses_an_honest_user_agent_and_no_redirects(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = {}
+
+        def get(url, **kw):
+            seen.update(kw, url=url)
+            return SimpleNamespace(status_code=200, raw=SimpleNamespace(read=lambda n, decode_content: OT_XML))
+        monkeypatch.setattr(scraper.requests, "get", get)
+        assert REAL_FETCH("udp://t.example:6969/announce")[0] == "opentracker"
+        assert seen["url"] == "http://t.example:6969/stats?mode=everything" and seen["allow_redirects"] is False
+        assert seen["headers"]["User-Agent"] == scraper.STATS_UA and seen["timeout"] == 10
+
+    def test_not_200_or_too_big_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for status, body in ((404, OT_XML), (200, b"x" * (scraper.MAX_RESPONSE_SIZE + 1))):
+            monkeypatch.setattr(scraper.requests, "get", lambda url, s=status, b=body, **kw: SimpleNamespace(
+                status_code=s, raw=SimpleNamespace(read=lambda n, decode_content: b)))
+            assert REAL_FETCH("udp://t.example:6969/announce") is None
+
+
+def _t(url=NYC, status=1, ips=("93.184.216.34",)):
+    return SimpleNamespace(url=url, status=status, ips=list(ips))
+
+
+class TestSchedule:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch: pytest.MonkeyPatch):
+        self.calls, self.answer = [], ("opentracker", {"torrents": 10, "peers": 20})
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False: self.calls.append((url, local)) or self.answer)
+        monkeypatch.setattr(T, "_STATS_NEXT", [0])
+
+    def test_one_per_gap_and_daily(self) -> None:
+        a, b = _t("udp://a.example:1/announce"), _t("udp://b.example:1/announce")
+        T.stats_due([a, b], now=1000)
+        T.stats_due([a, b], now=1001)  # inside the gap
+        T.stats_due([a, b], now=1000 + T.STATS_GAP)
+        assert [u for u, _ in self.calls] == [a.url, b.url]
+        T.stats_due([a, b], now=1000 + 2 * T.STATS_GAP)
+        assert len(self.calls) == 2  # both read: next due a day later
+        assert T.REPSTATS[a.url]["next"] == 1000 + DAY and T.REPSTATS[a.url]["hist"][-1] == {"t": 1000, "torrents": 10, "peers": 20}
+
+    def test_none_published_is_asked_again_only_after_30_days(self) -> None:
+        self.answer = None
+        t = _t()
+        T.stats_due([t], now=1000)
+        assert T.REPSTATS[t.url]["next"] == 1000 + T.STATS_RETRY and not T.REPSTATS[t.url].get("ok")
+        for d in range(1, 30):
+            T.stats_due([t], now=1000 + d * DAY)
+        assert len(self.calls) == 1
+
+    def test_one_that_published_gets_3_days_then_30(self) -> None:
+        t, b = _t(), 10 * DAY
+        T.stats_due([t], now=b)
+        self.answer = None
+        for n in (1, 2):
+            T.stats_due([t], now=b + n * DAY)
+            assert T.REPSTATS[t.url]["next"] == b + (n + 1) * DAY
+        T.stats_due([t], now=b + 3 * DAY)
+        assert T.REPSTATS[t.url]["next"] == b + 3 * DAY + T.STATS_RETRY and len(self.calls) == 4
+
+    def test_down_trackers_wait_and_our_outage_records_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        T.stats_due([_t(status=0)], now=1000)
+        assert self.calls == []
+        self.answer = None
+        monkeypatch.setattr(T, "_monitor_online", lambda: False)
+        T.stats_due([_t()], now=1000)
+        assert len(self.calls) == 1 and NYC not in T.REPSTATS
+
+    def test_nothing_in_the_first_10_minutes(self) -> None:
+        assert T._STATS_NEXT is not None  # module start sets now + 600; here the test controls it
+        T._STATS_NEXT[0] = 5000
+        T.stats_due([_t()], now=4999)
+        assert self.calls == []
+
+    def test_this_servers_own_tracker_is_read_on_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "my_ipv4", "160.30.240.158")
+        monkeypatch.setattr(scraper, "my_ipv6", "2401:c060:1010:4007::")
+        T.stats_due([_t(ips=("160.30.240.158", "2401:c060:1010:4007::"))], now=1000)
+        T._STATS_NEXT[0] = 0
+        T.stats_due([_t("udp://other.example:1/announce", ips=("160.30.240.158", "93.184.216.34"))], now=2000)
+        assert [loc for _, loc in self.calls] == [True, False]
+
+    def test_kept_31_days(self) -> None:
+        t = _t()
+        for d in range(1, 41):
+            T._STATS_NEXT[0] = 0
+            T.stats_due([t], now=d * DAY)
+        assert [h["t"] for h in T.REPSTATS[t.url]["hist"]][0] == 40 * DAY - T.STATS_KEEP
+
+    def test_survives_a_restart(self) -> None:
+        T.stats_due([_t()], now=1000)
+        assert T._store_load("REPSTATS")[NYC]["next"] == 1000 + DAY
+
+
+def _hist(*readings):
+    T.REPSTATS[NYC] = {"kind": "opentracker", "ok": True, "hist": [dict(r) for r in readings]}
+
+
+class TestShown:
+    NOW = 10 * DAY
+
+    def test_change_over_a_day(self) -> None:
+        _hist({"t": self.NOW - 2 * DAY, "torrents": 1}, {"t": self.NOW - DAY - 3600, "torrents": 100, "announces": 1000,
+              "requests": 2000, "refused": 100, "uptime_s": 5 * DAY}, {"t": self.NOW - 3600, "torrents": 90,
+              "announces": 87400, "requests": 2000 + 86400 * 2, "refused": 100 + 8640, "uptime_s": 6 * DAY})
+        r = ntextra._repstats(NYC, self.NOW)
+        assert r["change_24h"] == {"torrents": -10, "announces": 86400, "requests": 172800, "refused": 8640}
+        assert r["restarted"] is False and r["change_hours"] == 24.0 and r["requests_per_s"] == 2
+        assert r["refused_pct_24h"] == 5.0 and r["refused_pct"] == round(100 * 8740 / 174800, 3)
+
+    def test_a_restart_shows_no_change_in_running_totals(self) -> None:
+        _hist({"t": self.NOW - DAY, "torrents": 100, "announces": 5000, "uptime_s": 9 * DAY},
+              {"t": self.NOW, "torrents": 80, "announces": 300, "uptime_s": 3600})
+        r = ntextra._repstats(NYC, self.NOW)
+        assert r["restarted"] is True and r["change_24h"] == {"torrents": -20}
+
+    def test_no_reading_a_day_before_no_change(self) -> None:
+        _hist({"t": self.NOW - 3 * 3600, "torrents": 5}, {"t": self.NOW, "torrents": 9})
+        r = ntextra._repstats(NYC, self.NOW)
+        assert r["change_24h"] == {} and r["change_hours"] is None
+
+    def test_old_or_missing_is_not_shown(self) -> None:
+        assert ntextra._repstats(NYC, self.NOW) is None
+        _hist({"t": self.NOW - 3 * DAY - 1, "torrents": 5})
+        assert ntextra._repstats(NYC, self.NOW) is None
+
+    def test_every_tracker_gets_the_same_rows(self) -> None:
+        _hist({"t": self.NOW - DAY, "torrents": 722_000, "peers": 1_100_000}, {"t": self.NOW, "torrents": 722_700,
+              "peers": 1_164_200, "uptime_s": 2445})
+        full = ntextra._repstats_lines(ntextra._repstats(NYC, self.NOW))
+        _hist({"t": self.NOW, "seeds": 5, "torrents": 1})
+        bare = ntextra._repstats_lines(ntextra._repstats(NYC, self.NOW))
+        label = lambda ls: [line.split()[0] for line in ls]
+        assert label(full) == label(bare) == ["uptime", "-" * 32, "torrents", "peers", "seeds", "leechers", "completed",
+                                              "-" * 32, "requests", "announces", "scrapes", "refused", "refused", "requests/s"]
+        assert "torrents      722.7k  ▲700" in full and "peers           1.2M  ▲64.2k" in full
+        assert "uptime         0.7 h" in full and "leechers           –" in bare
+        _hist({"t": self.NOW, "torrents": 1, "refused": 3, "requests": 100_000})
+        assert "refused %      <0.1%  last 24 h –" in ntextra._repstats_lines(ntextra._repstats(NYC, self.NOW))
+
+
+@pytest.mark.usefixtures("region_db")
+class TestPageAndApi:
+    def test_page_block_and_api_record(self, flask_client: FlaskClient) -> None:
+        import time
+        now = int(time.time())
+        page = lambda: flask_client.get("/tracker/nyc.example").get_data(as_text=True)
+        assert "The tracker's own stats" not in page()
+        assert flask_client.get("/api/tracker/nyc.example").get_json()["reported_stats"] is None
+        _hist({"t": now - DAY, "torrents": 100}, {"t": now - 60, "torrents": 150, "peers": 3})
+        html = page()
+        assert "The tracker's own stats" in html and "nyc.example  read" in html and "&middot; opentracker" in html
+        assert "torrents         150  ▲50" in html and "reported by the tracker, not measured by this site" in html
+        rec = flask_client.get("/api/tracker/nyc.example").get_json()["reported_stats"]
+        assert rec["values"] == {"torrents": 150, "peers": 3} and rec["change_24h"] == {"torrents": 50}
+        assert rec["software"] == "opentracker"
+
+    def test_tracker_supplied_text_never_reaches_the_page(self, flask_client: FlaskClient) -> None:
+        import time
+        _hist({"t": int(time.time()), "torrents": 1})
+        T.REPSTATS[NYC]["kind"] = "<script>x</script>"
+        assert "<script>x" not in flask_client.get("/tracker/nyc.example").get_data(as_text=True)

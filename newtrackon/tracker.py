@@ -2127,6 +2127,63 @@ def _removed_add(t, reason, now=None, kind=None):
     _jsave(REMOVED, _REMOVED_FILE)
 
 
+# ---- the tracker's own stats: once a day each listed, up tracker's public stats page is read (scraper.fetch_stats) and
+# kept for its page and API, as reported, not measured. A tracker that publishes none (or stops: 3 failed days in a row)
+# is asked again only after 30 days, not every day. This server's own tracker is read on loopback. ----
+_REPSTATS_FILE = "data/repstats.json"
+# url -> {"next": when to read it next, "fails": failed reads in a row, "ok": it has published stats,
+#         "kind": "opentracker"|"other", "hist": [{"t": when, figure: count, ...}, ...] (the last 31 days)}
+REPSTATS: dict = _url_store("REPSTATS", _REPSTATS_FILE, protocol=True)
+STATS_EVERY = 24 * 3600
+STATS_RETRY = 30 * 24 * 3600  # publishes none, or stopped: asked again this much later
+STATS_FAILS = 3  # failed days in a row before one that published stats is asked only every STATS_RETRY
+STATS_GAP = 600  # one read at a time, this far apart
+STATS_KEEP = 31 * 24 * 3600
+_STATS_NEXT = [time() + 600]  # nothing in the first 10 minutes after a start
+
+
+def _stats_local(t):
+    """The tracker runs on this server (every address it publishes is ours): its stats are read on loopback."""
+    ips = list(t.ips or [])
+    return bool(ips) and all(scraper._is_ours(ip) for ip in ips)
+
+
+def stats_due(trackers, now=None):
+    """From the check loop: read the next listed, up tracker whose stats are due, at most one per STATS_GAP."""
+    now = int(now or time())
+    if now < _STATS_NEXT[0]:
+        return
+    due = sorted((int((REPSTATS.get(t.url) or {}).get("next") or 0), t.url, t) for t in trackers
+                 if t.status == 1 and int((REPSTATS.get(t.url) or {}).get("next") or 0) <= now)
+    if not due:
+        return
+    _STATS_NEXT[0] = now + STATS_GAP
+    stats_read(due[0][2], now)
+
+
+def stats_read(t, now=None):
+    now = int(now or time())
+    try:
+        got = scraper.fetch_stats(t.url, local=_stats_local(t))
+    except Exception as e:
+        logger.info("Stats of %s: none (%s)", t.url, type(e).__name__)
+        got = None
+    if got is None and not _monitor_online():
+        return  # our own outage: nothing recorded, it stays due
+    rec = REPSTATS.setdefault(t.url, {})
+    if got:
+        kind, fig = got
+        hist = [h for h in rec.get("hist", []) if now - int(h.get("t", 0)) <= STATS_KEEP] + [dict(fig, t=now)]
+        rec.update(kind=kind, ok=True, fails=0, next=now + STATS_EVERY, hist=hist)
+        logger.info("Stats of %s: %s torrents, %s peers (%s)", t.url, fig.get("torrents", "-"), fig.get("peers", "-"), kind)
+    else:
+        rec["fails"] = int(rec.get("fails", 0)) + 1
+        again = rec.get("ok") and rec["fails"] < STATS_FAILS
+        rec["next"] = now + (STATS_EVERY if again else STATS_RETRY)
+        logger.info("Stats of %s: none published, asked again in %d days", t.url, 1 if again else STATS_RETRY // 86400)
+    _jsave(REPSTATS, _REPSTATS_FILE)
+
+
 # ---- removed trackers tested again: once a day while the ban runs, the site's own checks are run on it and what they see
 # is kept as REMOVED[host]["retest"] for its Removed page, so its operator sees what's wrong now (and what to fix), also
 # for removals from before their evidence was kept. It never changes the ban, the record's reason or evidence, a listing,

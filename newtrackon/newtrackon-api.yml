@@ -194,6 +194,19 @@ paths:
                       announce_interval_s: {type: [integer, "null"], description: "The interval it asks clients for. Outside 15 min - 3 h costs up to 5 points."}
                       check_interval_s: {type: integer, description: "How often this site checks it."}
                       stats: {type: object}
+                      reported_stats:
+                        type: [object, "null"]
+                        description: "What the tracker's own public stats page said at its latest daily reading (opentracker's /stats, or a JSON stats page): reported by the tracker, not measured by this site. Null if it publishes none this site can read (asked again every 30 days), or the latest reading is over 3 days old. Torrent counts include made-up hashes some clients spray at trackers."
+                        properties:
+                          t: {type: integer, description: "When it was read (Unix time)."}
+                          software: {type: string, enum: [opentracker, other]}
+                          values: {type: object, description: "Any of uptime_s, torrents, peers, seeds, leechers, completed, requests, announces, scrapes, refused (all integers); a figure the tracker doesn't report is left out."}
+                          change_24h: {type: object, description: "The change in each figure since the reading about a day before (change_hours). Running totals are left out when it restarted in between."}
+                          change_hours: {type: [number, "null"]}
+                          restarted: {type: boolean}
+                          refused_pct: {type: [number, "null"], description: "Refused requests (opentracker: wrong connection ID; others: errors) as a share of all requests, since it started."}
+                          refused_pct_24h: {type: [number, "null"], description: "The same over the last day."}
+                          requests_per_s: {type: [integer, "null"], description: "Requests per second over the last day."}
                       down_reason: {type: [string, "null"]}
                       down_cause: {type: [string, "null"]}
                       same_operator_as: {type: array, items: {type: string}, description: "Other listed hosts on the same server."}

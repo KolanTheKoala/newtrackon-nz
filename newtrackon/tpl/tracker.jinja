@@ -26,6 +26,7 @@
     .nt-problem { border: 1px solid #ffb070; background: rgba(255, 145, 0, .08); border-radius: 6px; padding: .8rem 1rem; margin-bottom: 1rem; }
     .nt-t .nt-stt { display: grid; grid-template-columns: max-content 1fr; gap: 2px 18px; }
     .nt-t .nt-stt > .k { opacity: .65; } .nt-t .nt-stt > .v { font-weight: 600; }
+    .nt-t pre.nt-rep { font-size: .85rem; line-height: 1.35; color: inherit; background: rgba(127, 127, 127, .08); padding: .6rem .8rem; border-radius: 4px; max-width: 30rem; overflow-x: auto; margin-bottom: .3rem; }
     .nt-t .nt-stt > .tot { opacity: 1; font-weight: 700; border-top: 1px solid rgba(127, 127, 127, .4); padding-top: 2px; }
     .nt-t .nt-stt > .sep { grid-column: 1 / -1; height: 8px; }
     @media (max-width: 576px) {
@@ -136,6 +137,14 @@
 
     <h5 class="mt-4">Score</h5>
     {% set s = t.stats or {} %}<div class="nt-stt">{% if s.base is defined %}<span class="k">Recent availability</span><span class="v">{{ s.avail_weighted }}%</span><span class="k" title="How steadily it stays up, weighted towards recent checks. 100% means it never flipped between up and down. Constantly dropping in and out pulls this down far more than one long outage does." style="cursor:help;text-decoration:underline dotted">Stability</span><span class="v" title="How steadily it stays up, weighted towards recent checks. 100% means it never flipped between up and down. Constantly dropping in and out pulls this down far more than one long outage does.">&times; {{ s.stability }}%</span><span class="k">Reliability score</span><span class="v">= {{ s.base_r }}</span>{% if s.ceiling is defined and s.ceiling < s.base %}<span class="k">New-tracker ceiling</span><span class="v">held to {{ s.ceiling_r }} (under 7 days old)</span>{% endif %}<span class="k">Latency penalty</span><span class="v">{% if s.lat_pen_r >= 1 %}&minus;{{ s.lat_pen_r }}{% elif s.lat_penalty %}under 1{% else %}none{% endif %}</span>{% if s.iv_penalty %}<span class="k">Announce interval</span><span class="v" title="Its announce interval ({{ (s.iv / 60)|round|int }} min) is far from the usual 30 to 60 minutes. Points off for ranking only: it doesn't change the status.">{% if s.iv_pen_r >= 1 %}&minus;{{ s.iv_pen_r }}{% else %}under 1{% endif %} (every {{ (s.iv / 60)|round|int if s.iv >= 60 else s.iv }}{{ " min" if s.iv >= 60 else " s" }}: <a href="/fix#interval">why</a>)</span>{% endif %}{% if s.capped %}<span class="k">Quality cap</span><span class="v">capped for failing a quality test (see Status)</span>{% endif %}<span class="k tot">Score</span><span class="v tot">{{ (t.uptime + 0.5)|int }}</span><span class="sep"></span>{% endif %}{% if s.avail7 is defined %}<span class="k">Last 7 days</span><span class="v">answered {{ s.avail7 }}% of checks &middot; {{ s.outages7 }} outage{{ "" if s.outages7 == 1 else "s" }}</span>{% if s.avail_all is defined %}<span class="k">Since added</span><span class="v">answered {{ s.avail_all }}% over {{ s.days }} days{% if s.longest_h %} &middot; longest outage {{ s.longest_h }}&nbsp;h{% endif %}</span>{% endif %}{% endif %}</div>
+
+    {% if rep_lines %}
+    <h5 class="mt-4">The tracker's own stats</h5>
+    <pre class="nt-rep">{{ d.host }}  read {{ nt_ago_of(d.reported_stats.t) }} ago{% if d.reported_stats.software == "opentracker" %} &middot; opentracker{% endif %}
+{% for l in rep_lines %}{{ l }}
+{% endfor %}</pre>
+    <p class="small">What the tracker's own public stats page says, read once a day: reported by the tracker, not measured by this site. &#9650;&#9660; are the change over the last {{ d.reported_stats.change_hours|round|int if d.reported_stats.change_hours else 24 }} hours{% if d.reported_stats.restarted %}; it restarted since the reading before, so its running totals start again{% endif %}. Torrent counts include made-up hashes some clients spray at trackers. &ndash;: not reported.</p>
+    {% endif %}
 
     <h5 class="mt-4">Details</h5>
     <dl>
