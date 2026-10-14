@@ -2151,6 +2151,14 @@ def _stats_local(t):
     return bool(ips) and all(scraper._is_ours(ip) for ip in ips)
 
 
+def stats_force(url):
+    """Check again now (once an hour per tracker, ntextra._recheck): its stats are read at the next free slot, every path
+    and port again, so an operator who has just turned a stats page on doesn't wait out a 30-day retry."""
+    rec = REPSTATS.setdefault(url, {})
+    rec["next"], rec["force"] = 0, True
+    _jsave(REPSTATS, _REPSTATS_FILE)
+
+
 def stats_due(trackers, now=None):
     """From the check loop: read the next listed, up tracker whose stats are due, at most one per STATS_GAP."""
     now = int(now or time())
@@ -2170,7 +2178,7 @@ def stats_read(t, now=None):
     now = int(now or time())
     rec0 = REPSTATS.get(t.url) or {}
     # the path that worked before, while it's still answering daily; a 30-day retry looks at every path again
-    path = rec0.get("path") if int(rec0.get("fails") or 0) < STATS_FAILS else None
+    path = rec0.get("path") if int(rec0.get("fails") or 0) < STATS_FAILS and not rec0.get("force") else None
     try:
         # never another port of a CDN-fronted tracker (that's the CDN, not the tracker)
         cdn = any("cloudflare" in str(n).lower() for n in (getattr(t, "networks", None) or []))
@@ -2182,6 +2190,7 @@ def stats_read(t, now=None):
         return  # our own outage: nothing recorded, it stays due
     rec = REPSTATS.setdefault(t.url, {})
     rec["t"], rec["v"] = now, STATS_PROBE_V  # when it was last asked (whatever the answer), and by which probe
+    rec.pop("force", None)
     if got:
         kind, fig, rec["path"] = got
         fig = dict(fig)

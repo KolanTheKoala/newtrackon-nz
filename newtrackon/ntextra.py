@@ -671,6 +671,7 @@ def _recheck(host):
         Thread(target=ingest.reinstate, args=(host, removed["url"]), daemon=True).start()
         return redirect("/tracker/%s?recheck=queued" % host, 303)
     T.force_check_add(t.url)
+    T.stats_force(t.url)  # its own stats page too, every path again
     return redirect("/tracker/%s?recheck=queued" % host, 303)
 
 

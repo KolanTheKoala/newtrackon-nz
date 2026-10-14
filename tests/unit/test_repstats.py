@@ -496,3 +496,21 @@ def test_cdn_fronted_trackers_are_not_asked_on_other_ports(monkeypatch: pytest.M
     t.networks = ["Hetzner Online GmbH"]
     T.stats_read(t, now=2000)
     assert seen == [False, True]
+
+
+def test_check_again_now_reads_the_stats_again_with_every_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    paths = []
+    monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False, path=None, ports=True: paths.append(path)
+                        or ("opentracker", {"torrents": 1}, "/stats?mode=everything"))
+    monkeypatch.setattr(T, "_STATS_NEXT", [0])
+    T.REPSTATS[NYC] = {"t": 1000, "next": 1000 + T.STATS_RETRY, "fails": 1, "v": T.STATS_PROBE_V}  # published none
+    T.stats_force(NYC)
+    T.stats_due([_t()], now=2000)
+    assert paths == [None] and "force" not in T.REPSTATS[NYC] and T.REPSTATS[NYC]["next"] == 2000 + DAY
+
+
+@pytest.mark.usefixtures("region_db")
+def test_the_button_queues_it(flask_client: FlaskClient) -> None:
+    T.REPSTATS[NYC] = {"next": 10**10, "v": T.STATS_PROBE_V}
+    flask_client.post("/tracker/nyc.example/recheck")
+    assert T.REPSTATS[NYC]["next"] == 0 and T.REPSTATS[NYC]["force"] is True
