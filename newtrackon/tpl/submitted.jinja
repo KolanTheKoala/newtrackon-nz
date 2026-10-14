@@ -39,14 +39,20 @@
         /* Result: Accepted always green, Rejected always red (outranks the white text of the site-wide row rule) */
         table tbody tr:not(#_nt) > td.up:not(#_nt), table tbody tr:not(#_nt) > td.up:not(#_nt) * { color: #00e676 !important; }
         table tbody tr:not(#_nt) > td.rejected:not(#_nt), table tbody tr:not(#_nt) > td.rejected:not(#_nt) * { color: #ff3b30 !important; }
-        /* phones: no IP column; URLs and messages wrap so Result stays on screen */
+        /* phones: one card per submission. Time and result on the first line, the URL below, then the tracker's
+           reply in small type that wraps anywhere (a five-column table left it four letters wide). */
         @media (max-width: 576px) {
-            table.nt-sub .c-ip { display: none; }
-            table.nt-sub td, table.nt-sub th { white-space: normal !important; font-size: .82rem; padding: .35rem .3rem; }
-            table.nt-sub td.u { overflow-wrap: anywhere; word-break: break-all; }
-            table.nt-sub td.t { white-space: nowrap !important; }
-            table.nt-sub { display: table !important; width: 100% !important; table-layout: fixed; }  /* fixed widths: the URL gets most of the room */
-            table.nt-sub th.t { width: 5.6em; } table.nt-sub th.r { width: 5.4em; } table.nt-sub th.u { width: 44%; }
+            table.nt-sub, table.nt-sub tbody, table.nt-sub tr, table.nt-sub td { display: block !important; width: 100% !important; }
+            table.nt-sub thead, table.nt-sub .c-ip, table.nt-sub td:empty { display: none !important; }
+            table.nt-sub tr { border: 1px solid #2c3b57; border-radius: .5rem; margin-bottom: .6rem; padding: .45rem .6rem; overflow: hidden; }
+            table.nt-sub tr > td { border: 0 !important; padding: .1rem 0 !important; white-space: normal !important; background: transparent !important; box-shadow: none !important; }
+            table.nt-sub td.t, table.nt-sub td.res { display: inline-block !important; width: auto !important; font-size: .85rem; }
+            table.nt-sub td.t { margin-right: .8rem; color: #9aa6ba !important; }
+            table.nt-sub td.u { font-size: .95rem; overflow-wrap: anywhere; word-break: break-all; margin: .15rem 0; }
+            table.nt-sub td.msg { font-size: .78rem; line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; color: #b8c2d3 !important; max-height: 9.5em; overflow-y: auto; }
+            .table-responsive { overflow-x: visible !important; }
+            /* no row striping inside a card (outranks base.jinja's navy-row rules: one more class) */
+            table.nt-sub tbody tr:not(#_nt) > *:not(#_nt) { background: transparent !important; box-shadow: none !important; }
         }
     </style>
     <div class="container">
@@ -85,15 +91,15 @@
                     </thead>
                     {# the queue: newest at the top, position 1 (checked now or next) at the bottom, just above the results #}
                     {% if size > pending|length %}
-                        <tr class="nt-pending"><td></td><td colspan="4">&hellip; and {{ size - pending|length }} more waiting behind these</td></tr>
+                        <tr class="nt-pending"><td></td><td colspan="4" class="msg">&hellip; and {{ size - pending|length }} more waiting behind these</td></tr>
                     {% endif %}
                     {% for c in confirming %}
                         <tr class="nt-pending">
                             <td class="t"></td>
                             <td class="u">{{ c.url }}</td>
                             <td class="c-ip"></td>
-                            <td class="pending"><b>Pending</b></td>
-                            <td>Answered once &middot; second check in {{ eta(c.eta) }}, then listed if it answers</td>
+                            <td class="pending res"><b>Pending</b></td>
+                            <td class="msg">Answered once &middot; second check in {{ eta(c.eta) }}, then listed if it answers</td>
                         </tr>
                     {% endfor %}
                     {% for p in pending|reverse %}
@@ -101,8 +107,8 @@
                             <td class="t">{% if p.time %}<span data-nt-ago="{{ p.time }}"></span>{% endif %}</td>
                             <td class="u">{{ p.url }}</td>
                             <td class="c-ip"></td>
-                            <td class="pending"><b>Pending</b></td>
-                            <td>{% if p.checking %}Being checked now{% else %}Queue position {{ p.pos }} &middot; ETA {{ eta(p.eta) }}{% endif %}</td>
+                            <td class="pending res"><b>Pending</b></td>
+                            <td class="msg">{% if p.checking %}Being checked now{% else %}Queue position {{ p.pos }} &middot; ETA {{ eta(p.eta) }}{% endif %}</td>
                         </tr>
                     {% endfor %}
                     {% for response in data %}
@@ -114,27 +120,27 @@
                             <td class="u">{{ response['url'] }}{% if response.get("refused") and (response.get("ban_host") or ((response['info'] or [''])[0]).startswith("Banned")) %}{% set h = response.get("ban_host") or nt_host(response['url']) %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Why it was removed, and how to get it back"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% if response["status"] == 1 %}{% set h = nt_host(response['url']) %}{% if h %}<a href="/tracker/{{ h|urlencode }}" class="nt-tlink" title="Tracker page: uptime and latency history"><i class="fa-solid fa-chart-line"></i></a>{% endif %}{% endif %}</td>
                             <td class="c-ip">{{ response.get('ip', '') }}</td>
                             {% if response["status"] == 1 %}
-                                <td class="up">
+                                <td class="up res">
                                     <b>Accepted</b>
                                 </td>
                             {% elif nt_noup %}
-                                <td class="pending" title="The listed tracker is fine and unchanged: only the better protocol didn't answer">
+                                <td class="pending res" title="The listed tracker is fine and unchanged: only the better protocol didn't answer">
                                     <b>Not upgraded</b>
                                 </td>
                             {% elif response.get("confirm") %}
-                                <td class="pending" title="Answered once: listed only if it answers again 30 minutes later">
+                                <td class="pending res" title="Answered once: listed only if it answers again 30 minutes later">
                                     <b>Pending</b>
                                 </td>
                             {% elif response.get("refused") %}
-                                <td class="pending" title="Not checked: refused before it reached the queue">
+                                <td class="pending res" title="Not checked: refused before it reached the queue">
                                     <b>Refused</b>
                                 </td>
                             {% else %}
-                                <td class="rejected">
+                                <td class="rejected res">
                                     <b>Rejected</b>
                                 </td>
                             {% endif %}
-                            <td>
+                            <td class="msg">
                                 {% for message in response['info'] %}
                                     {{ message | e }}
                                     <br>
