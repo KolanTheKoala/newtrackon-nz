@@ -2022,6 +2022,18 @@ def _stats(t):
         st["iv"] = ANN_IV.get(t.url)
         if min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0) > 1.0:
             st["capped"] = True  # a quality-test cap (fake peers, dead IP family, failed peer test) is holding the score down
+        # whole points for the page's breakdown: when the score is the start figure less the two penalties (not capped,
+        # not saved before the interval changed), they're split so they add up to the shown score; each rounded alone
+        # could be a point out (the raw floats showed as 1.2999999999999998 and 2.7)
+        _start = min(st["base_r"], st.get("ceiling_r", 100))
+        _drop = _start - int(float(t.uptime or 0) + 0.5)
+        st["iv_pen_r"], st["lat_pen_r"] = int(_ivp + 0.5), int(_pen + 0.5)
+        if abs(min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0)) <= 1.0 and _drop >= 0:
+            if not _pen:
+                st["iv_pen_r"] = _drop if _ivp else 0
+            else:
+                st["iv_pen_r"] = min(st["iv_pen_r"], _drop) if _ivp else 0
+                st["lat_pen_r"] = _drop - st["iv_pen_r"]
         r = _runs(h, 0)
         st["longest_h"] = max(r) * 0.5 if r else 0
     ph = PEER_HIST.get(t.url)

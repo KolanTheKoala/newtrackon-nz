@@ -313,7 +313,7 @@ class TestIntervalPenalty:
     def test_page_shows_the_penalty_and_advice(self, flask_client: FlaskClient) -> None:
         T.ANN_IV[AKL] = 120
         html = flask_client.get("/tracker/akl.example").get_data(as_text=True)
-        assert "Around 30 minutes" in html and "&minus;5.0 (every 2 min" in html
+        assert "Around 30 minutes" in html and "&minus;5 (every 2 min" in html
         assert html.count('href="/fix#interval"') == 3  # the interval note, its link, and the What's wrong box's How to fix
         assert "What's wrong" in html
 
@@ -1234,3 +1234,25 @@ def test_the_made_up_connection_id_only_when_asked(monkeypatch: pytest.MonkeyPat
     scraper.rtt.probe = ("udp", b"h" * 20, socket.AF_INET, ("192.0.2.1", 6969), b"p" * 20)
     scraper.peer_probe(cid=cid)
     assert len(sent) == (1 if cid else 0) and scraper.rtt.probe_extra["cid_ok"] is (True if cid else None)
+
+
+
+def test_breakdown_is_whole_points_that_add_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tracker page's latency and interval penalties are whole points, and taken from the reliability score (or the
+    new-tracker ceiling) they give the shown score. They showed as 1.2999999999999998 and 2.7 on 2026-10-15."""
+    import random
+    from collections import deque
+    from types import SimpleNamespace
+    rnd = random.Random(7)
+    for _ in range(2000):
+        n = rnd.choice([100, 336, 1440])
+        hist = deque([1 if rnd.random() > rnd.choice([0, 0.02, 0.1]) else 0 for _ in range(n)], maxlen=1440)
+        ms, ivp = rnd.choice([0, 120, 215, 480, 1300]), rnd.choice([0.0, 0.4, 1.7, 2.7, 5.0])
+        monkeypatch.setattr(T, "_nt_region_avg", lambda u, ms=ms: ms)
+        monkeypatch.setattr(T, "_nt_iv_penalty", lambda u, ivp=ivp: ivp)
+        av, sb = T._nt_avail_stab(hist)
+        start = min(100.0 * av * sb, 80.0 + 20.0 * n / 336.0 if n < 336 else 100.0)
+        t = SimpleNamespace(url="udp://x.example:1/announce", historic=hist, uptime=max(0.0, start - T._nt_lat_penalty(ms) - ivp))
+        st = T._stats(t)
+        assert isinstance(st["lat_pen_r"], int) and isinstance(st["iv_pen_r"], int)
+        assert min(st["base_r"], st.get("ceiling_r", 100)) - st["lat_pen_r"] - st["iv_pen_r"] == int(t.uptime + 0.5), (st, t.uptime)
