@@ -139,3 +139,10 @@ class TestPenaltyAndWarning:
     def test_fix_page_section(self, flask_client: FlaskClient) -> None:
         html = flask_client.get("/fix").get_data(as_text=True)
         assert 'id="ampersand-hash"' in html and 'href="#ampersand-hash"' in html
+
+
+@pytest.mark.usefixtures("region_db")
+def test_the_status_page_key_explains_the_flag(flask_client: FlaskClient) -> None:
+    html = flask_client.get("/").get_data(as_text=True)
+    key = html[html.index('<h6>Other</h6>'):]
+    assert "refuses 1 in 13 torrents" in key[:key.index("</div></div>")]
