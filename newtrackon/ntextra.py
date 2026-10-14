@@ -159,6 +159,28 @@ def _repstats(url, now=None):
             "requests_per_s": round(delta["requests"] / gap) if "requests" in delta and gap else None}
 
 
+def _repstats_note(url, status=1, now=None):
+    """When there are no stats to show: {"code", "text"} saying why (not read yet, none published, stopped answering,
+    not read while it's down). Information only: not publishing stats costs nothing."""
+    import time as _t
+    now = int(now or _t.time())
+    rec = T.REPSTATS.get(url)
+    tried = scraper.stats_url(url).split("?")[0]
+    if not rec:
+        return {"code": "not_read", "text": "Not read yet: this site reads each tracker's public stats page once a day."}
+    asked = int(rec.get("t") or (int(rec.get("next") or now) - (T.STATS_RETRY if not rec.get("ok") else T.STATS_EVERY)))
+    again = max(0, round((int(rec.get("next") or now) - now) / 86400))
+    when = f"asked again in {again} day{'' if again == 1 else 's'}" if again else "asked again soon"
+    if not rec.get("ok"):
+        return {"code": "none", "text": f"It doesn't publish a stats page this site can read (asked {tried} {_ago(asked)} ago; {when})."}
+    last = (rec.get("hist") or [{}])[-1].get("t")
+    if int(rec.get("fails") or 0):
+        return {"code": "stopped", "text": f"Its stats page ({tried}) stopped answering: last read {_ago(int(last or asked))} ago; {when}."}
+    return {"code": "down" if status != 1 else "stale",
+            "text": f"Not read while it's down; last read {_ago(int(last or asked))} ago." if status != 1
+            else f"Last read {_ago(int(last or asked))} ago; {when}."}
+
+
 def _hn(n):
     """722.7k, 1.1M, 3.6G; under 1000 as it is."""
     for d, u in ((10**9, "G"), (10**6, "M"), (10**3, "k")):
@@ -225,6 +247,7 @@ def _detail(t):
         # what the tracker's own public stats page said at its latest daily reading (as reported, not measured), with
         # the change over about 24 h; None if it publishes none we can read (_repstats)
         "reported_stats": _repstats(t.url),
+        "reported_stats_note": None if _repstats(t.url) else _repstats_note(t.url, t.status),
         "down_reason": (T._nt_down_label(T.DOWN_WHY.get(t.url)) if t.status != 1 else None),
         "down_cause": (T.DOWN_WHY.get(t.url) if t.status != 1 else None),
         "same_operator_as": getattr(t, "operator_peers", []),

@@ -246,7 +246,7 @@ class TestPageAndApi:
         import time
         now = int(time.time())
         page = lambda: flask_client.get("/tracker/nyc.example").get_data(as_text=True)
-        assert "The tracker's own stats" not in page()
+        assert "<pre class=\"nt-rep\">" not in page()
         assert flask_client.get("/api/tracker/nyc.example").get_json()["reported_stats"] is None
         _hist({"t": now - DAY, "torrents": 100}, {"t": now - 60, "torrents": 150, "peers": 3})
         html = page()
@@ -305,3 +305,34 @@ def test_grouped_on_the_page_as_the_same_operator(flask_client: FlaskClient) -> 
     for u in (NYC, "udp://akl.example:1/announce"):
         T.REPSTATS[u] = {"kind": "opentracker", "id": 42, "start": now - 5000, "hist": [{"t": now - 60, "torrents": 1}]}
     assert "udp://akl.example:1/announce" in page()
+
+
+class TestNote:
+    NOW = 100 * DAY
+
+    def test_each_case(self) -> None:
+        note = lambda status=1: ntextra._repstats_note(NYC, status, self.NOW)
+        assert note()["code"] == "not_read"
+        T.REPSTATS[NYC] = {"t": self.NOW - 3 * DAY, "next": self.NOW + 27 * DAY, "fails": 1}
+        n = note()
+        assert n["code"] == "none" and "http://nyc.example:80/stats" in n["text"] and "asked again in 27 days" in n["text"]
+        T.REPSTATS[NYC] = {"t": self.NOW - 4 * DAY, "next": self.NOW + 26 * DAY, "fails": 3, "ok": True,
+                           "hist": [{"t": self.NOW - 6 * DAY, "torrents": 1}]}
+        assert note()["code"] == "stopped" and "stopped answering" in note()["text"]
+        T.REPSTATS[NYC] = {"t": self.NOW - 5 * DAY, "next": self.NOW - 4 * DAY, "fails": 0, "ok": True,
+                           "hist": [{"t": self.NOW - 5 * DAY, "torrents": 1}]}
+        assert note(status=0)["code"] == "down" and note()["code"] == "stale"
+
+    def test_read_records_when_it_was_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scraper, "fetch_stats", lambda url, local=False: None)
+        T.stats_read(_t(), now=self.NOW)
+        assert T.REPSTATS[NYC]["t"] == self.NOW
+
+
+@pytest.mark.usefixtures("region_db")
+def test_page_and_api_say_why_there_are_none(flask_client: FlaskClient) -> None:
+    html = flask_client.get("/tracker/nyc.example").get_data(as_text=True)
+    assert "The tracker's own stats" in html and "Not read yet" in html and 'href="/faq#stats"' in html
+    rec = flask_client.get("/api/tracker/nyc.example").get_json()
+    assert rec["reported_stats"] is None and rec["reported_stats_note"]["code"] == "not_read"
+    assert 'id="stats"' in flask_client.get("/faq").get_data(as_text=True)

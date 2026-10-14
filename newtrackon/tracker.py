@@ -2133,7 +2133,7 @@ def _removed_add(t, reason, now=None, kind=None):
 # kept for its page and API, as reported, not measured. A tracker that publishes none (or stops: 3 failed days in a row)
 # is asked again only after 30 days, not every day. This server's own tracker is read on loopback. ----
 _REPSTATS_FILE = "data/repstats.json"
-# url -> {"next": when to read it next, "fails": failed reads in a row, "ok": it has published stats,
+# url -> {"t": when it was last asked, "next": when to read it next, "fails": failed reads in a row, "ok": it has published stats,
 #         "kind": "opentracker"|"other", "hist": [{"t": when, figure: count, ...}, ...] (the last 31 days)}
 REPSTATS: dict = _url_store("REPSTATS", _REPSTATS_FILE, protocol=True)
 STATS_EVERY = 24 * 3600
@@ -2173,6 +2173,7 @@ def stats_read(t, now=None):
     if got is None and not _monitor_online():
         return  # our own outage: nothing recorded, it stays due
     rec = REPSTATS.setdefault(t.url, {})
+    rec["t"] = now  # when it was last asked, whatever the answer
     if got:
         kind, fig = got
         fig = dict(fig)

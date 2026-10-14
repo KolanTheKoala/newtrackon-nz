@@ -207,6 +207,12 @@ paths:
                           refused_pct: {type: [number, "null"], description: "Refused requests (opentracker: wrong connection ID; others: errors) as a share of all requests, since it started."}
                           refused_pct_24h: {type: [number, "null"], description: "The same over the last day."}
                           requests_per_s: {type: [integer, "null"], description: "Requests per second over the last day."}
+                      reported_stats_note:
+                        type: [object, "null"]
+                        description: "Why reported_stats is null (null when it isn't). Information only: not publishing stats costs nothing."
+                        properties:
+                          code: {type: string, enum: [not_read, none, stopped, down, stale]}
+                          text: {type: string}
                       down_reason: {type: [string, "null"]}
                       down_cause: {type: [string, "null"]}
                       same_operator_as: {type: array, items: {type: string}, description: "Other listed hosts on the same server."}
