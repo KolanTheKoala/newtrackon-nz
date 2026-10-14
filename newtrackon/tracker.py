@@ -902,6 +902,9 @@ CID_EVERY = 86400  # once a day: the made-up ID is the one request no real clien
 # rest), but it keeps the tracker out of the clean lists (/api/clean, good=true): user's call 2026-10-14.
 AMP_OK: dict = _url_store("AMP_OK", probe="amp_ok", protocol=True)  # url -> True if accepted, False if refused
 AMP_T: dict = _url_store("AMP_T", probe="amp_t", protocol=True)  # url -> when that was last tested
+# url -> [latency, interval] points taken off at its last score: the page explains the score with these, not with
+# the latency now (measured every 2 h, so it moves between checks)
+SCORE_PEN: dict = _url_store("SCORE_PEN", probe="score_pen")
 AMP_EVERY = 86400  # once a day per tracker, like the connection-ID test
 
 
@@ -2014,10 +2017,9 @@ def _stats(t):
             st["ceiling_r"] = int(80.0 + 20.0 * len(h) / 336.0 + 0.5)
             st["ceiling"] = round(80.0 + 20.0 * len(h) / 336.0, 1)  # new-tracker ceiling, rises to 100 over 7 days
         _ms = _nt_region_avg(t.url)
-        _pen = _nt_lat_penalty(_ms)
-        _ivp = _nt_iv_penalty(t.url)
+        _pen, _ivp = SCORE_PEN.get(t.url) or (_nt_lat_penalty(_ms), _nt_iv_penalty(t.url))  # as at its last score
         st["lat_ms"] = _ms
-        st["lat_penalty"] = round(_pen, 1)
+        st["lat_penalty"] = round(_pen, 2)
         st["iv_penalty"] = _ivp
         st["iv"] = ANN_IV.get(t.url)
         if min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0) > 1.0:
@@ -2029,11 +2031,8 @@ def _stats(t):
         _drop = _start - int(float(t.uptime or 0) + 0.5)
         st["iv_pen_r"], st["lat_pen_r"] = int(_ivp + 0.5), int(_pen + 0.5)
         if abs(min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0)) <= 1.0 and _drop >= 0:
-            if not _pen:
-                st["iv_pen_r"] = _drop if _ivp else 0
-            else:
-                st["iv_pen_r"] = min(st["iv_pen_r"], _drop) if _ivp else 0
-                st["lat_pen_r"] = _drop - st["iv_pen_r"]
+            st["iv_pen_r"] = min(st["iv_pen_r"], _drop) if _ivp else 0
+            st["lat_pen_r"] = _drop - st["iv_pen_r"]
         r = _runs(h, 0)
         st["longest_h"] = max(r) * 0.5 if r else 0
     ph = PEER_HIST.get(t.url)
@@ -2445,7 +2444,9 @@ def _nt_uu(self, *a, **k):
     r = _nt_orig_uu(self, *a, **k)
     self._nt_base = self.uptime  # reliability score before the latency penalty (used for premium checks)
     try:
-        p = _nt_lat_penalty(_nt_region_avg(self.url)) + _nt_iv_penalty(self.url)
+        lp, ip = _nt_lat_penalty(_nt_region_avg(self.url)), _nt_iv_penalty(self.url)
+        SCORE_PEN[self.url] = [round(lp, 3), ip]
+        p = lp + ip
         if p and self.uptime:
             self.uptime = max(0.0, float(self.uptime) - p)
     except Exception:

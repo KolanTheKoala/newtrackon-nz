@@ -307,6 +307,7 @@ class TestIntervalPenalty:
         T.ANN_IV[t.url] = 120
         t.update_uptime()
         assert round(good - t.uptime) == 5 and t.uptime < 96
+        assert T.SCORE_PEN[t.url] == [0.0, 5.0]  # the page explains the score with what it actually took off
         assert ntextra._state(t)[0] == "up_good" and ntextra._rowcls(t) == "green"  # still Up/Good: points are for ranking
 
     @pytest.mark.usefixtures("region_db")
@@ -1239,7 +1240,8 @@ def test_the_made_up_connection_id_only_when_asked(monkeypatch: pytest.MonkeyPat
 
 def test_breakdown_is_whole_points_that_add_up(monkeypatch: pytest.MonkeyPatch) -> None:
     """The tracker page's latency and interval penalties are whole points, and taken from the reliability score (or the
-    new-tracker ceiling) they give the shown score. They showed as 1.2999999999999998 and 2.7 on 2026-10-15."""
+    new-tracker ceiling) they give the shown score, also when the latency has moved since the check that worked the score
+    out (tracker.dhitechnical.com: 54, latency none, score 53). They showed as 1.2999999999999998 and 2.7 on 2026-10-15."""
     import random
     from collections import deque
     from types import SimpleNamespace
@@ -1252,7 +1254,10 @@ def test_breakdown_is_whole_points_that_add_up(monkeypatch: pytest.MonkeyPatch) 
         monkeypatch.setattr(T, "_nt_iv_penalty", lambda u, ivp=ivp: ivp)
         av, sb = T._nt_avail_stab(hist)
         start = min(100.0 * av * sb, 80.0 + 20.0 * n / 336.0 if n < 336 else 100.0)
-        t = SimpleNamespace(url="udp://x.example:1/announce", historic=hist, uptime=max(0.0, start - T._nt_lat_penalty(ms) - ivp))
+        then = rnd.choice([ms, 0, 152, 160, 215])  # the latency at its last check, when the score was worked out
+        t = SimpleNamespace(url="udp://x.example:1/announce", historic=hist, uptime=max(0.0, start - T._nt_lat_penalty(then) - ivp))
+        T.SCORE_PEN[t.url] = [T._nt_lat_penalty(then), ivp]  # what update_uptime records
         st = T._stats(t)
+        assert not st.get("capped")  # a latency that moved since isn't mistaken for a quality cap
         assert isinstance(st["lat_pen_r"], int) and isinstance(st["iv_pen_r"], int)
         assert min(st["base_r"], st.get("ceiling_r", 100)) - st["lat_pen_r"] - st["iv_pen_r"] == int(t.uptime + 0.5), (st, t.uptime)
