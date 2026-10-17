@@ -490,6 +490,7 @@ def _latency_chart(hist, now, w=900, h=220, pad=60):  # pad fits 3-digit labels 
 
 
 FIX_TITLES = {"no-peers": "Hands out no peers", "fake-peers": "Returns fake peers", "dead-address": "IPv4 or IPv6 broken",
+              "dead-dns": "Dead DNS record (Up/Broken)",
               "unreliable": "Drops out (Up/Unreliable, Up/Junk)", "slow": "Slow (Up/Slow)", "down-timeout": "Down: timeout",
               "down-refused": "Down: connection refused", "down-dns": "Down: DNS", "down-tls": "Down: TLS / certificate",
               "down-http": "Down: HTTP error", "down-rejected": "Down: the tracker rejects requests", "down": "Down: no usable answer",

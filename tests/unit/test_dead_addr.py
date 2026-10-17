@@ -209,6 +209,12 @@ class TestDnsIcon:
         monkeypatch.setattr(T, "_dead_addrs", lambda t, now=None: ["93.184.216.3"] if t.url == "udp://akl.example:1/announce" else [])
         html = flask_client.get("/").get_data(as_text=True)
         row = lambda host: re.search(r'<tr[^>]*data-nt-host="%s"[^>]*>.*?</tr>' % host, html, re.S).group(0)  # noqa: E731
-        assert "fa-link-slash" in row("akl.example") and 'href="/fix#dead-address"' in row("akl.example")
+        assert "fa-link-slash" in row("akl.example") and 'href="/fix#dead-dns"' in row("akl.example")
         assert "fa-link-slash" not in row("ams.example")
         assert "dead DNS record</div>" in html  # the legend
+
+
+
+def test_fix_page_has_the_dead_dns_section(flask_client) -> None:
+    html = flask_client.get("/fix").get_data(as_text=True)
+    assert 'id="dead-dns"' in html and 'href="#dead-dns"' in html and "Dead DNS record" in html

@@ -153,6 +153,41 @@ EOF</pre>
         the family you don't serve. It clears once that address answers.</p>
     </details>
 
+    <h4 id="dead-dns">Dead DNS record (Up/Broken)</h4>
+    <div class="nt-plain">
+        <p><b>In plain words:</b> your tracker's name lists an address that nothing answers on. It's like a business card with an old
+            phone number on it next to the right one: everyone who rings the old number gets nowhere, even though you're there.</p>
+        <p><b>How we know:</b> every check asks each address the name gives, one by one. This address has failed 3 or more checks in a
+            row while the tracker's other address (or its other IP family) answers every time. The tracker's page names the dead
+            address.</p>
+    </div>
+    <p><b>Why it matters:</b> a torrent client looks up the name and picks one of the addresses. Clients that pick the dead one
+        can't reach your tracker at all, so a share of your users loses the tracker for good, and they can't tell why.</p>
+    <p><b>Most likely causes, and what to do:</b></p>
+    <ul>
+        <li><b>A leftover record after a move.</b> The server moved and the old <b>A</b> (IPv4) or <b>AAAA</b> (IPv6) record wasn't
+            deleted. In your domain's DNS settings, delete the record holding the dead address.</li>
+        <li><b>An IPv6 record nobody set up.</b> Some hosts and control panels add an AAAA record automatically, but the tracker
+            doesn't listen on IPv6 or the firewall blocks it. Either make it answer on IPv6 (see
+            <a href="#dead-address">IPv4 or IPv6 broken</a>) or delete the AAAA record.</li>
+        <li><b>A second server that's gone.</b> The name was spread over two servers (two A records) and one was switched off.
+            Delete its record.</li>
+        <li><b>A changing home or dynamic address.</b> The record still holds an address your connection had before. Update it, or
+            fix the dynamic DNS updater.</li>
+    </ul>
+    <p>Deleting the dead record is usually the whole fix. It takes a minute, and the warning clears once checks stop seeing that
+        address (DNS changes can take a few hours to reach everyone). A tracker that stays Up/Broken for <b>30 days</b> is removed.</p>
+    <div class="nt-ask"><p><b>Ask your provider or admin:</b> "Our tracker's name has a DNS record for an address that doesn't
+        answer. Can you delete that record, or point it at the server's current address?"</p></div>
+    <details><summary>For advanced users: command line</summary>
+    <p>List every address the name gives, then try each one directly (the UDP command under
+        <a href="#dead-address">IPv4 or IPv6 broken</a> works too, with an address instead of the name):</p>
+<pre>dig +short A tracker.example.org; dig +short AAAA tracker.example.org
+for ip in $(dig +short A tracker.example.org); do
+  curl -s -m 5 -o /dev/null -w "$ip %{http_code}\n" --resolve tracker.example.org:6969:$ip http://tracker.example.org:6969/announce
+done</pre>
+    </details>
+
     <h4 id="hidden-address">Hands out an address nobody can reach</h4>
     <div class="nt-plain">
         <p><b>In plain words:</b> your tracker shares peers, but it gives everyone the wrong address for each peer, so nobody can
