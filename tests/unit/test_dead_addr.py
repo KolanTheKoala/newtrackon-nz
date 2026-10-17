@@ -13,6 +13,7 @@ import pytest
 
 from newtrackon import ntextra, scraper
 from newtrackon import tracker as T
+from tests.unit.test_regions import region_db  # noqa: F401  (fixture)
 
 _ADDR_SWEEP = scraper.addr_sweep  # the real one (conftest stubs it out for every other test)
 H, P = "multi.example", 6969
@@ -181,3 +182,33 @@ class TestRescoreAtStart:
         assert slow.uptime == 100 - T.LAT_PEN_MAX and T.SCORE_PEN[slow.url][0] == T.LAT_PEN_MAX
         assert changed == [t, slow] and steady.uptime == before and steady.last_checked == last
         assert not t.to_be_deleted and not getattr(t, "_nt_no_removal")
+
+
+class TestDnsIcon:
+    def test_flag_for_a_dead_record_among_others(self, sample_tracker) -> None:
+        t = _tracker(sample_tracker, ["192.0.2.1", "192.0.2.2"])
+        _health(**{"192_0_2_1": True, "192_0_2_2": False})
+        assert ntextra._dns_flag(t).startswith("Dead DNS record: 192.0.2.2 doesn't answer, while its other address answers.")
+
+    def test_flag_for_a_dead_family(self, sample_tracker) -> None:
+        t = _tracker(sample_tracker, ["192.0.2.1", "2001:db8::2"])
+        T.FAM_FAILS[U] = {"n": 4, "fam": "v6"}
+        assert "its IPv6 address (its AAAA record) hasn't answered for 4 checks in a row" in ntextra._dns_flag(t)
+
+    def test_no_flag_when_healthy_or_down(self, sample_tracker) -> None:
+        t = _tracker(sample_tracker, ["192.0.2.1", "192.0.2.2"])
+        _health(**{"192_0_2_1": True, "192_0_2_2": True})
+        assert ntextra._dns_flag(t) == ""
+        _health(**{"192_0_2_1": True, "192_0_2_2": False})
+        t.status = 0
+        assert ntextra._dns_flag(t) == ""
+
+    @pytest.mark.usefixtures("region_db")
+    def test_status_column_shows_the_icon(self, flask_client, monkeypatch: pytest.MonkeyPatch) -> None:
+        import re
+        monkeypatch.setattr(T, "_dead_addrs", lambda t, now=None: ["93.184.216.3"] if t.url == "udp://akl.example:1/announce" else [])
+        html = flask_client.get("/").get_data(as_text=True)
+        row = lambda host: re.search(r'<tr[^>]*data-nt-host="%s"[^>]*>.*?</tr>' % host, html, re.S).group(0)  # noqa: E731
+        assert "fa-link-slash" in row("akl.example") and 'href="/fix#dead-address"' in row("akl.example")
+        assert "fa-link-slash" not in row("ams.example")
+        assert "dead DNS record</div>" in html  # the legend

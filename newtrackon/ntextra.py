@@ -532,6 +532,26 @@ def _broken_why(t):
     return "Works for some clients only. Score capped at 50."
 
 
+def _dns_flag(t):
+    """Tooltip for the status column's broken-link icon: a DNS record pointing at an address that doesn't answer (one of
+    its several addresses, or its only one of an IP family), or '' if none."""
+    if getattr(t, "status", 0) != 1:
+        return ""
+    ips = T._dead_addrs(t)
+    if ips:
+        n, others = len(ips), len(t.ips or []) - len(ips)
+        return ("Dead DNS record: %s %s answer, while its other address%s %s. Every client whose lookup picks %s can't "
+                "reach the tracker. Click for how to fix." % (", ".join(ips), "don't" if n > 1 else "doesn't",
+                                                               "es" if others != 1 else "", "answer" if others != 1 else "answers",
+                                                               "one of them" if n > 1 else "it"))
+    df = T.FAM_FAILS.get(t.url) or {}
+    if df.get("n", 0) >= T.PEER_FAIL_LIMIT:
+        f = str(df.get("fam", "?"))[-1]
+        return ("Dead DNS record: its IPv%s address (its %s record) hasn't answered for %d checks in a row. Every client "
+                "using IPv%s can't reach the tracker. Click for how to fix." % (f, "AAAA" if f == "6" else "A", df["n"], f))
+    return ""
+
+
 def _fix_anchor(t):
     """The /fix section for this tracker's current problem, or None if it's healthy. A peer-test failure where client A came
     back with an address nobody can reach (NAT_SEEN) gets that section: it's the cause, and it says how to fix it."""
@@ -1125,6 +1145,7 @@ def register(app):
     app.jinja_env.globals["nt_fix_titles"] = FIX_TITLES
     app.jinja_env.globals["nt_tags"] = _filter_tags
     app.jinja_env.globals["nt_broken_why"] = _broken_why
+    app.jinja_env.globals["nt_dns_flag"] = _dns_flag
     app.jinja_env.globals["nt_version"] = _version
     app.jinja_env.globals["nt_seen_text"] = _seen_text
     app.jinja_env.globals["nt_iv_flag"] = _iv_flag

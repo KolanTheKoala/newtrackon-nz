@@ -17,7 +17,8 @@ from fontTools import subset
 
 SRC, OUT = sys.argv[1], sys.argv[2]
 SOLID = ["chart-line", "wrench", "moon", "sun", "exclamation-triangle", "user", "trophy", "toolbox", "terminal",
-         "rotate", "rss", "question-circle", "plus", "list", "home", "globe-asia", "code", "download", "stopwatch"]
+         "rotate", "rss", "question-circle", "plus", "list", "home", "globe-asia", "code", "download", "stopwatch",
+         "link-slash"]
 BRANDS = ["github"]
 USED = set(SOLID + BRANDS)
 
