@@ -211,8 +211,10 @@ class TestMainTableFilters:
 
     def test_filter_bar_present(self, flask_client: FlaskClient) -> None:
         html = flask_client.get("/").get_data(as_text=True)
-        for el in ("ntf-up", "ntf-good", "ntf-new", "ntf-udp", "ntf-http", "ntf-v4", "ntf-v6", "ntf-peer", "ntf-region", "ntf-fast", "ntf-reset"):
+        for el in ("ntf-clean", "ntf-secure", "ntf-status", "ntf-proto", "ntf-ip", "ntf-region", "ntf-fast", "ntf-reset"):
             assert f'id="{el}"' in html, el
+        for gone in ("ntf-up", "ntf-good", "ntf-new", "ntf-udp", "ntf-http", "ntf-v4", "ntf-v6", "ntf-peer"):  # merged 2026-10-17
+            assert f'id="{gone}"' not in html, gone
         assert "/static/js/region-guess.js" in html
 
     def test_row_tags(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,6 +230,24 @@ class TestMainTableFilters:
         assert set(ams["fast"].split()) == {"europe", "americas"}  # Europe 10, North America 90
         assert set(akl["fam"].split()) == {"v4", "v6"} and ams["fam"] == ""
         assert akl["peer"] == "pass" and ams["peer"] == "fail" and nyc["peer"] == "na"
+
+    def test_clean_tags_match_the_clean_api(self, flask_client: FlaskClient) -> None:
+        rows, sizes = self._rows(flask_client), {}
+        for key in ("", "oceania", "asia", "europe", "americas"):
+            api = set(_urls(flask_client.get("/api/clean" + (f"?fast_from={key}" if key else ""))))
+            tagged = {u for u, a in rows.items() if (key or "any") in a.get("clean", "").split()}
+            assert tagged == api, key
+            sizes[key] = len(api)
+        assert sizes[""] > sizes["europe"] > 0  # a real comparison, not empty == empty
+
+    def test_secure_tag(self, flask_client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from newtrackon import tracker as T
+
+        monkeypatch.setattr(T, "CID_OK", {"udp://akl.example:1/announce": True, "udp://ams.example:1/announce": False})
+        rows = self._rows(flask_client)
+        assert rows["udp://akl.example:1/announce"]["secure"] == "1"  # enforces the connection ID
+        assert rows["udp://ams.example:1/announce"]["secure"] == ""  # accepts a made-up one
+        assert rows["http://nyc.example:80/announce"]["secure"] == "1"  # TCP
 
 
 @pytest.mark.usefixtures("region_db")

@@ -358,8 +358,51 @@ def _filter_tags(t):
     fams = [] if nopeers else [k for k, v in _fams(t).items() if v == "ok" and k != badfam]
     peer = {True: "pass", False: "fail"}.get(T.PEER_OK.get(t.url), "na")
     proto = "udp" if t.url.startswith("udp:") else "http"
+    # secure: can't be used to aim spoofed traffic at others (TCP's handshake, or a UDP tracker enforcing BEP 15's connection ID)
+    secure = proto == "http" or T.CID_OK.get(t.url) is True
     return {"proto": proto, "fam": " ".join(fams), "peer": peer,
-            "region": " ".join(sorted(regions_of(t.country_codes))), "fast": " ".join(fast)}
+            "region": " ".join(sorted(regions_of(t.country_codes))), "fast": " ".join(fast),
+            "clean": _clean_lists().get(t.url, ""), "secure": "1" if secure else ""}
+
+
+def _clean_pick(trackers, rf, min_score=90.0, max_ms=0, min_age=3.0, need_v4=False, dedupe=True):
+    """The trackers /api/clean gives, best first: the main table's 'In clean list' button shows the same ones."""
+    import time
+    pick = {}
+    for t in trackers:
+        if _state(t)[0] not in ("up_good", "up_new", "up_slow", "up_unreliable") or round(float(t.uptime or 0)) < min_score or (time.time() - int(t.added or 0)) < min_age * 86400:
+            continue
+        fam = _fams(t)
+        if "dead" in fam.values() or (need_v4 and fam["v4"] != "ok"):
+            continue
+        if T.AMP_OK.get(t.url) is False:  # refuses info hashes holding '&': about 1 in 13 torrents can't use it
+            continue
+        if max_ms and (t.latency is None or t.latency >= max_ms):
+            continue
+        if rf.active and not rf.matches(t.url, t.country_codes, T.REGION_LAT):
+            continue
+        key = getattr(t, "group_id", t.url) if dedupe else t.url
+        cur = pick.get(key)
+        if cur is None or (t.uptime, -(t.latency or 9999)) > (cur.uptime, -(cur.latency or 9999)):
+            pick[key] = t
+    return sorted(pick.values(), key=lambda t: (-t.uptime, t.latency or 9999))
+
+
+def _clean_lists():
+    """url -> the default clean lists it's on, space-separated: 'any' (/api/clean) and each fast_from key
+    (/api/clean?fast_from=oceania ...). Worked out once per page (Flask's g), as one operator's best tracker can differ by
+    region."""
+    from flask import g, has_request_context
+    if has_request_context() and getattr(g, "nt_clean", None) is not None:
+        return g.nt_clean
+    trs, out = _trackers(), {}
+    for key in ("", *FAST_FROM):
+        for t in _clean_pick(trs, parse_region_filter({"fast_from": key} if key else {})):
+            out.setdefault(t.url, []).append(key or "any")
+    out = {u: " ".join(v) for u, v in out.items()}
+    if has_request_context():
+        g.nt_clean = out
+    return out
 
 
 _STATUS_TEXT = {"up_good": "Up/Good", "up_new": "Up/New", "up_slow": "Up/Slow", "up_unreliable": "Up/Unreliable",
@@ -1127,23 +1170,6 @@ def register(app):
             return Response(str(exc), 400, mimetype="text/plain", headers={"Access-Control-Allow-Origin": "*"})
         need_v4 = a.get("require_ipv4", "false").lower() in ("1", "true")
         dedupe = a.get("dedupe", "true").lower() not in ("0", "false")
-        pick = {}
-        for t in _trackers():
-            if _state(t)[0] not in ("up_good", "up_new", "up_slow", "up_unreliable") or round(float(t.uptime or 0)) < min_score or (__import__("time").time() - int(t.added or 0)) < min_age * 86400:
-                continue
-            fam = _fams(t)
-            if "dead" in fam.values() or (need_v4 and fam["v4"] != "ok"):
-                continue
-            if T.AMP_OK.get(t.url) is False:  # refuses info hashes holding '&': about 1 in 13 torrents can't use it
-                continue
-            if max_ms and (t.latency is None or t.latency >= max_ms):
-                continue
-            if rf.active and not rf.matches(t.url, t.country_codes, T.REGION_LAT):
-                continue
-            key = getattr(t, "group_id", t.url) if dedupe else t.url
-            cur = pick.get(key)
-            if cur is None or (t.uptime, -(t.latency or 9999)) > (cur.uptime, -(cur.latency or 9999)):
-                pick[key] = t
-        urls = [t.url for t in sorted(pick.values(), key=lambda t: (-t.uptime, t.latency or 9999))]
+        urls = [t.url for t in _clean_pick(_trackers(), rf, min_score, max_ms, min_age, need_v4, dedupe)]
         return Response("\n\n".join(urls) + ("\n" if urls else ""), mimetype="text/plain",
                         headers={"Access-Control-Allow-Origin": "*"})
