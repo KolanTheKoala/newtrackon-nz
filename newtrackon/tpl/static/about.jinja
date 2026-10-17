@@ -22,7 +22,8 @@ tracker operators can see what's wrong and how to fix it on <a href="/fix">How t
 
 <h4>The score (0&ndash;100)</h4>
 <p><b>Availability &times; stability</b>, weighted towards the last week. A single outage costs little; constant up-and-down is punished
-hard. Slow trackers lose a few points (none under 150&nbsp;ms, &minus;10 at 650&nbsp;ms, at most &minus;40), and so do odd announce
+hard. Slow trackers lose points, as real clients time out on them (none under 150&nbsp;ms, &minus;6 at 300&nbsp;ms, &minus;18 at 500&nbsp;ms,
+at most &minus;45 from about 950&nbsp;ms: a reliable tracker at 400&nbsp;ms or more drops under 90), and so do odd announce
 intervals (none from 15&nbsp;minutes to 3&nbsp;hours, at most &minus;5 at 2&nbsp;minutes or 24&nbsp;hours). New trackers start
 capped at 80 and earn up to 100 over their first 7 days.</p>
 <table class="table table-sm" style="max-width:520px">
@@ -33,7 +34,7 @@ capped at 80 and earn up to 100 over their first 7 days.</p>
 <tr><td>Down half an hour in every 5 hours</td><td>57</td></tr>
 <tr><td>Flapping every hour</td><td>13</td></tr>
 </tbody></table>
-<p>Handing out no peers or fake peers sets the score to <b>0</b>. Being partly broken (a dead IPv4 or IPv6 address, one of them not
+<p>Handing out no peers or fake peers sets the score to <b>0</b>. Being partly broken (a published address that doesn't answer, a dead IPv4 or IPv6 family, one of them not
 sharing peers, or separate servers that don't share swarms) caps it at <b>50</b>. Penalties lift as soon as the tracker behaves.</p>
 
 <h4>Statuses</h4>
@@ -43,8 +44,9 @@ sharing peers, or separate servers that don't share swarms) caps it at <b>50</b>
 <li><b>Up/Unreliable</b>: under 90 because of dropouts. <b>Up/Junk</b>: under 50.</li>
 <li><b>Up/New</b>: healthy, still building its first week of history.</li>
 <li><b>Up/Bad</b>: answers but fails a test: it hands out no usable peers, or fake ones.</li>
-<li><b>Up/Broken</b>: works for some clients only: its IPv4 or IPv6 address is dead or doesn't share peers, or it runs separate
-    servers that don't share swarms. Still listed, as it's useful to some.</li>
+<li><b>Up/Broken</b>: works for some clients only: one of the addresses in its DNS records doesn't answer, its IPv4 or IPv6 side
+    is dead or doesn't share peers, or it runs separate servers that don't share swarms. Still listed, as it's useful to some,
+    but never in the clean lists.</li>
 <li><b style="color:#e0e0e0">Down</b> &#129702;: not answering, with how long.</li>
 </ul>
 
