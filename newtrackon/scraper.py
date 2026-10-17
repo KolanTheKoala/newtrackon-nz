@@ -1782,6 +1782,52 @@ def family_probe(url):
     return res
 
 
+ADDR_SWEEP_MAX = 8  # addresses per family asked by addr_sweep (a round-robin pool of dozens isn't one tracker's records)
+ADDR_SWEEP_FRESH = 300  # an address that answered this long ago or less (in this check) isn't asked again
+
+
+def addr_sweep(url):
+    """Ask each published address once, from this server, when there are 2+, and note whether it answered. The checks
+    try known-good addresses first, so a dead record would otherwise never be tried again (or found at all); an address
+    that doesn't answer while another does makes the tracker Up/Broken."""
+    from urllib.parse import urlparse as _up
+    p = _up(url)
+    udp = p.scheme == "udp"
+    port = p.port or (443 if p.scheme == "https" else 80)
+    try:
+        rows = ordered_addrs(p.hostname, port, 0, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM)
+    except OSError:
+        return
+    rows = [r for r in rows if ip_is_public(r[4][0])]
+    if len(rows) < 2:
+        return  # one address: the check itself covers it
+    published = {r[4][0] for r in rows}
+    h = ADDR_HEALTH.get(_addr_key(p.hostname, port)) or {}
+    for fam in (socket.AF_INET, socket.AF_INET6):
+        for r in [r for r in rows if r[0] == fam][:ADDR_SWEEP_MAX]:
+            ip = r[4][0]
+            if time() - int((h.get(ip) or {}).get("ok") or 0) <= ADDR_SWEEP_FRESH:
+                continue
+            ok = False
+            try:
+                if udp:
+                    s_, an = _udp_session(fam, r[4], None)
+                    try:
+                        an(generate_peer_id(), 1, probe_port(0x76FF), 0, test_info_hash())
+                    finally:
+                        s_.close()
+                else:
+                    _conn.track, _conn.pin = False, ip
+                    try:
+                        _announce_http_once(url)
+                    finally:
+                        _conn.pin = None
+                ok = True
+            except Exception:
+                pass
+            addr_record(p.hostname, port, ip, ok, published)
+
+
 # ---- latency by region: handshake via each VPN exit minus that tunnel's own round trip ----
 _EXITS = [0.0, {}]
 _TUN_RTT: dict = {}
@@ -1926,6 +1972,10 @@ def region_latency(url, fams=None):
     if not ex:
         return {}
     fam = socket.AF_INET if (not fams or fams.get("v4")) else socket.AF_INET6
+    # then the other published family: an address that only answers some places (ibksturm's IPv4 answered only from
+    # Europe) mustn't leave the other regions unmeasured, and the latency penalty with them
+    other = socket.AF_INET6 if fam == socket.AF_INET else socket.AF_INET
+    fam_order = [fam] + ([other] if fams and ("v6" if other == socket.AF_INET6 else "v4") in fams else [])
     try:  # is the tracker this very server? (local addresses skip the VPN routing and answer over loopback)
         _ip = socket.getaddrinfo(urlparse(url).hostname, None, fam)[0][4][0]
         _t = socket.socket(fam, socket.SOCK_DGRAM)
@@ -1940,32 +1990,43 @@ def region_latency(url, fams=None):
     def one(item):
         name, e = item
         src = e.get("src4" if fam == socket.AF_INET else "src6")
-        if not src:
-            return None
         if is_self:  # the tracker is this server: from that city the round trip is just the tunnel leg
+            if not src:
+                return None
             tun = _tunnel_rtt(src, fam)
             return (_lbl(e, name), max(1, int(round(tun)))) if tun else None
-        try:
-            tr = None
-            for _ in range(2):  # one retry: a single lost packet shouldn't lose the city
-                try:
-                    tr = _rtt_via(url, fam, src)
-                except Exception:
-                    tr = None
-                if tr is not None:
-                    break
-            tun = _tunnel_rtt(src, fam)
-            if tr is None or tun is None:
-                return None
-            label = _lbl(e, name)
-            return label, max(1, int(round(tr - tun)))
-        except Exception:
-            return None
+        for f in fam_order:
+            src = e.get("src4" if f == socket.AF_INET else "src6")
+            if not src:
+                continue
+            try:
+                tr = None
+                for _ in range(2):  # one retry: a single lost packet shouldn't lose the city
+                    try:
+                        tr = _rtt_via(url, f, src)
+                    except Exception:
+                        tr = None
+                    if tr is not None:
+                        break
+                tun = _tunnel_rtt(src, f) if tr is not None else None
+                if tr is None or tun is None:
+                    continue
+                return _lbl(e, name), max(1, int(round(tr - tun)))
+            except Exception:
+                continue
+        return None
 
     out = {}
     try:  # this server, measured the same way, so every city in the tooltip is comparable
         # self-hosted tracker: loopback means nothing, so count Oceania as a typical NZ user's trip to Wellington
-        own = 20 if is_self else _rtt_via(url, fam, None)
+        own = 20 if is_self else None
+        for f in ([] if is_self else fam_order):
+            try:
+                own = _rtt_via(url, f, None)
+            except Exception:
+                own = None
+            if own is not None:
+                break
         if own is not None:
             out["Oceania: Wellington"] = max(1, int(round(own)))
     except Exception:

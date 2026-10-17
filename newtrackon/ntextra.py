@@ -88,7 +88,7 @@ def _up_label(t, st):
 
 def _addr_report(t, now=None):
     """Each published address of a tracker and whether it answers, from the checks: [{ip, fam, ok, since}], or [].
-    'not answering' = failed its last 3+ tries and nothing in the last hour."""
+    'not answering' = failed its last 3+ tries and nothing in the last hour (T.ADDR_DEAD_FAILS)."""
     import time
     from urllib.parse import urlparse
     from newtrackon import scraper
@@ -101,7 +101,7 @@ def _addr_report(t, now=None):
         e = h.get(ip)
         if not e:
             continue
-        bad = int(e.get("fails", 0)) >= 3 and now - int(e.get("ok") or 0) > 3600
+        bad = int(e.get("fails", 0)) >= T.ADDR_DEAD_FAILS and now - int(e.get("ok") or 0) > 3600
         out.append({"ip": ip, "fam": "IPv6" if ":" in ip else "IPv4", "ok": not bad,
                     "since": (_ago(e["ok"]) + " ago") if e.get("ok") else "never seen answering"})
     return out
@@ -481,6 +481,11 @@ def _broken_why(t):
         o = "6" if f == "v4" else "4"
         return ("Its IPv%s side doesn't share peers (3+ of its last 6 IPv%s peer tests failed), so clients on IPv%s get no "
                 "usable peers. Still works over IPv%s. Score capped at 50." % (f[-1], f[-1], f[-1], o))
+    ips = T._dead_addrs(t)
+    if ips:
+        return ("Its published address%s %s %s answer, while its other addresses do: every client whose DNS lookup picks "
+                "%s can't reach it. Score capped at 50." % ("es" if len(ips) > 1 else "", ", ".join(ips),
+                                                           "don't" if len(ips) > 1 else "doesn't", "one" if len(ips) > 1 else "it"))
     return "Works for some clients only. Score capped at 50."
 
 
@@ -623,7 +628,7 @@ def _evidence(t, d):
     jd = T._nt_junk_days(t.url) if fix in ("unreliable", "dead-address", "split-swarm") else None
     if jd is not None:
         left = T.JUNK_DAYS - jd
-        out.append("Up/Junk or Up/Broken for %s. Trackers that stay Up/Junk (score under 50) or Up/Broken (a dead IPv4 or IPv6 address, one family not sharing peers, or separate servers not sharing swarms) for %d days in a row are removed and banned: %s."
+        out.append("Up/Junk or Up/Broken for %s. Trackers that stay Up/Junk (score under 50) or Up/Broken (an address that doesn't answer, a dead IPv4 or IPv6 family, one family not sharing peers, or separate servers not sharing swarms) for %d days in a row are removed and banned: %s."
                    % ("under a day" if jd < 1 else "%d day%s" % (int(jd), "" if int(jd) == 1 else "s"), T.JUNK_DAYS,
                       "it's due now" if left <= 0 else "about %d day%s left to fix it" % (max(1, int(left)), "" if int(left) == 1 else "s")))
     if fix == "unreliable":
@@ -632,8 +637,12 @@ def _evidence(t, d):
             out.append("Up in %d%% of checks over the last %s days; score %d." % (round(100 * sum(1 for x in h if x > 0) / len(h)), round(len(h) / 48, 1), round(float(t.uptime or 0))))
     if fix == "slow":
         lat = T.REGION_LAT.get(t.url) or {}
+        avg, ms = T._nt_region_avg(t.url), T._nt_lat_ms(t)
+        if ms:
+            out.append("Average latency %d ms%s." % (ms, " across %d regions" % len(lat) if avg else " from this site's server"
+                                                     + (" (the regions measured in the last 48 hours: too few to average)" if lat else "")))
         if lat:
-            out.append("Latency by region: " + ", ".join("%s %d ms" % (k, v) for k, v in lat.items()) + ".")
+            out.append("By region: " + ", ".join("%s %d ms" % (k, v) for k, v in lat.items()) + ".")
     return out
 
 

@@ -214,6 +214,10 @@ class Tracker:
                 _df = next((k for k, v in _fr.items() if not v), None) if len(_fr) == 2 and sum(_fr.values()) == 1 else None
                 _fam_set(self.url, _df, _fr)
                 try:
+                    scraper.addr_sweep(self.url)
+                except Exception:
+                    logger.exception("address sweep for %s", self.url)
+                try:
                     _region_set(self.url, scraper.region_latency(self.url, _fr))
                 except Exception:
                     pass
@@ -418,8 +422,8 @@ class Tracker:
         self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
         if (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:  # dead published family N times in a row
             self.uptime = min(self.uptime, 50)  # still works on its other family
-        elif PEER_FAILS.get(self.url, 0) < PEER_FAIL_LIMIT and (_peer_fam_bad(self.url) or _split(self.url)):  # partly shares
-            self.uptime = min(self.uptime, 50)  # Up/Broken like a dead address: same cap
+        elif PEER_FAILS.get(self.url, 0) < PEER_FAIL_LIMIT and (_peer_fam_bad(self.url) or _split(self.url) or _dead_addrs(self)):
+            self.uptime = min(self.uptime, 50)  # Up/Broken (partly shares, or one address dead) like a dead family: same cap
         if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers in N of its last PEER_WINDOW checks
             self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
         if PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # failed the peer test N times in a row
@@ -1653,7 +1657,9 @@ def _junk_broken_now(t):
     f = _peer_fam_bad(url)
     if f:
         return "its IPv%s side doesn't share peers" % f[-1]
-    if float(t.uptime or 0) - _nt_lat_penalty(_nt_region_avg(url)) < 50:
+    if _dead_addrs(t):
+        return "one of its addresses doesn't answer"
+    if float(t.uptime or 0) - _nt_lat_penalty(_nt_lat_ms(t)) < 50:
         return "its score is under 50"
     return None
 
@@ -1701,8 +1707,10 @@ JUNK_BRIDGE = 24 * 3600  # spells out of it shorter than this don't restart that
 
 
 def _broken(st, bad):
-    """Up/Broken: its only faults are a dead IPv4/IPv6 address or one family not sharing peers (the feed ladder: up_bad)."""
-    return st == "up_bad" and bool(bad) and all("address is dead" in b or "side doesn't share peers" in b or "separate servers" in b for b in bad)
+    """Up/Broken: its only faults are a dead IPv4/IPv6 address (or one of its addresses), one family not sharing peers or
+    separate servers (the feed ladder: up_bad)."""
+    return st == "up_bad" and bool(bad) and all("address is dead" in b or "side doesn't share peers" in b or "separate servers" in b
+                                                or "published address" in b for b in bad)
 
 
 def _poor(st, bad):
@@ -2016,7 +2024,7 @@ def _stats(t):
         if len(h) < 336:
             st["ceiling_r"] = int(80.0 + 20.0 * len(h) / 336.0 + 0.5)
             st["ceiling"] = round(80.0 + 20.0 * len(h) / 336.0, 1)  # new-tracker ceiling, rises to 100 over 7 days
-        _ms = _nt_region_avg(t.url)
+        _ms = _nt_lat_ms(t)
         _pen, _ivp = SCORE_PEN.get(t.url) or (_nt_lat_penalty(_ms), _nt_iv_penalty(t.url))  # as at its last score
         st["lat_ms"] = _ms
         st["lat_penalty"] = round(_pen, 2)
@@ -2507,6 +2515,13 @@ def _nt_region_avg(url):
     return round(sum(v) / len(v)) if len(v) >= 2 else None
 
 
+def _nt_lat_ms(t):
+    """The latency the score and status go by: the average across regions, or while fewer than 2 regions have a recent
+    figure, the one shown (from this site's server). Before 2026-10-17 the penalty fell to none then: ibksturm, at
+    1002 ms with only Europe measured, scored 98."""
+    return _nt_region_avg(t.url) or getattr(t, "latency", None) or None
+
+
 IV_OK = (900, 10800)  # announce intervals from 15 minutes to 3 hours cost nothing
 IV_WORST = (120, 86400)  # at 2 minutes or less, or 24 hours or more, the full IV_MAX_PENALTY
 IV_MAX_PENALTY = 5.0
@@ -2530,13 +2545,18 @@ def _nt_iv_penalty(url):
     return round(IV_MAX_PENALTY * min(1.0, frac), 1)
 
 
+LAT_PEN_MAX = 45.0  # under 50 would make a slow tracker Up/Junk (and removed after 30 days) for latency alone
+
+
 def _nt_lat_penalty(ms):
-    # gentle up to 1 s (0.02/ms over 150 ms, max 17), steeper beyond (0.05/ms), capped at 40
+    # 0.04/ms over 150 ms (-6 at 300 ms), 0.06/ms over 300 ms (-18 at 500 ms), capped at 45 (about 950 ms). Steeper since
+    # 2026-10-17 (was 0.02/ms up to 1 s, max 40): slow trackers keep timing out in real clients (qBittorrent), so a
+    # reliable 400 ms tracker now drops under 90, off the clean list (user's call)
     if not ms or ms <= 150:
         return 0.0
-    if ms <= 1000:
-        return (ms - 150) * 0.02
-    return min(40.0, 17.0 + (ms - 1000) * 0.05)
+    if ms <= 300:
+        return (ms - 150) * 0.04
+    return min(LAT_PEN_MAX, 6.0 + (ms - 300) * 0.06)
 
 
 _nt_orig_uu = Tracker.update_uptime
@@ -2546,7 +2566,7 @@ def _nt_uu(self, *a, **k):
     r = _nt_orig_uu(self, *a, **k)
     self._nt_base = self.uptime  # reliability score before the latency penalty (used for premium checks)
     try:
-        lp, ip = _nt_lat_penalty(_nt_region_avg(self.url)), _nt_iv_penalty(self.url)
+        lp, ip = _nt_lat_penalty(_nt_lat_ms(self)), _nt_iv_penalty(self.url)
         SCORE_PEN[self.url] = [round(lp, 3), ip]
         p = lp + ip
         if p and self.uptime:
@@ -2563,12 +2583,55 @@ Tracker.update_uptime = _nt_uu
 BAD_TEXT = {"no_peers": "hands out no peers (3+ of its last 6 peer tests failed)",
             "fake_peers": "returns fake peers (3+ of its last 6 checks)",
             "split_swarm": "runs separate servers that don't share swarms (clients only meet peers on the same server)"}
-PARTIAL = ("dead_ipv", "nopeers_ipv", "split_swarm")  # faults that leave it useful to some clients: Up/Broken
+PARTIAL = ("dead_ipv", "nopeers_ipv", "split_swarm", "dead_addr")  # faults that leave it useful to some clients: Up/Broken
+ADDR_DEAD_FAILS = 3  # an address that failed this many tries in a row, with no answer in the last hour, is dead
+_FAM_HERE = [0.0, set()]  # (when worked out, {False, True}: the families, by "is IPv6", any tracker answered here in the last hour)
 
 
-def _bad_text(code):
+def _fams_here(now):
+    """The IP families this server reaches at all: some tracker answered on it in the last hour. Without IPv6 here, every
+    IPv6 address would look dead."""
+    if now - _FAM_HERE[0] > 60:
+        fams = set()
+        for h in list(scraper.ADDR_HEALTH.values()):
+            for ip, e in list(h.items()):
+                if now - int(e.get("ok") or 0) <= 3600:
+                    fams.add(":" in ip)
+            if len(fams) == 2:
+                break
+        _FAM_HERE[0], _FAM_HERE[1] = now, fams
+    return _FAM_HERE[1]
+
+
+def _dead_addrs(t, now=None):
+    """Its published addresses (DNS records) that don't answer while another one does: every client whose lookup picks
+    one fails (user's call 2026-10-17: any such record makes it Up/Broken, out of the clean lists). A family confirmed
+    dead is the dead-family rule's, so isn't counted here twice."""
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(t.url)
+        port = p.port or (443 if p.scheme == "https" else 80)
+        h = scraper.ADDR_HEALTH.get(scraper._addr_key(p.hostname, port)) or {}
+    except (ValueError, AttributeError):
+        return []
+    now = now or time()
+    seen = {ip: h[ip] for ip in (getattr(t, "ips", None) or []) if ip in h}
+    dead = [ip for ip, e in seen.items() if int(e.get("fails", 0)) >= ADDR_DEAD_FAILS and now - int(e.get("ok") or 0) > 3600]
+    if not dead or not any(not e.get("fails") and e.get("ok") for ip, e in seen.items() if ip not in dead):
+        return []  # none dead, or none answering: that's down, not one bad record
+    df = FAM_FAILS.get(t.url) or {}
+    gone = str(df.get("fam", ""))[-1:] if df.get("n", 0) >= PEER_FAIL_LIMIT else ""
+    here = _fams_here(now)
+    return sorted((ip for ip in dead if (":" in ip) in here and ("6" if ":" in ip else "4") != gone), key=lambda x: (":" in x, x))
+
+
+def _bad_text(code, t=None):
     if code == "answers_elsewhere":
         return ELSEWHERE_TEXT
+    if code == "dead_addr":
+        ips = _dead_addrs(t) if t is not None else []
+        return ("its published address%s %s %s answer (it answers on its others)"
+                % ("es" if len(ips) > 1 else "", ", ".join(ips) or "?", "don't" if len(ips) > 1 else "doesn't"))
     if code.startswith("dead_ipv"):
         return f"its published IPv{code[-1]} address is dead"
     if code.startswith("nopeers_ipv"):
@@ -2615,6 +2678,8 @@ def status_rule(t, pst=None):
         bad.append("nopeers_ipv" + pfb[-1])  # one family doesn't share peers, the other does
     if not peer_fail and _split(url):
         bad.append("split_swarm")  # separate servers not sharing swarms: works for clients on the same one
+    if _dead_addrs(t):
+        bad.append("dead_addr")  # a DNS record pointing at an address that doesn't answer, while another does
     if bad:
         return ("up_broken" if all(x.startswith(PARTIAL) for x in bad) else "up_bad"), bad
     sc = round(float(t.uptime or 0) + _nt_iv_penalty(url))  # the interval penalty is only for ranking, not the status
@@ -2642,14 +2707,14 @@ def feed_state(t, pst=None):
     (_nt_bad_lbl and _broken() tell them apart) and Up/New under 'up_good'. Down while it answers our test clients abroad
     is stored with ELSEWHERE_TEXT, so the not-working clock doesn't run (it stays)."""
     st, codes = status_rule(t, pst)
-    return {"up_broken": "up_bad", "up_new": "up_good"}.get(st, st), [_bad_text(c) for c in codes]
+    return {"up_broken": "up_bad", "up_new": "up_good"}.get(st, st), [_bad_text(c, t) for c in codes]
 
 
 def _nt_bad_lbl(bad):
     # a dead IP family on its own is Up/Broken (same rule as the page); anything else is Up/Bad
     try:
         b = [str(x).lower() for x in (bad or [])]
-        if b and all("separate servers" in x or (("ipv4" in x or "ipv6" in x) and ("peer" not in x or "side doesn't share peers" in x)) for x in b):
+        if b and all("separate servers" in x or "published address" in x or (("ipv4" in x or "ipv6" in x) and ("peer" not in x or "side doesn't share peers" in x)) for x in b):
             return "Up/Broken"
     except Exception:
         pass
