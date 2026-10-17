@@ -1042,7 +1042,7 @@ def _bans(now=None):
 def _bans_page():
     from flask import render_template
     bans = sorted(_bans(), key=lambda b: (-(b["removed"] or 0), b["host"]))  # most recent removal first
-    return render_template("bans.jinja", bans=bans, active="Submitted", title="Banned trackers",
+    return render_template("bans.jinja", bans=bans, active="Bans", title="Banned trackers",
                            description="Public BitTorrent trackers this site removed and can't be submitted again yet: "
                                        "why each was removed and when its ban ends.")
 
