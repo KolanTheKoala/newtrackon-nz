@@ -1261,3 +1261,42 @@ def test_breakdown_is_whole_points_that_add_up(monkeypatch: pytest.MonkeyPatch) 
         assert not st.get("capped")  # a latency that moved since isn't mistaken for a quality cap
         assert isinstance(st["lat_pen_r"], int) and isinstance(st["iv_pen_r"], int)
         assert min(st["base_r"], st.get("ceiling_r", 100)) - st["lat_pen_r"] - st["iv_pen_r"] == int(t.uptime + 0.5), (st, t.uptime)
+
+
+def test_breakdown_shows_the_quality_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A quality-test cap shows its figure, before the penalties, and the rows add up to the score
+    (ibksturm.synology.me 2026-10-18: reliability 98, latency -21, score 29, the 50 it was held to not shown)."""
+    from collections import deque
+    from types import SimpleNamespace
+    monkeypatch.setattr(T, "_nt_region_avg", lambda u: 1000)
+    monkeypatch.setattr(T, "_nt_iv_penalty", lambda u: 0.0)
+    t = SimpleNamespace(url="udp://capped.example:1/announce", historic=deque([1] * 1440, maxlen=1440), uptime=0.0, ips=[])
+    pen = T._nt_lat_penalty(1000)
+    for cap, score in ((50, 50 - pen), (0, 0.0)):
+        t.uptime = score
+        T.SCORE_PEN[t.url], T.SCORE_CAP[t.url] = [pen, 0.0], cap
+        st = T._stats(t)
+        assert st["capped"] and st["cap"] == cap
+        assert st["cap"] - st["lat_pen_r"] - st["iv_pen_r"] == int(t.uptime + 0.5), st
+        if cap == 0:
+            assert st["lat_pen_r"] == 0 and not st["lat_penalty"]  # nothing comes off 0
+    T.SCORE_CAP.pop(t.url)
+    t.uptime = 100 - pen
+    assert not T._stats(t).get("capped")
+
+
+def test_score_records_its_cap(monkeypatch: pytest.MonkeyPatch, sample_tracker) -> None:
+    """update_uptime records the cap it applied (and drops it once none applies), for the page."""
+    from collections import deque
+    sample_tracker.historic = deque([1] * 1440, maxlen=1440)
+    monkeypatch.setitem(T.FAM_FAILS, sample_tracker.url, {"fam": "v6", "n": T.PEER_FAIL_LIMIT})
+    sample_tracker.update_uptime()
+    assert T.SCORE_CAP[sample_tracker.url] == 50 and sample_tracker.uptime <= 50
+    T.FAM_FAILS.pop(sample_tracker.url)
+    from tests.helpers import set_fake_fails
+    set_fake_fails(monkeypatch, sample_tracker.url, T.PEER_FAIL_LIMIT)
+    sample_tracker.update_uptime()
+    assert T.SCORE_CAP[sample_tracker.url] == 0 and sample_tracker.uptime == 0
+    T.FAKE_HIST.pop(sample_tracker.url)
+    sample_tracker.update_uptime()
+    assert sample_tracker.url not in T.SCORE_CAP

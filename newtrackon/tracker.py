@@ -420,14 +420,9 @@ class Tracker:
         self.uptime = availability * stability * 100.0
         # new trackers earn a top score: the ceiling rises from 80 to 100 over the first 7 days (336 slots) of history
         self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
-        if (FAM_FAILS.get(self.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:  # dead published family N times in a row
-            self.uptime = min(self.uptime, 50)  # still works on its other family
-        elif PEER_FAILS.get(self.url, 0) < PEER_FAIL_LIMIT and (_peer_fam_bad(self.url) or _split(self.url) or _dead_addrs(self)):
-            self.uptime = min(self.uptime, 50)  # Up/Broken (partly shares, or one address dead) like a dead family: same cap
-        if FAKE_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # fake peers in N of its last PEER_WINDOW checks
-            self.uptime = 0  # fake peers = not a usable tracker (was: capped at PEER_FAIL_CAP)
-        if PEER_FAILS.get(self.url, 0) >= PEER_FAIL_LIMIT:  # failed the peer test N times in a row
-            self.uptime = 0  # no peers handed out = effectively down
+        cap = _quality_cap(self)
+        if cap is not None:
+            self.uptime = min(self.uptime, cap)
         if getattr(self, "_nt_no_removal", False):
             return  # being accepted (ingest): no removal or ban before its first real check
         # Evict trackers that are dead, or too flaky to be of use as measured from Wellington:
@@ -909,6 +904,9 @@ AMP_T: dict = _url_store("AMP_T", probe="amp_t", protocol=True)  # url -> when t
 # url -> [latency, interval] points taken off at its last score: the page explains the score with these, not with
 # the latency now (measured every 2 h, so it moves between checks)
 SCORE_PEN: dict = _url_store("SCORE_PEN", probe="score_pen")
+# url -> the quality-test cap (50 or 0) its last score was held to, absent if none: the page shows the figure. Its own
+# store, not a third item in SCORE_PEN, so an older image after a rollback still reads SCORE_PEN's pairs
+SCORE_CAP: dict = _url_store("SCORE_CAP", probe="score_cap")
 AMP_EVERY = 86400  # once a day per tracker, like the connection-ID test
 
 
@@ -2006,6 +2004,19 @@ def _nt_avail_stab(historic):
     return availability, (1.0 - flip_rate) ** 2
 
 
+def _quality_cap(t):
+    """The score cap a failed quality test puts on it, or None: 0 for fake peers or no peers handed out (N in its last
+    PEER_WINDOW checks: not a usable tracker), 50 for a dead published family or any other Up/Broken (partly shares,
+    split swarm, one address dead: still works for some)."""
+    if FAKE_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT or PEER_FAILS.get(t.url, 0) >= PEER_FAIL_LIMIT:
+        return 0
+    if (FAM_FAILS.get(t.url) or {}).get("n", 0) >= PEER_FAIL_LIMIT:
+        return 50
+    if _peer_fam_bad(t.url) or _split(t.url) or _dead_addrs(t):
+        return 50
+    return None
+
+
 def _stats(t):
     h = [int(x) for x in (t.historic or [])]
     w = h[-336:]
@@ -2030,15 +2041,23 @@ def _stats(t):
         st["lat_penalty"] = round(_pen, 2)
         st["iv_penalty"] = _ivp
         st["iv"] = ANN_IV.get(t.url)
-        if min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0) > 1.0:
-            st["capped"] = True  # a quality-test cap (fake peers, dead IP family, failed peer test) is holding the score down
-        # whole points for the page's breakdown: when the score is the start figure less the two penalties (not capped,
-        # not saved before the interval changed), they're split so they add up to the shown score; each rounded alone
-        # could be a point out (the raw floats showed as 1.2999999999999998 and 2.7)
+        _top = min(_base, st.get("ceiling", 100.0))
         _start = min(st["base_r"], st.get("ceiling_r", 100))
+        _cap = SCORE_CAP.get(t.url) if t.url in SCORE_PEN else None  # as at its last score, like the penalties
+        if _cap is not None and _cap < _top:
+            st["capped"], st["cap"] = True, int(_cap)  # a quality test holds it to this before the penalties come off
+            _top, _start = float(_cap), int(_cap)
+            if not _cap:
+                _pen = _ivp = 0  # nothing comes off 0: the page shows no penalties rather than points that weren't taken
+                st["lat_penalty"], st["iv_penalty"] = 0, 0
+        elif _top - _pen - _ivp - float(t.uptime or 0) > 1.0:
+            st["capped"] = True  # held down by a cap recorded before SCORE_CAP existed (no figure to show)
+        # whole points for the page's breakdown: when the score is the start figure less the two penalties (not saved
+        # before the interval changed), they're split so they add up to the shown score; each rounded alone could be a
+        # point out (the raw floats showed as 1.2999999999999998 and 2.7)
         _drop = _start - int(float(t.uptime or 0) + 0.5)
         st["iv_pen_r"], st["lat_pen_r"] = int(_ivp + 0.5), int(_pen + 0.5)
-        if abs(min(_base, st.get("ceiling", 100.0)) - _pen - _ivp - float(t.uptime or 0)) <= 1.0 and _drop >= 0:
+        if abs(max(0.0, _top - _pen - _ivp) - float(t.uptime or 0)) <= 1.0 and _drop >= 0:
             st["iv_pen_r"] = min(st["iv_pen_r"], _drop) if _ivp else 0
             st["lat_pen_r"] = _drop - st["iv_pen_r"]
         r = _runs(h, 0)
@@ -2568,6 +2587,11 @@ def _nt_uu(self, *a, **k):
     try:
         lp, ip = _nt_lat_penalty(_nt_lat_ms(self)), _nt_iv_penalty(self.url)
         SCORE_PEN[self.url] = [round(lp, 3), ip]
+        cap = _quality_cap(self)
+        if cap is None:
+            SCORE_CAP.pop(self.url, None)
+        else:
+            SCORE_CAP[self.url] = cap
         p = lp + ip
         if p and self.uptime:
             self.uptime = max(0.0, float(self.uptime) - p)
