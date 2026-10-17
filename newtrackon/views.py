@@ -43,12 +43,27 @@ def _client_ip() -> str:
     return remote
 
 
+SUBMIT_PROSE_WORDS = 30  # more words than this that aren't tracker URLs, outnumbering the URLs: a message, not a list
+
+
+def _not_trackers(text: str) -> str | None:
+    """None if the submission holds tracker URLs, else why it's refused (a pasted message, words with no URL in them).
+    The URLs alone are queued either way: other words are never checked or shown."""
+    urls = ingest.tracker_urls(text)
+    if not urls:
+        return "No tracker URLs found: each one has to start with udp://, http:// or https://, like udp://tracker.example.org:6969/announce"
+    other = len(text.split()) - len(urls)
+    if other > SUBMIT_PROSE_WORDS and other > len(urls):
+        return "That looks like a message, not a list of trackers: submit announce URLs only, one per line"
+    return None
+
+
 def _submission_refused(text: str) -> str | None:
     """None if the submission may be queued, else the reason it's refused. This server's own addresses are exempt."""
     ip = _client_ip()
     if ip in ("127.0.0.1", "::1") or ip in (scraper.my_ipv4, scraper.my_ipv6):
         return None
-    n = len(set(text.lower().split()))
+    n = len(ingest.tracker_urls(text))
     if n > SUBMIT_MAX_URLS:
         return f"Too many trackers in one submission (the limit is {SUBMIT_MAX_URLS})"
     now = time()
@@ -126,8 +141,7 @@ def _listed_in(text: str) -> tuple[list[dict], int]:
     with ingest.submitted_queue.mutex:
         queued = {(urlparse(t.url).hostname or "").lower() for t in list(ingest.submitted_queue.queue)}
     out, new, seen = [], 0, set()
-    for word in text.lower().split()[:SUBMIT_MAX_URLS]:
-        url = ingest.normalise_url(word)
+    for url in ingest.tracker_urls(text)[:SUBMIT_MAX_URLS]:
         try:
             host = (urlparse(url).hostname or "").lower()
         except ValueError:
@@ -156,9 +170,9 @@ def _banned_in(text: str) -> list[dict]:
     from newtrackon import ntextra
 
     out, seen = [], set()
-    for word in text.lower().split()[:SUBMIT_MAX_URLS]:
+    for url in ingest.tracker_urls(text)[:SUBMIT_MAX_URLS]:
         try:
-            host = (urlparse(ingest.normalise_url(word)).hostname or "").lower()
+            host = (urlparse(url).hostname or "").lower()
         except ValueError:
             continue
         if not host or host in seen:
@@ -181,6 +195,8 @@ def new_trackers():
         abort(413)
     elif new_trackers == "":
         return main(form_feedback="EMPTY")
+    elif refused := _not_trackers(new_trackers):
+        return main(form_feedback="LIMIT", form_reason=refused), 400
     elif refused := _submission_refused(new_trackers):
         return main(form_feedback="LIMIT", form_reason=refused), 429
     else:
@@ -199,6 +215,8 @@ def new_trackers_api():
         return abort(400)
     if len(new_trackers) > max_input_length:
         abort(413)
+    if refused := _not_trackers(new_trackers):
+        return Response(refused + "\n", status=400, headers={"Access-Control-Allow-Origin": "*"})
     if refused := _submission_refused(new_trackers):
         return Response(refused + "\n", status=429, headers={"Retry-After": "3600", "Access-Control-Allow-Origin": "*"})
     check_all_trackers = Thread(target=ingest.enqueue_new_trackers, args=(new_trackers,))

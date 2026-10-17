@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from collections import deque
 from ipaddress import ip_address
 from queue import Empty, Full, Queue
@@ -32,6 +33,7 @@ _started: list[float] = [0.0]  # when the item being checked now started  # whil
 logger: logging.Logger = logging.getLogger("newtrackon")
 
 _NT_PRI = {"udp": 0, "http": 1, "https": 2}
+_WS = ("ws", "wss")  # WebTorrent trackers: not checked, but a submitted one is told why (or that its host is banned)
 
 
 def _nt_pri(url: str) -> int:
@@ -180,9 +182,35 @@ def normalise_url(url: str) -> str:
     return p._replace(netloc=netloc[:i] + new + netloc[i + len(host):]).geturl()
 
 
+# a hostname as DNS allows it (punycode once normalised), ending in a top-level domain that starts with a letter
+_HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
+
+
+def is_tracker_url(url: str) -> bool:
+    """A udp://, http:// or https:// URL (or ws:// and wss://, refused later with a reason) with a real hostname (or an IP address, refused later with its own reason) and
+    a valid port. Anything else in a submission is dropped unseen: a message pasted into the box (2026-10-17: every word
+    of a spam mail became a Refused row on Submitted) isn't a list of failed trackers."""
+    try:
+        p = urlparse(url)
+        host, port = p.hostname or "", p.port
+    except ValueError:
+        return False
+    if (p.scheme not in _NT_PRI and p.scheme not in _WS) or (port is not None and not 0 < port < 65536):
+        return False
+    try:
+        ip_address(host)
+        return True
+    except ValueError:
+        return bool(_HOST_RE.match(host))
+
+
+def tracker_urls(text: str) -> list[str]:
+    """The tracker URLs in a submission, lowercased and normalised, each once, in the order given; other words dropped."""
+    return list(dict.fromkeys(u for u in (normalise_url(w) for w in text.lower().split()) if is_tracker_url(u)))
+
+
 def enqueue_new_trackers(input_string: str) -> None:
-    input_string = input_string.lower()
-    new_trackers_list = sorted(dict.fromkeys(normalise_url(u) for u in input_string.split()), key=_nt_pri)
+    new_trackers_list = sorted(tracker_urls(input_string), key=_nt_pri)
     for url in new_trackers_list:
         logger.info("Tracker %s submitted to the queue", url)
         add_one_tracker_to_submitted_queue(url)
@@ -384,6 +412,9 @@ def _denylist_hosts() -> set[str]:
 
 def add_one_tracker_to_submitted_queue(url: str) -> None:
     url = normalise_url(url)
+    if not is_tracker_url(url):
+        logger.info("Not a tracker URL, dropped: %r", url[:100])
+        return
     host = urlparse(url).hostname
     if host and host.lower() in _denylist_hosts() and not _reinstating(host):
         logger.info("Tracker %s denied, host denylisted", url)
@@ -726,3 +757,16 @@ class _NtRejectRows(_nt_logging.Filter):
 
 
 logger.addFilter(_NtRejectRows())
+
+
+def _drop_junk_rows() -> None:
+    """Rows from before submissions were checked for tracker URLs: a word of a pasted message each ('robin', 'regards,')."""
+    keep = [r for r in list(submitted_data) if not (r.get("refused") and r.get("url") and not is_tracker_url(str(r["url"])))]
+    if len(keep) < len(submitted_data):
+        logger.info("Submitted history: dropped %d rows that weren't tracker URLs", len(submitted_data) - len(keep))
+        submitted_data.clear()
+        submitted_data.extend(keep)
+        save_deque_to_disk(submitted_data, submitted_history_file)
+
+
+_drop_junk_rows()
