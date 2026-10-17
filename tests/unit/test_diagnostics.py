@@ -1264,25 +1264,24 @@ def test_breakdown_is_whole_points_that_add_up(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_breakdown_shows_the_quality_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A quality-test cap shows its figure, before the penalties, and the rows add up to the score
-    (ibksturm.synology.me 2026-10-18: reliability 98, latency -21, score 29, the 50 it was held to not shown)."""
+    """A quality-test cap shows its figure, after the penalties: they come off first, then the cap (user's call
+    2026-10-18; ibksturm.synology.me read reliability 98, latency -21, score 29, from 50 - 21)."""
     from collections import deque
     from types import SimpleNamespace
     monkeypatch.setattr(T, "_nt_region_avg", lambda u: 1000)
     monkeypatch.setattr(T, "_nt_iv_penalty", lambda u: 0.0)
     t = SimpleNamespace(url="udp://capped.example:1/announce", historic=deque([1] * 1440, maxlen=1440), uptime=0.0, ips=[])
     pen = T._nt_lat_penalty(1000)
-    for cap, score in ((50, 50 - pen), (0, 0.0)):
-        t.uptime = score
+    for cap in (50, 0):
+        t.uptime = float(cap)
         T.SCORE_PEN[t.url], T.SCORE_CAP[t.url] = [pen, 0.0], cap
         st = T._stats(t)
-        assert st["capped"] and st["cap"] == cap
-        assert st["cap"] - st["lat_pen_r"] - st["iv_pen_r"] == int(t.uptime + 0.5), st
-        if cap == 0:
-            assert st["lat_pen_r"] == 0 and not st["lat_penalty"]  # nothing comes off 0
-    T.SCORE_CAP.pop(t.url)
+        assert st["capped"] and st["cap"] == cap and st["lat_pen_r"] == int(pen + 0.5), st
+    T.SCORE_CAP[t.url] = 80  # 100 - penalty is under the cap: the cap takes nothing, so isn't shown
     t.uptime = 100 - pen
-    assert not T._stats(t).get("capped")
+    st = T._stats(t)
+    assert not st.get("capped") and st["base_r"] - st["lat_pen_r"] == int(t.uptime + 0.5)
+    T.SCORE_CAP.pop(t.url)
 
 
 def test_score_records_its_cap(monkeypatch: pytest.MonkeyPatch, sample_tracker) -> None:
@@ -1290,8 +1289,10 @@ def test_score_records_its_cap(monkeypatch: pytest.MonkeyPatch, sample_tracker) 
     from collections import deque
     sample_tracker.historic = deque([1] * 1440, maxlen=1440)
     monkeypatch.setitem(T.FAM_FAILS, sample_tracker.url, {"fam": "v6", "n": T.PEER_FAIL_LIMIT})
+    monkeypatch.setattr(T, "_nt_lat_ms", lambda t: 1000)
     sample_tracker.update_uptime()
-    assert T.SCORE_CAP[sample_tracker.url] == 50 and sample_tracker.uptime <= 50
+    assert T.SCORE_CAP[sample_tracker.url] == 50
+    assert sample_tracker.uptime == min(50, 100 - T._nt_lat_penalty(1000))  # penalties, then the cap
     T.FAM_FAILS.pop(sample_tracker.url)
     from tests.helpers import set_fake_fails
     set_fake_fails(monkeypatch, sample_tracker.url, T.PEER_FAIL_LIMIT)

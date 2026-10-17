@@ -420,6 +420,7 @@ class Tracker:
         self.uptime = availability * stability * 100.0
         # new trackers earn a top score: the ceiling rises from 80 to 100 over the first 7 days (336 slots) of history
         self.uptime = min(self.uptime, 80.0 + 20.0 * min(1.0, n / 336.0))
+        self._nt_uncapped = self.uptime  # the penalties come off this, then the cap (_nt_uu): user's call 2026-10-18
         cap = _quality_cap(self)
         if cap is not None:
             self.uptime = min(self.uptime, cap)
@@ -2044,20 +2045,14 @@ def _stats(t):
         _top = min(_base, st.get("ceiling", 100.0))
         _start = min(st["base_r"], st.get("ceiling_r", 100))
         _cap = SCORE_CAP.get(t.url) if t.url in SCORE_PEN else None  # as at its last score, like the penalties
-        if _cap is not None and _cap < _top:
-            st["capped"], st["cap"] = True, int(_cap)  # a quality test holds it to this before the penalties come off
-            _top, _start = float(_cap), int(_cap)
-            if not _cap:
-                _pen = _ivp = 0  # nothing comes off 0: the page shows no penalties rather than points that weren't taken
-                st["lat_penalty"], st["iv_penalty"] = 0, 0
-        elif _top - _pen - _ivp - float(t.uptime or 0) > 1.0:
-            st["capped"] = True  # held down by a cap recorded before SCORE_CAP existed (no figure to show)
-        # whole points for the page's breakdown: when the score is the start figure less the two penalties (not saved
-        # before the interval changed), they're split so they add up to the shown score; each rounded alone could be a
-        # point out (the raw floats showed as 1.2999999999999998 and 2.7)
+        if _cap is not None and max(0.0, _top - _pen - _ivp) > _cap:
+            st["capped"], st["cap"] = True, int(_cap)  # a quality test holds it to this after the penalties come off
+        # whole points for the page's breakdown: when the score is the start figure less the two penalties (not capped,
+        # not saved before the interval changed), they're split so they add up to the shown score; each rounded alone
+        # could be a point out (the raw floats showed as 1.2999999999999998 and 2.7)
         _drop = _start - int(float(t.uptime or 0) + 0.5)
         st["iv_pen_r"], st["lat_pen_r"] = int(_ivp + 0.5), int(_pen + 0.5)
-        if abs(max(0.0, _top - _pen - _ivp) - float(t.uptime or 0)) <= 1.0 and _drop >= 0:
+        if not st.get("capped") and abs(max(0.0, _top - _pen - _ivp) - float(t.uptime or 0)) <= 1.0 and _drop >= 0:
             st["iv_pen_r"] = min(st["iv_pen_r"], _drop) if _ivp else 0
             st["lat_pen_r"] = _drop - st["iv_pen_r"]
         r = _runs(h, 0)
@@ -2587,14 +2582,16 @@ def _nt_uu(self, *a, **k):
     try:
         lp, ip = _nt_lat_penalty(_nt_lat_ms(self)), _nt_iv_penalty(self.url)
         SCORE_PEN[self.url] = [round(lp, 3), ip]
+        pre = self.__dict__.pop("_nt_uncapped", self.uptime)  # before any quality-test cap
         cap = _quality_cap(self)
         if cap is None:
             SCORE_CAP.pop(self.url, None)
         else:
             SCORE_CAP[self.url] = cap
-        p = lp + ip
-        if p and self.uptime:
-            self.uptime = max(0.0, float(self.uptime) - p)
+        if self.uptime:  # penalties first, then the cap: a capped tracker with a latency penalty showed 50 - 21 = 29
+            self.uptime = max(0.0, float(pre) - lp - ip)  # (ibksturm.synology.me), now min(98 - 21, 50) = 50
+            if cap is not None:
+                self.uptime = min(self.uptime, cap)
     except Exception:
         pass
     return r
