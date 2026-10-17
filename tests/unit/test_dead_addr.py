@@ -3,6 +3,7 @@ lose more points (2026-10-17)."""
 
 from __future__ import annotations
 
+import copy
 import socket
 from collections import deque
 from time import time
@@ -161,3 +162,22 @@ class TestLatency:
         monkeypatch.setattr(scraper, "_tunnel_rtt", lambda src, fam: 20.0)
         out = scraper.region_latency(U, {"v4": True, "v6": True})
         assert out == {"Oceania: Wellington": 300, "Europe: Zurich": 280, "North America: Dallas": 280}
+
+
+class TestRescoreAtStart:
+    def test_caps_and_penalties_apply_without_waiting_for_a_check(self, sample_tracker) -> None:
+        # after the deploy: Up/Broken trackers still showed 100, ibksturm (1002 ms) had no latency penalty
+        t = _tracker(sample_tracker, ["192.0.2.1", "192.0.2.2"])
+        t.uptime = 100.0
+        _health(**{"192_0_2_1": True, "192_0_2_2": False})
+        slow = copy.copy(t)
+        slow.url, slow.ips, slow.latency, slow.uptime = "https://slow.example:6969/announce", [], 1002, 98.0
+        steady = copy.copy(t)
+        steady.url, steady.ips, steady.latency = "udp://steady.example:1/announce", [], 50
+        steady.update_uptime()
+        before, last = steady.uptime, steady.last_checked
+        changed = T.rescore_all([t, slow, steady])
+        assert t.uptime <= 50 and T.status_rule(t)[0] == "up_broken"
+        assert slow.uptime == 100 - T.LAT_PEN_MAX and T.SCORE_PEN[slow.url][0] == T.LAT_PEN_MAX
+        assert changed == [t, slow] and steady.uptime == before and steady.last_checked == last
+        assert not t.to_be_deleted and not getattr(t, "_nt_no_removal")

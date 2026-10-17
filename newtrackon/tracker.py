@@ -2579,6 +2579,27 @@ def _nt_uu(self, *a, **k):
 Tracker.update_uptime = _nt_uu
 
 
+def rescore_all(trackers):
+    """Work out every tracker's score again from what's stored (history, latency, caps), without the removal rules: run
+    at start, so a change to the score rules shows at once instead of at each tracker's next check (up to 4 h later). It
+    left Up/Broken trackers at 100 and ibksturm's 1002 ms with no latency penalty after the 2026-10-17 deploy.
+    Returns the trackers whose score changed."""
+    changed = []
+    for t in trackers:
+        old = t.uptime
+        t._nt_no_removal = True
+        try:
+            t.update_uptime()
+        except Exception:
+            logger.exception("rescoring %s", t.url)
+            continue
+        finally:
+            t._nt_no_removal = False
+        if t.uptime != old:
+            changed.append(t)
+    return changed
+
+
 # The status rule: the single source for the tracker page, the API, the main table and the event feed.
 BAD_TEXT = {"no_peers": "hands out no peers (3+ of its last 6 peer tests failed)",
             "fake_peers": "returns fake peers (3+ of its last 6 checks)",

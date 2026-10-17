@@ -35,6 +35,13 @@ def build_ip_indexes(trackers: list[Tracker]) -> tuple[dict[str, set[str]], dict
 
 
 def update_outdated_trackers() -> NoReturn:
+    try:  # the score rules may have changed since the last run: apply them now, not at each tracker's next check
+        changed = _T.rescore_all(db.get_all_data())
+        for tracker in changed:
+            db.update_tracker(tracker)
+        logger.info("rescored at start: %d score(s) changed", len(changed))
+    except Exception:
+        logger.exception("rescoring at start failed")
     while True:
         now = int(time())
         try:
