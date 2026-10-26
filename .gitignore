@@ -26,3 +26,7 @@ deploy/www-local/*
 !deploy/www/*.html
 !host/*.sh
 newtrackon/VERSION
+
+# pip install build output
+build/
+*.egg-info/
