@@ -1,0 +1,772 @@
+import json
+import logging
+import re
+from collections import deque
+from ipaddress import ip_address
+from queue import Empty, Full, Queue
+from threading import Lock
+from time import time
+from typing import NoReturn, cast
+from urllib.parse import urlparse
+
+from newtrackon import db
+from newtrackon.persistence import (
+    HistoryData,
+    save_deque_to_disk,
+    submitted_data,
+    submitted_history_file,
+)
+from newtrackon.scraper import attempt_submitted
+from newtrackon.tracker import Tracker
+
+submitted_queue: Queue[Tracker] = Queue(maxsize=10000)
+list_lock: Lock = Lock()
+
+# The queue is kept in memory; its URLs are also saved here, so a restart doesn't drop submissions.
+QUEUE_FILE = "data/submit_queue.json"
+_queue_file_lock: Lock = Lock()
+_in_flight: list[str] = []  # the URL being processed now: saved too, so a restart mid-check doesn't lose it
+_restoring: list[bool] = [False]
+_durations: deque[float] = deque(maxlen=30)  # seconds each recent queue item took, start to saved (for the ETAs)
+_started: list[float] = [0.0]  # when the item being checked now started  # while the saved queue is being re-queued, don't overwrite the file
+
+logger: logging.Logger = logging.getLogger("newtrackon")
+
+_NT_PRI = {"udp": 0, "http": 1, "https": 2}
+_WS = ("ws", "wss")  # WebTorrent trackers: not checked, but a submitted one is told why (or that its host is banned)
+
+
+def _nt_pri(url: str) -> int:
+    # protocol preference: udp first, http next, https last resort
+    return _NT_PRI.get(urlparse(url).scheme, 3)
+
+
+def log_grouped_ip_conflicts(conflicts: dict[str, set[str]], label: str, tracker_url: str) -> None:
+    grouped: dict[tuple[str, ...], list[str]] = {}
+    for ip, hosts in conflicts.items():
+        key = tuple(sorted(hosts))
+        grouped.setdefault(key, []).append(ip)
+    for hosts, ips in grouped.items():
+        ips_sorted = sorted(ips)
+        hosts_str = ", ".join(hosts)
+        logger.info(
+            "Tracker %s denied, %s IP overlap with %s, ips=%s",
+            tracker_url,
+            label,
+            hosts_str,
+            ips_sorted,
+        )
+
+
+def collect_ip_conflicts(tracker_candidate: Tracker, trackers: list[Tracker]) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    current_conflicts: dict[str, set[str]] = {}
+    recent_conflicts: dict[str, set[str]] = {}
+    candidate_host = urlparse(tracker_candidate.url).hostname
+    candidate_ips = tracker_candidate.ips or []
+
+    for tracker in trackers:
+        if candidate_host and tracker.host == candidate_host:
+            continue
+        tracker_ips = set(tracker.ips or [])
+        tracker_recent_ips = set((tracker.recent_ips or {}).keys())
+        for ip in candidate_ips:
+            if ip in tracker_ips:
+                current_conflicts.setdefault(ip, set()).add(tracker.host)
+            elif ip in tracker_recent_ips:
+                recent_conflicts.setdefault(ip, set()).add(tracker.host)
+
+    return current_conflicts, recent_conflicts
+
+
+def log_ip_conflicts(tracker_candidate: Tracker, trackers: list[Tracker]) -> bool:
+    if not tracker_candidate.ips:
+        return False
+    current_conflicts, recent_conflicts = collect_ip_conflicts(tracker_candidate, trackers)
+    if current_conflicts:
+        log_grouped_ip_conflicts(current_conflicts, "current", tracker_candidate.url)
+    if recent_conflicts:
+        log_grouped_ip_conflicts(recent_conflicts, "recent", tracker_candidate.url)
+    return bool(current_conflicts or recent_conflicts)
+
+
+def save_queue() -> None:
+    if _restoring[0]:
+        return
+    with submitted_queue.mutex:
+        urls = [t.url for t in cast("deque[Tracker]", submitted_queue.queue)]
+    urls = list(dict.fromkeys(_in_flight + urls))
+    with _queue_file_lock:
+        from newtrackon import store
+        store.save(urls, QUEUE_FILE)
+
+
+PENDING_SHOWN = 600  # like the history: the submitted page lists at most this many waiting URLs
+
+
+def pending(limit: int = PENDING_SHOWN) -> list[dict[str, object]]:
+    """The submission queue for the submitted page, in processing order (position 1: being checked now, or next)."""
+    with submitted_queue.mutex:
+        waiting = list(cast("deque[Tracker]", submitted_queue.queue))
+    out: list[dict[str, object]] = [{"url": u, "time": 0, "checking": True} for u in list(_in_flight)]
+    seen = {str(p["url"]) for p in out}
+    for t in waiting:
+        if len(out) >= limit:
+            break
+        if t.url not in seen:
+            seen.add(t.url)
+            out.append({"url": t.url, "time": int(t.added or 0), "checking": False})
+    rate = seconds_per_url()
+    # time until its result: what's left of the one being checked now, then each one up to and including it
+    left = max(rate * 0.2, rate - (time() - _started[0])) if _in_flight else 0.0
+    ahead = 1 if _in_flight else 0
+    for n, p in enumerate(out, 1):
+        p["pos"] = n
+        p["eta"] = 0 if p["checking"] else round(left + (n - ahead) * rate)
+    return out
+
+
+def seconds_per_url() -> float:
+    """Average time per queue item over the last 30 (a URL can give several result rows, so rows don't measure it).
+    15 s until 3 have been timed since the last restart."""
+    d = list(_durations)
+    return sum(d) / len(d) if len(d) >= 3 else 15.0
+
+
+def restore_saved_queue() -> None:
+    """Re-queue the URLs saved before the last restart. They go through the normal checks again (denylist, duplicates, same server)."""
+    try:
+        with open(QUEUE_FILE) as f:
+            saved = json.load(f)
+        urls = [u for u in saved if isinstance(u, str)] if isinstance(saved, list) else []
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError):
+        logger.warning("Saved submission queue unreadable, ignored")
+        return
+    if not urls:
+        return
+    logger.info("Restoring %d saved submissions", len(urls))
+    _restoring[0] = True
+    try:
+        for url in urls:
+            try:
+                add_one_tracker_to_submitted_queue(url)
+            except Exception:
+                logger.exception("Could not restore saved submission %s", url)
+    finally:
+        _restoring[0] = False
+    save_queue()
+    logger.info("Restored saved submissions: %d of %d back in the queue", submitted_queue.qsize(), len(urls))
+
+
+def normalise_url(url: str) -> str:
+    """One spelling per host, so bans and duplicate checks can't be dodged: 'tracker.example.' (trailing dot) is
+    'tracker.example', and a Unicode name is written in punycode ('bücher.example' -> 'xn--bcher-kva.example')."""
+    try:
+        p = urlparse(url)
+        host = p.hostname or ""
+    except ValueError:
+        return url
+    new = host.rstrip(".")
+    if not new.isascii():
+        try:
+            new = new.encode("idna").decode("ascii")
+        except UnicodeError:
+            return url  # not a valid name: it won't resolve anyway
+    if new == host:
+        return url
+    netloc = p.netloc
+    i = netloc.lower().rfind(host)
+    if i < 0:
+        return url
+    return p._replace(netloc=netloc[:i] + new + netloc[i + len(host):]).geturl()
+
+
+# a hostname as DNS allows it (punycode once normalised), ending in a top-level domain that starts with a letter
+_HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
+
+
+def is_tracker_url(url: str) -> bool:
+    """A udp://, http:// or https:// URL (or ws:// and wss://, refused later with a reason) with a real hostname (or an IP address, refused later with its own reason) and
+    a valid port. Anything else in a submission is dropped unseen: a message pasted into the box (2026-10-17: every word
+    of a spam mail became a Refused row on Submitted) isn't a list of failed trackers."""
+    try:
+        p = urlparse(url)
+        host, port = p.hostname or "", p.port
+    except ValueError:
+        return False
+    if (p.scheme not in _NT_PRI and p.scheme not in _WS) or (port is not None and not 0 < port < 65536):
+        return False
+    try:
+        ip_address(host)
+        return True
+    except ValueError:
+        return bool(_HOST_RE.match(host))
+
+
+def tracker_urls(text: str) -> list[str]:
+    """The tracker URLs in a submission, lowercased and normalised, each once, in the order given; other words dropped."""
+    return list(dict.fromkeys(u for u in (normalise_url(w) for w in text.lower().split()) if is_tracker_url(u)))
+
+
+def enqueue_new_trackers(input_string: str) -> None:
+    new_trackers_list = sorted(tracker_urls(input_string), key=_nt_pri)
+    for url in new_trackers_list:
+        logger.info("Tracker %s submitted to the queue", url)
+        add_one_tracker_to_submitted_queue(url)
+
+
+REINSTATE_TTL = 3 * 3600
+_REINSTATE_FILE = "data/reinstate.json"
+
+
+def _reinstate_load() -> dict[str, float]:
+    try:
+        with open(_REINSTATE_FILE) as f:
+            d = json.load(f)
+        return {str(k): float(v) for k, v in d.items() if time() - float(v) < REINSTATE_TTL}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _reinstate_save() -> None:
+    from newtrackon import store
+    store.save(REINSTATE, _REINSTATE_FILE)
+
+
+# host -> when its operator asked: one pass past its ban (covers both checks). Saved, so a restart between the two
+# checks doesn't turn the second one into a 'banned' refusal.
+REINSTATE: dict[str, float] = _reinstate_load()
+
+# A new tracker must answer twice, CONFIRM_DELAY apart, before it's listed: one answer from a machine that then goes
+# away for good (a home PC on a dynamic address) no longer gets it listed. {submitted url: {"t": first answer, "queued": bool}}
+CONFIRM_DELAY = 1800
+CONFIRM_FILE = "data/confirm.json"
+CONFIRM: dict[str, dict] = __import__("newtrackon.store", fromlist=["load"]).load(CONFIRM_FILE)
+
+
+def _confirm_save() -> None:
+    from newtrackon import store
+    store.save(CONFIRM, CONFIRM_FILE)
+
+
+# A submitted tracker that doesn't answer on any protocol gets one more try RETRY_DELAY later (a tracker that answers
+# 70% of the time would otherwise fail its two checks about half the time). {url: {"t": due, "second": confirm entry or
+# None, "done": bool}}, saved; done entries are kept RETRY_KEEP so a second failure isn't retried again.
+RETRY_DELAY = 600
+RETRY_KEEP = 3 * 3600
+RETRY_FILE = "data/submit_retry.json"
+RETRY: dict[str, dict] = __import__("newtrackon.store", fromlist=["load"]).load(RETRY_FILE)
+
+
+def _retry_save() -> None:
+    from newtrackon import store
+    store.save(RETRY, RETRY_FILE)
+
+
+def _retry_later(url: str, second: dict | None) -> bool:
+    """Schedule the one retry for a check that got no answer. False if it already had its retry."""
+    e = RETRY.get(url)
+    if e and e.get("done"):
+        return False
+    RETRY[url] = {"t": int(time()) + RETRY_DELAY, "second": second, "done": False}
+    _retry_save()
+    return True
+
+
+def retry_due(now: float | None = None) -> None:
+    """From the check loop: run each retry that's due (once), and forget old ones."""
+    now = now or time()
+    changed = False
+    for url, e in list(RETRY.items()):
+        if e.get("done"):
+            if now - e["t"] > RETRY_KEEP:
+                RETRY.pop(url, None)
+                changed = True
+            continue
+        if now >= e["t"]:
+            e["done"] = True
+            changed = True
+            if e.get("second"):  # it was the second check: the retry counts as that one
+                CONFIRM[url] = e["second"]
+                _confirm_save()
+            __import__("threading").Thread(target=add_one_tracker_to_submitted_queue, args=(url,), daemon=True).start()
+    if changed:
+        _retry_save()
+
+
+def confirm_due(now: float | None = None) -> None:
+    """From the check loop: queue each tracker whose second check is due. Entries whose second check never ran are dropped."""
+    now = now or time()
+    changed = False
+    for url, e in list(CONFIRM.items()):
+        if e.get("queued"):
+            if now - e["t"] > CONFIRM_DELAY + 4 * 3600:
+                CONFIRM.pop(url, None)
+                changed = True
+            continue
+        if now - e["t"] >= CONFIRM_DELAY:
+            e["queued"] = True
+            changed = True
+            __import__("threading").Thread(target=add_one_tracker_to_submitted_queue, args=(url,), daemon=True).start()
+    if changed:
+        _confirm_save()
+
+
+def confirming(now: float | None = None) -> list[dict[str, object]]:
+    """Trackers waiting for their second check, for the submitted page, newest first."""
+    now = now or time()
+    return [{"url": u, "eta": max(0, int(e["t"] + CONFIRM_DELAY - now))}
+            for u, e in sorted(CONFIRM.items(), key=lambda x: -x[1]["t"]) if not e.get("queued")]
+
+
+def _mark_not_upgraded(url: str, want: str, listed: str) -> None:
+    """The submitted page's row for an upgrade that didn't happen: grey, not a failure (the tracker is fine)."""
+    if submitted_data and submitted_data[0].get("url") == url:
+        row = submitted_data[0]
+        info = row.get("info")
+        first = info[0] if isinstance(info, list) and info else info if isinstance(info, str) else ""
+        row.update({"status": 0, "noupgrade": True,
+                    "info": [f"Not upgraded: {want} isn't answering on this port. It stays listed as {listed}.", first]})
+
+
+def _mark_confirm_row(url: str) -> None:
+    """The submitted page's row for a first answer: pending, not accepted yet."""
+    if submitted_data and submitted_data[0].get("url") == url:
+        row = submitted_data[0]
+        info = row.get("info")
+        first = info[0] if isinstance(info, list) and info else info if isinstance(info, str) else ""
+        said = ("Answered our test client abroad, not this site's server." if row.get("abroad") else "Answered.")
+        row.update({"status": 0, "confirm": True,
+                    "info": [first, said + " It's checked again in 30 minutes, and listed if it answers then too."]})
+
+
+def _attempt_abroad(url: str) -> tuple[int, str, int] | None:
+    """A tracker being reinstated that doesn't answer this server (it refuses it, or the route from here is broken) but
+    answers our test clients in other countries: it can be listed again, shown as Down from NZ, like a listed tracker
+    that does that (user's call, 2026-10-12). Only for reinstatements: a new submission is still checked from this
+    server. Not when its DNS sets where or whether to connect (BEP 34): the check from here follows that.
+    (interval, url, latency) from that answer, logged on the submitted page, or None."""
+    import pprint
+    from newtrackon import scraper
+    try:
+        bep_34, _ = scraper.get_bep_34(urlparse(url).hostname)
+    except Exception:
+        bep_34 = True
+    if bep_34:
+        return None
+    got = scraper.announce_via_exits(url)
+    if not got:
+        return None
+    resp, ms, where = got
+    interval = resp.get("interval")
+    if not isinstance(interval, int):
+        return None
+    # the peers it handed out are left out: for a fresh torrent that's our own test client abroad
+    shown = {k: v for k, v in resp.items() if k not in ("peers", "peers6", "external ip")}
+    pretty = scraper.redact_origin(pprint.PrettyPrinter(width=999999, compact=True).pformat(shown))
+    submitted_data.appendleft({"url": url, "time": int(time()), "ip": "", "status": 1, "abroad": True,
+                               "info": [pretty, "No answer from this site's server, but our test client in %s got this "
+                                                "one: it's listed as Down from NZ." % where]})
+    logger.info("Tracker %s doesn't answer this server, but answers our test client in %s", url, where)
+    return interval, url, ms
+
+
+def _reinstating(host: str) -> bool:
+    t = REINSTATE.get((host or "").lower())
+    return t is not None and time() - t < REINSTATE_TTL
+
+
+def reinstate(host: str, url: str) -> None:
+    """A removed tracker's operator pressed 'Check again now': check it like a new submission, past its ban.
+    If it's accepted it's listed again and the ban is lifted; if not, nothing changes."""
+    REINSTATE[host.lower()] = time()
+    _reinstate_save()
+    add_one_tracker_to_submitted_queue(url)
+
+
+def _lift_ban(host: str) -> None:
+    """Remove the host's dated (30-day) denylist lines. Permanent entries (no date) are never touched."""
+    from newtrackon.tracker import _DENY_LOCK
+    path = "data/denylist.txt"
+    try:
+        with _DENY_LOCK, open(path, "r+", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+            keep = [ln for ln in lines if not (ln.split()[:1] == [host] and len(ln.split()) > 1 and ln.split()[1].isdigit())]
+            if keep != lines:
+                f.seek(0)
+                f.write("\n".join(keep) + "\n")
+                f.truncate()
+    except FileNotFoundError:
+        pass  # no denylist: no ban to lift
+    except OSError:
+        logger.exception("could not lift the ban on %s", host)
+
+
+def _denylist_hosts() -> set[str]:
+    """Hosts banned right now: permanent entries, and dated ones (30 or 90 days) that haven't run out."""
+    from newtrackon.tracker import _nt_ban_entries
+    now = time()
+    return {h for h, since, days in _nt_ban_entries() if since is None or now - since <= days * 86400}
+
+
+def add_one_tracker_to_submitted_queue(url: str) -> None:
+    url = normalise_url(url)
+    if not is_tracker_url(url):
+        logger.info("Not a tracker URL, dropped: %r", url[:100])
+        return
+    host = urlparse(url).hostname
+    if host and host.lower() in _denylist_hosts() and not _reinstating(host):
+        logger.info("Tracker %s denied, host denylisted", url)
+        return
+
+    try:
+        parsed_url = urlparse(url)
+        if parsed_url.hostname:
+            _ = ip_address(parsed_url.hostname)
+            logger.info("Tracker %s denied, hostname is IP", url)
+            return
+    except ValueError:
+        pass
+    with submitted_queue.mutex:
+        queued_trackers = list(cast("deque[Tracker]", submitted_queue.queue))
+    if url in CONFIRM and not CONFIRM[url].get("queued"):
+        logger.info("Tracker %s denied, already waiting for its second check", url)
+        return
+    for tracker_in_queue in queued_trackers:
+        if urlparse(tracker_in_queue.url).netloc == urlparse(url).netloc and urlparse(tracker_in_queue.url).scheme == urlparse(url).scheme:
+            logger.info("Tracker %s denied, already in the queue", url)
+            return
+    with list_lock:
+        trackers_in_db = db.get_all_data()
+    for tracker in trackers_in_db:
+        if tracker.host == urlparse(url).hostname:
+            if _nt_pri(url) < _nt_pri(tracker.url):
+                logger.info("Tracker %s queued as a possible protocol upgrade of %s", url, tracker.url)
+                break
+            logger.info(
+                "Tracker %s denied, already being tracked as %s",
+                url,
+                tracker.url,
+            )
+            return
+    try:
+        tracker_candidate = Tracker.from_url(url)
+    except (RuntimeError, ValueError) as e:
+        logger.info("Tracker %s preprocessing failed, reason: %s", url, e)
+        return
+    if tracker_candidate.ips and trackers_in_db and log_ip_conflicts(tracker_candidate, trackers_in_db):
+        return
+    # a new name for a banned tracker's server is still that tracker. Not a name this site removed whose operator pressed
+    # "Check again now": that's the server being fixed, and checking its sister names' bans (removed with it) refused
+    # each of them because of the other, so none could ever come back
+    if tracker_candidate.ips and not _reinstating(host or ""):
+        from newtrackon.tracker import _nt_ban_ips
+        listed = {ip for t in (trackers_in_db or []) for ip in (t.ips or [])}
+        hit = _nt_ban_ips(tracker_candidate.ips, listed_ips=listed)
+        if hit:
+            logger.info("Tracker %s denied, same server as banned %s", url, hit)
+            return
+    try:
+        submitted_queue.put_nowait(tracker_candidate)
+    except Full:
+        logger.info("Tracker %s denied, submission queue is full", url)
+        return
+    logger.info("Tracker %s added to the submitted queue", url)
+    save_queue()
+
+
+def _process_one(tracker) -> None:
+    """Check one submission from the queue (the worker's loop, and process_submitted_queue for tests)."""
+    _in_flight[:] = [tracker.url]
+    _started[0] = time()
+    try:
+        process_new_tracker(tracker)
+        save_deque_to_disk(submitted_data, submitted_history_file)
+    except Exception:
+        logger.exception("Unhandled error while processing submitted tracker %s", tracker.url)
+    finally:
+        _in_flight.clear()
+        submitted_queue.task_done()
+        save_queue()
+        _durations.append(time() - _started[0])
+
+
+def process_submitted_queue() -> None:
+    """Check everything in the queue now, then return."""
+    while True:
+        try:
+            tracker = submitted_queue.get_nowait()
+        except Empty:
+            break
+        _process_one(tracker)
+
+
+def submission_worker() -> NoReturn:
+    while True:
+        _process_one(submitted_queue.get())
+
+
+def _closed_on_submit(url: str) -> str | None:
+    """Private or whitelist-only, by the warning in the answer just recorded for this URL: the reason, or None."""
+    import re
+    from newtrackon.tracker import _nt_closed_reason
+    row = submitted_data[0] if submitted_data else None
+    if not row or row.get("status") != 1 or row.get("url") != url:
+        return None
+    info = row.get("info")
+    text = "\n".join(str(x) for x in info) if isinstance(info, list) else str(info or "")  # not str(list): that escapes quotes
+    m = re.search(r"""'warning message': (?:'([^']*)'|"([^"]*)")""", text)  # a message with a ' is printed in ""
+    why = _nt_closed_reason(m.group(1) or m.group(2)) if m else None
+    return f"being {why}" if why and why.startswith("a ") else (f"saying {why}" if why else None)
+
+
+def process_new_tracker(tracker_candidate: Tracker) -> None:
+    logger.info("Processing new tracker: %s", tracker_candidate.url)
+    submitted_url = tracker_candidate.url
+    second = CONFIRM.pop(submitted_url, None)  # this is its second check (if it fails below, it simply isn't listed)
+    if second is not None:
+        _confirm_save()
+    with list_lock:
+        trackers_in_db = db.get_all_data()
+    old: Tracker | None = None
+    cand_host = urlparse(tracker_candidate.url).hostname
+    for tracker in trackers_in_db:
+        if tracker.host == cand_host:
+            if _nt_pri(tracker_candidate.url) < _nt_pri(tracker.url):
+                old = tracker
+                continue
+            logger.info(
+                "Tracker %s denied, already being tracked as %s",
+                tracker_candidate.url,
+                tracker.url,
+            )
+            return
+    with submitted_queue.mutex:
+        waiting = list(cast("deque[Tracker]", submitted_queue.queue))
+    if any(urlparse(q.url).hostname == cand_host and _nt_pri(q.url) < _nt_pri(tracker_candidate.url) for q in waiting):
+        logger.info("Tracker %s deferred, a better-protocol version of the same host is queued", tracker_candidate.url)
+        try:
+            submitted_queue.put_nowait(tracker_candidate)
+        except Full:
+            pass
+        save_queue()
+        return
+    if tracker_candidate.ips and trackers_in_db and log_ip_conflicts(tracker_candidate, trackers_in_db):
+        return
+
+    tracker_candidate.last_downtime = int(time())
+    tracker_candidate.last_checked = int(time())
+    abroad = False  # answered only our test clients abroad (a reinstatement of a tracker that blocks this server)
+    try:
+        (
+            tracker_candidate.interval,
+            tracker_candidate.url,
+            tracker_candidate.latency,
+        ) = attempt_submitted(tracker_candidate.url)
+    except RuntimeError:  # no answer on any protocol
+        got = _attempt_abroad(submitted_url) if _reinstating((cand_host or "").lower()) else None
+        if got is None:
+            if _retry_later(submitted_url, second):
+                logger.info("Tracker %s didn't answer: one more try in %d min", submitted_url, RETRY_DELAY // 60)
+            return
+        tracker_candidate.interval, tracker_candidate.url, tracker_candidate.latency = got
+        abroad = True
+    except ValueError:
+        return
+    if not tracker_candidate.interval:
+        log_wrong_interval_denial("missing interval field")
+        return
+    if old is not None and _nt_pri(tracker_candidate.url) >= _nt_pri(old.url):
+        # submitted as a better protocol (UDP for a listed HTTP tracker), but only the listed one answered: the checks
+        # fall back from UDP to HTTP(S) on the same port. It isn't an upgrade, so the listed tracker is left alone.
+        want = urlparse(submitted_url).scheme.upper()
+        _mark_not_upgraded(tracker_candidate.url, want, old.url)
+        logger.info("Tracker %s not upgraded: %s not answering, stays listed as %s", submitted_url, want, old.url)
+        return
+    closed = _closed_on_submit(tracker_candidate.url)
+    if closed:
+        log_wrong_interval_denial(closed)
+        return
+    if CONFIRM_DELAY > 0 and (second is None or time() - second["t"] < CONFIRM_DELAY - 120):
+        CONFIRM[submitted_url] = {"t": int(time()), "queued": False}
+        _confirm_save()
+        _mark_confirm_row(tracker_candidate.url)
+        logger.info("Tracker %s answered: checked again in %d min before it's listed", submitted_url, CONFIRM_DELAY // 60)
+        return
+    # Any announce interval is accepted: this instance sets its own adaptive check interval and never uses the tracker's.
+    tracker_candidate.update_ipapi_data()
+    from newtrackon import tracker as _t
+    if old is None:
+        # a new listing (also a resubmission after its ban, or a reinstatement): judged on its own checks from now on,
+        # not on records an earlier listing of the URL left behind (its old peer-test failures, a dead address...)
+        for u in {tracker_candidate.url, (_t.REMOVED.get((cand_host or "").lower()) or {}).get("url")} - {None}:
+            _t._protocol_reset(u)
+    if _reinstating((cand_host or "").lower()):
+        _restore_history(tracker_candidate, (cand_host or "").lower())
+        _t._reinstated_mark(tracker_candidate.url)  # 3 days before the 15% rule judges its restored week
+    if old is not None:
+        for a in ("historic", "added", "last_downtime", "last_uptime", "recent_ips"):
+            if hasattr(old, a):
+                try:
+                    setattr(tracker_candidate, a, getattr(old, a))
+                except Exception:
+                    pass
+    if abroad:  # no answer here, only from our test clients abroad: Down from NZ, as a listed tracker doing that is
+        tracker_candidate._nt_partial = True
+        tracker_candidate.is_down()
+    else:
+        tracker_candidate.is_up()
+    tracker_candidate._nt_no_removal = True  # its score only: the removal rules wait for its first real check
+    try:
+        tracker_candidate.update_uptime()
+    finally:
+        tracker_candidate._nt_no_removal = False
+    if old is not None:
+        with list_lock:
+            db.delete_tracker(old)
+        logger.info("Tracker %s replaced by %s (preferred protocol)", old.url, tracker_candidate.url)
+    db.insert_new_tracker(tracker_candidate)
+    logger.info("New tracker %s added to newTrackon", tracker_candidate.url)
+    if old is not None:  # same tracker, better protocol: its records follow it
+        from newtrackon import tracker as _t
+        _t._nt_migrate_url(old.url, tracker_candidate.url)
+        _t._protocol_reset(tracker_candidate.url)  # judged on the new protocol's own tests
+    host = (cand_host or "").lower()
+    if _reinstating(host):
+        REINSTATE.pop(host, None)
+        _reinstate_save()
+        _lift_ban(host)
+        _keep_upbad_clock(host, tracker_candidate.url)
+        if tracker_candidate.url not in _t.LAST_STATE:  # so its first check doesn't post "added to the list" as well
+            _t.LAST_STATE[tracker_candidate.url] = {"st": None, "bad": None, "dead": None, "since": int(time())}
+            _t._jsave(_t.LAST_STATE, _t._LAST_STATE_FILE)
+        logger.info("Tracker %s reinstated at its operator's request: ban lifted", tracker_candidate.url)
+        _t._event(tracker_candidate.url, "added", "is back on the list at its operator's request" +
+                  (" (Down from NZ: it answers our test clients abroad, not this site's server)" if abroad else ""))
+    if (_t.REMOVED.get(host) or {}).get("fault"):  # removed by a fault in our checks (scripts/nt_admin.py reinstate)
+        _t.REMOVED.pop(host, None)  # listed again, however it was submitted: the record goes, so it never counts
+        _t._jsave(_t.REMOVED, _t._REMOVED_FILE)
+        logger.info("Tracker %s: removal was our fault, its removal record is deleted", tracker_candidate.url)
+
+
+def _restore_history(t: Tracker, host: str) -> None:
+    """A reinstated tracker gets back its last week of uptime and its listing date, so a tracker that's still flaky
+    is judged at its next checks (the 15% rule) instead of starting clean."""
+    from newtrackon import tracker as _t
+    r = _t.REMOVED.get(host) or {}
+    hist = str(r.get("hist") or "")
+    if hist:
+        t.historic = deque(({"1": 1, "h": 0.5}.get(c, 0) for c in hist), maxlen=_t.HISTORIC_SLOTS)
+    if r.get("added"):
+        t.added = int(r["added"])
+
+
+def _keep_upbad_clock(host: str, url: str) -> None:
+    """Removed for Up/Bad: carry its 5 days over, so a tracker that's still Up/Bad goes again at its next checks
+    instead of getting a fresh 5 days. A recovery of 12 hours or more resets it as usual."""
+    from newtrackon import tracker as _t
+    if _t._removal_kind(_t.REMOVED.get(host) or {}) != "upbad":
+        return
+    now = int(time())
+    # the clock alone, with no state: a stored "Up/Bad" here made its first check (peer tests reset, so not Up/Bad yet)
+    # post "is Up/Good again" to the feed even when it wasn't fixed. Counted only if it's Up/Bad again within 12 hours.
+    _t.LAST_STATE[url] = {"st": None, "bad": None, "dead": None, "since": now, "bad_since": now - _t.REMOVE_DAYS * 86400,
+                          "bad_left": now}
+    _t._jsave(_t.LAST_STATE, _t._LAST_STATE_FILE)
+
+
+def log_wrong_interval_denial(reason: str) -> None:
+    if not submitted_data:
+        logger.warning("Interval rejection without submitted debug entry: %s", reason)
+        return
+    debug: HistoryData = submitted_data.popleft()
+    info = debug["info"]
+    first_info = info[0] if isinstance(info, list) and info else info if isinstance(info, str) else ""
+    debug.update(
+        {
+            "status": 0,
+            "info": [
+                first_info,
+                f"Tracker rejected for {reason}",
+            ],
+        }
+    )
+    submitted_data.appendleft(debug)
+
+
+# --- show silent refusals on the Submitted page as Refused: same-server aliases, bare IPs, names that don't resolve,
+# duplicates, banned hosts this site removed (other denylist entries stay private), a full queue
+import logging as _nt_logging
+from time import time as _nt_time
+
+
+def _ban_reason(url: str) -> str | None:
+    """Why a banned host was refused, for hosts this site removed; None (no row) for any other denylist entry."""
+    from newtrackon import ntextra
+    host = (urlparse(url).hostname or "").lower()
+    b = ntextra._ban(host)
+    if not b or not b["active"]:
+        return None
+    if b["until"] is None:
+        return "Banned from the list"
+    return "Banned until %s: removed from the list on %s" % (ntextra._date(b["until"]), ntextra._date(ntextra.T.REMOVED[host]["t"]))
+
+
+class _NtRejectRows(_nt_logging.Filter):
+    def filter(self, record):
+        try:
+            m, a = str(record.msg), (record.args or ())
+            why = ip = ban_host = None
+            if m.startswith("Tracker %s denied, %s IP overlap with %s"):
+                ips = [str(x) for x in (a[3] if isinstance(a[3], (list, tuple, set)) else [a[3]])]
+                ip = next((x for x in ips if ":" not in x), ips[0] if ips else "")
+                why = "Same server as %s, which is already listed" % a[2]
+            elif m.startswith("Tracker %s denied, hostname is IP"):
+                why = "Bare IP addresses are not accepted, a hostname is needed"
+            elif m.startswith("Tracker %s preprocessing failed"):
+                why = str(a[1])[:120]
+            elif _restoring[0]:
+                pass  # re-queuing the saved queue at startup: not a submission
+            elif m.startswith("Tracker %s denied, already in the queue"):
+                why = "Already waiting in the queue"
+            elif m.startswith("Tracker %s denied, already waiting for its second check"):
+                why = "Already answered once: waiting for its second check"
+            elif m.startswith("Tracker %s denied, already being tracked as %s"):
+                why = "Already listed as %s" % a[1]
+            elif m.startswith("Tracker %s denied, submission queue is full"):
+                why = "The queue is full, please try again later"
+            elif m.startswith("Tracker %s denied, host denylisted"):
+                why = _ban_reason(str(a[0]))
+                ban_host = (urlparse(str(a[0])).hostname or "").lower()
+            elif m.startswith("Tracker %s denied, same server as banned %s"):
+                b = _ban_reason("udp://%s:1/" % a[1])
+                why = "Same server as the banned tracker %s. %s" % (a[1], b) if b else None
+                ban_host = str(a[1])
+            if why:
+                url, now = str(a[0]), int(_nt_time())
+                dup = any(r.get("url") == url and why in (r.get("info") or []) and now - int(r.get("time") or 0) < 86400 for r in list(submitted_data))
+                if not dup:
+                    row = {"url": url, "time": now, "ip": ip or "", "info": [why], "status": 0, "refused": True}
+                    if ban_host:
+                        row["ban_host"] = ban_host  # the banned tracker's page explains it
+                    submitted_data.appendleft(row)
+        except Exception:
+            pass
+        return True
+
+
+logger.addFilter(_NtRejectRows())
+
+
+def _drop_junk_rows() -> None:
+    """Rows from before submissions were checked for tracker URLs: a word of a pasted message each ('robin', 'regards,')."""
+    keep = [r for r in list(submitted_data) if not (r.get("refused") and r.get("url") and not is_tracker_url(str(r["url"])))]
+    if len(keep) < len(submitted_data):
+        logger.info("Submitted history: dropped %d rows that weren't tracker URLs", len(submitted_data) - len(keep))
+        submitted_data.clear()
+        submitted_data.extend(keep)
+        save_deque_to_disk(submitted_data, submitted_history_file)
+
+
+_drop_junk_rows()

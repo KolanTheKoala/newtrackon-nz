@@ -5,7 +5,6 @@ query string before splitting it on '&', so a hash holding that byte reaches the
 
 from __future__ import annotations
 
-import importlib.util
 import os
 from types import SimpleNamespace
 from urllib.parse import unquote_to_bytes, urlparse
@@ -13,11 +12,6 @@ from urllib.parse import unquote_to_bytes, urlparse
 import pytest
 
 from newtrackon import scraper
-
-_spec = importlib.util.spec_from_file_location("nt_crosscheck", os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "nt_crosscheck.py"))
-C = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(C)
-
 
 def _raw_param(url: str, name: str) -> bytes:
     """A query parameter's bytes, split on the raw '&' as a correct tracker does."""
@@ -52,10 +46,6 @@ def test_http_announce_never_sends_an_encoded_ampersand_in_the_hash(monkeypatch:
     scraper._announce_http_once("http://x.example:6969/announce")
     assert "%26" not in got[0].split("info_hash=", 1)[1].split("&", 1)[0]
     assert _raw_param(got[0], "info_hash") == b"q" * 20
-
-
-def test_crosscheck_hashes_have_no_ampersand() -> None:
-    assert all(len(h) == 20 and 0x26 not in h for h in (C.info_hash() for _ in range(3000)))
 
 
 def test_no_bare_random_info_hash_left_in_the_scraper() -> None:

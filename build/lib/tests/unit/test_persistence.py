@@ -1,0 +1,494 @@
+"""Unit tests for the persistence module."""
+
+from __future__ import annotations
+
+import json
+from collections import deque
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from newtrackon.persistence import HistoryData
+from newtrackon.tracker import Tracker
+from tests.helpers import make_history
+
+
+class TestBufferMaxsizeValues:
+    """Test that buffers have correct size limits."""
+
+    def test_submitted_queue_maxsize(self) -> None:
+        """Verify submitted_queue has maxsize of 10000."""
+        from newtrackon import ingest
+
+        assert ingest.submitted_queue.maxsize == 10000
+
+    def test_raw_data_maxlen(self) -> None:
+        """Verify raw_data has maxlen of 600."""
+        from newtrackon import persistence
+
+        assert persistence.raw_data.maxlen == 600
+
+    def test_submitted_data_maxlen(self) -> None:
+        """Verify submitted_data has maxlen of 600."""
+        from newtrackon import persistence
+
+        assert persistence.submitted_data.maxlen == 600
+
+
+class TestSaveDequeToDisk:
+    """Test save_deque_to_disk function."""
+
+    def test_save_empty_deque(self, tmp_path: Path) -> None:
+        """Test saving an empty deque writes empty JSON array."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "empty.json"
+        empty_deque: deque[HistoryData] = deque(maxlen=100)
+
+        save_deque_to_disk(empty_deque, str(filepath))
+
+        assert filepath.exists()
+        with open(filepath) as f:
+            data = cast(object, json.load(f))
+        assert data == []
+
+    def test_save_deque_with_history_data(self, tmp_path: Path) -> None:
+        """Test saving a deque with HistoryData."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "history.json"
+        test_data: list[HistoryData] = [
+            {"url": "udp://tracker1.com:6969", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": []},
+            {"url": "http://tracker2.com/announce", "time": 1700000001, "status": 0, "ip": "5.6.7.8", "info": "error"},
+            {"url": "wss://tracker3.com/announce", "time": 1700000002, "status": 1, "ip": "9.10.11.12", "info": []},
+        ]
+        test_deque: deque[HistoryData] = deque(test_data, maxlen=100)
+
+        save_deque_to_disk(test_deque, str(filepath))
+
+        with open(filepath) as f:
+            data = cast(object, json.load(f))
+        assert data == test_data
+
+    def test_save_deque_with_dicts(self, tmp_path: Path) -> None:
+        """Test saving a deque with dictionary data."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "dicts.json"
+        test_data: list[HistoryData] = [
+            {"url": "udp://tracker1.com:6969", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": []},
+            {"url": "http://tracker2.com/announce", "time": 1700000001, "status": 0, "ip": "5.6.7.8", "info": "failed"},
+        ]
+        test_deque: deque[HistoryData] = deque(test_data, maxlen=100)
+
+        save_deque_to_disk(test_deque, str(filepath))
+
+        with open(filepath) as f:
+            data = cast(object, json.load(f))
+        assert data == test_data
+
+    def test_save_deque_with_nested_data(self, tmp_path: Path) -> None:
+        """Test saving a deque with nested structures (info as list)."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "nested.json"
+        test_data: list[HistoryData] = [
+            {"url": "udp://example.com:6969", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": ["peer1", "peer2"]},
+            {"url": "http://test.com/announce", "time": 1700000001, "status": 0, "ip": "5.6.7.8", "info": []},
+        ]
+        test_deque: deque[HistoryData] = deque(test_data, maxlen=100)
+
+        save_deque_to_disk(test_deque, str(filepath))
+
+        with open(filepath) as f:
+            data = cast(object, json.load(f))
+        assert data == test_data
+
+    def test_save_deque_with_multiple_items(self, tmp_path: Path) -> None:
+        """Test saving a deque with multiple HistoryData items."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "multiple.json"
+        test_data: list[HistoryData] = [
+            {"url": "udp://tracker0.com:6969", "time": 1700000000, "status": 0, "ip": "1.2.3.0", "info": []},
+            {"url": "udp://tracker1.com:6969", "time": 1700000001, "status": 1, "ip": "1.2.3.1", "info": []},
+            {"url": "udp://tracker2.com:6969", "time": 1700000002, "status": 0, "ip": "1.2.3.2", "info": []},
+            {"url": "udp://tracker3.com:6969", "time": 1700000003, "status": 1, "ip": "1.2.3.3", "info": []},
+            {"url": "udp://tracker4.com:6969", "time": 1700000004, "status": 0, "ip": "1.2.3.4", "info": []},
+        ]
+        test_deque: deque[HistoryData] = deque(test_data, maxlen=100)
+
+        save_deque_to_disk(test_deque, str(filepath))
+
+        with open(filepath) as f:
+            data = cast(object, json.load(f))
+        assert data == test_data
+
+    def test_save_deque_overwrites_existing_file(self, tmp_path: Path) -> None:
+        """Test that saving overwrites existing file content."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "overwrite.json"
+        # Write initial content
+        with open(filepath, "w") as f:
+            json.dump([{"url": "old", "time": 0, "status": 0, "ip": "0.0.0.0", "info": []}], f)
+
+        # Overwrite with new data
+        new_data: list[HistoryData] = [
+            {"url": "udp://new.tracker:6969", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": []},
+            {"url": "http://updated.tracker/announce", "time": 1700000001, "status": 1, "ip": "5.6.7.8", "info": []},
+        ]
+        new_deque: deque[HistoryData] = deque(new_data, maxlen=100)
+        save_deque_to_disk(new_deque, str(filepath))
+
+        with open(filepath) as f:
+            data = cast(object, json.load(f))
+        assert data == new_data
+
+    def test_save_deque_creates_valid_json(self, tmp_path: Path) -> None:
+        """Test that output is valid parseable JSON."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "valid.json"
+        test_data: list[HistoryData] = [
+            {"url": "udp://test.tracker:6969", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": []},
+        ]
+        test_deque: deque[HistoryData] = deque(test_data, maxlen=100)
+
+        save_deque_to_disk(test_deque, str(filepath))
+
+        # Should not raise JSONDecodeError
+        with open(filepath) as f:
+            content = f.read()
+        json.loads(content)
+
+
+class TestBufferOverflow:
+    """Test that buffers correctly handle overflow at their size limits."""
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_submitted_queue_overflow(self, sample_tracker: Tracker) -> None:
+        """Test submitted_queue rejects inserts when full."""
+        from queue import Full
+
+        from newtrackon import ingest
+
+        maxsize = ingest.submitted_queue.maxsize
+
+        # Fill queue to capacity
+        for _ in range(maxsize):
+            ingest.submitted_queue.put_nowait(sample_tracker)
+
+        assert ingest.submitted_queue.qsize() == maxsize
+
+        # Adding one more item should fail
+        with pytest.raises(Full):
+            ingest.submitted_queue.put_nowait(sample_tracker)
+
+        assert ingest.submitted_queue.qsize() == maxsize
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_raw_data_overflow(self) -> None:
+        """Test raw_data removes oldest when full."""
+        from newtrackon import persistence
+
+        maxlen = persistence.raw_data.maxlen
+        assert maxlen is not None
+
+        # Fill deque to capacity
+        for i in range(maxlen):
+            persistence.raw_data.append(make_history(i))
+
+        assert len(persistence.raw_data) == maxlen
+        assert persistence.raw_data[0] == make_history(0)
+
+        # Add one more item
+        persistence.raw_data.append(make_history(maxlen))
+
+        assert len(persistence.raw_data) == maxlen
+        assert persistence.raw_data[0] == make_history(1)
+        assert persistence.raw_data[-1] == make_history(maxlen)
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_submitted_data_overflow(self) -> None:
+        """Test submitted_data removes oldest when full."""
+        from newtrackon import persistence
+
+        maxlen = persistence.submitted_data.maxlen
+        assert maxlen is not None
+
+        # Fill deque to capacity
+        for i in range(maxlen):
+            persistence.submitted_data.append(make_history(i))
+
+        assert len(persistence.submitted_data) == maxlen
+        assert persistence.submitted_data[0] == make_history(0)
+
+        # Add one more item
+        persistence.submitted_data.append(make_history(maxlen))
+
+        assert len(persistence.submitted_data) == maxlen
+        assert persistence.submitted_data[0] == make_history(1)
+        assert persistence.submitted_data[-1] == make_history(maxlen)
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_history_fifo_order_preserved(self) -> None:
+        """Test that FIFO order is maintained during overflow."""
+        test_buffer: deque[int] = deque(maxlen=5)
+
+        # Add items
+        for i in range(10):
+            test_buffer.append(i)
+
+        # Should contain last 5 items in order
+        assert list(test_buffer) == [5, 6, 7, 8, 9]
+
+
+class TestEmptyBufferHandling:
+    """Test handling of empty buffers."""
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_empty_submitted_queue(self) -> None:
+        """Test empty submitted_queue buffer."""
+        from newtrackon import ingest
+
+        assert ingest.submitted_queue.qsize() == 0
+        assert ingest.submitted_queue.maxsize == 10000
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_empty_raw_data(self) -> None:
+        """Test empty raw_data buffer."""
+        from newtrackon import persistence
+
+        assert len(persistence.raw_data) == 0
+        assert list(persistence.raw_data) == []
+        assert persistence.raw_data.maxlen == 600
+
+    @pytest.mark.usefixtures("empty_queues")
+    def test_empty_submitted_data(self) -> None:
+        """Test empty submitted_data buffer."""
+        from newtrackon import persistence
+
+        assert len(persistence.submitted_data) == 0
+        assert list(persistence.submitted_data) == []
+        assert persistence.submitted_data.maxlen == 600
+
+    def test_save_and_load_empty_history(self, tmp_path: Path) -> None:
+        """Test saving and loading an empty history buffer."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "empty_test.json"
+        empty_history: deque[HistoryData] = deque(maxlen=600)
+
+        save_deque_to_disk(empty_history, str(filepath))
+
+        with open(filepath) as f:
+            loaded_data = cast(list[HistoryData], json.load(f))
+
+        restored_history: deque[HistoryData] = deque(loaded_data, maxlen=600)
+        assert len(restored_history) == 0
+        assert restored_history.maxlen == 600
+
+
+class TestLoadingBehavior:
+    """Test module loading behavior with different file states."""
+
+    def test_loading_with_existing_raw_data_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that raw_data is loaded from file when it exists."""
+        # Create test data file
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        raw_file = data_dir / "raw_data.json"
+        test_data = [{"url": "tracker1.com"}, {"url": "tracker2.com"}]
+        with open(raw_file, "w") as f:
+            json.dump(test_data, f)
+
+        monkeypatch.chdir(tmp_path)
+
+        # Force reimport of the module
+        import importlib
+
+        from newtrackon import ingest, persistence
+
+        _ = importlib.reload(persistence)
+
+        # Also reload trackon to update its references to the new deques
+        from newtrackon import trackon
+
+        _ = importlib.reload(trackon)
+
+        _ = importlib.reload(ingest)
+
+        assert len(persistence.raw_data) == 2
+        assert list(persistence.raw_data) == test_data
+
+    def test_loading_with_existing_submitted_data_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that submitted_data is loaded from file when it exists."""
+        # Create test data file
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        submitted_file = data_dir / "submitted_data.json"
+        test_data = [{"result": "success"}, {"result": "failed"}]
+        with open(submitted_file, "w") as f:
+            json.dump(test_data, f)
+
+        monkeypatch.chdir(tmp_path)
+
+        # Force reimport of the module
+        import importlib
+
+        from newtrackon import ingest, persistence
+
+        _ = importlib.reload(persistence)
+
+        # Also reload trackon to update its references to the new deques
+        from newtrackon import trackon
+
+        _ = importlib.reload(trackon)
+
+        _ = importlib.reload(ingest)
+
+        assert len(persistence.submitted_data) == 2
+        assert list(persistence.submitted_data) == test_data
+
+    def test_loading_without_existing_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that empty deques are created when files don't exist."""
+
+        monkeypatch.chdir(tmp_path)
+
+        # Force reimport of the module
+        import importlib
+
+        from newtrackon import ingest, persistence
+
+        _ = importlib.reload(persistence)
+
+        # Also reload trackon to update its references to the new deques
+        from newtrackon import trackon
+
+        _ = importlib.reload(trackon)
+
+        _ = importlib.reload(ingest)
+
+        assert len(persistence.raw_data) == 0
+        assert len(persistence.submitted_data) == 0
+        assert persistence.raw_data.maxlen == 600
+        assert persistence.submitted_data.maxlen == 600
+
+    def test_loaded_data_respects_maxlen(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that loaded data is truncated to maxlen if file has more items."""
+        # Create test data file with more than 600 items
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        raw_file = data_dir / "raw_data.json"
+        test_data = [make_history(i) for i in range(700)]  # More than maxlen of 600
+        with open(raw_file, "w") as f:
+            json.dump(test_data, f)
+
+        monkeypatch.chdir(tmp_path)
+
+        # Force reimport of the module
+        import importlib
+
+        from newtrackon import ingest, persistence
+
+        _ = importlib.reload(persistence)
+
+        # Also reload trackon to update its references to the new deques
+        from newtrackon import trackon
+
+        _ = importlib.reload(trackon)
+
+        _ = importlib.reload(ingest)
+
+        # Deque should only keep last 600 items
+        assert len(persistence.raw_data) == 600
+        assert persistence.raw_data[0] == make_history(100)  # First 100 items discarded
+        assert persistence.raw_data[-1] == make_history(699)
+
+
+class TestFilePathConstants:
+    """Test file path constant values."""
+
+    def test_raw_history_file_path(self) -> None:
+        """Test raw_history_file constant value."""
+        from newtrackon import persistence
+
+        assert persistence.raw_history_file == "data/raw_data.json"
+
+    def test_submitted_history_file_path(self) -> None:
+        """Test submitted_history_file constant value."""
+        from newtrackon import persistence
+
+        assert persistence.submitted_history_file == "data/submitted_data.json"
+
+
+class TestRoundTripPersistence:
+    """Test saving and loading deques preserves data."""
+
+    def test_round_trip_with_tracker_data(self, tmp_path: Path) -> None:
+        """Test that tracker data survives save/load cycle."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "trackers.json"
+        original_data: list[HistoryData] = [
+            {"url": "udp://tracker1.example.com:6969/announce", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": []},
+            {"url": "http://tracker2.example.com:80/announce", "time": 1700000001, "status": 1, "ip": "5.6.7.8", "info": []},
+            {"url": "wss://tracker3.example.com/announce", "time": 1700000002, "status": 1, "ip": "9.10.11.12", "info": []},
+        ]
+        original_deque: deque[HistoryData] = deque(original_data, maxlen=10000)
+
+        save_deque_to_disk(original_deque, str(filepath))
+
+        with open(filepath) as f:
+            loaded_data = cast(list[HistoryData], json.load(f))
+
+        restored_deque: deque[HistoryData] = deque(loaded_data, maxlen=10000)
+
+        assert list(restored_deque) == list(original_deque)
+        assert restored_deque.maxlen == original_deque.maxlen
+
+    def test_round_trip_with_submission_data(self, tmp_path: Path) -> None:
+        """Test that submission result data survives save/load cycle."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "submissions.json"
+        original_data: list[HistoryData] = [
+            {"url": "udp://tracker1.com:6969", "time": 1700000000, "status": 1, "ip": "1.2.3.4", "info": "added"},
+            {"url": "udp://tracker2.com:6969", "time": 1700000001, "status": 0, "ip": "5.6.7.8", "info": "duplicate"},
+            {"url": "udp://tracker3.com:6969", "time": 1700000002, "status": 0, "ip": "9.10.11.12", "info": "invalid"},
+        ]
+        original_deque: deque[HistoryData] = deque(original_data, maxlen=600)
+
+        save_deque_to_disk(original_deque, str(filepath))
+
+        with open(filepath) as f:
+            loaded_data = cast(list[HistoryData], json.load(f))
+
+        restored_deque: deque[HistoryData] = deque(loaded_data, maxlen=600)
+
+        assert list(restored_deque) == list(original_deque)
+
+    def test_round_trip_preserves_order(self, tmp_path: Path) -> None:
+        """Test that item order is preserved through save/load cycle."""
+        from newtrackon.persistence import save_deque_to_disk
+
+        filepath = tmp_path / "ordered.json"
+        original_data: list[HistoryData] = [
+            {"url": "udp://tracker1.com:6969", "time": 1700000001, "status": 1, "ip": "1.2.3.1", "info": []},
+            {"url": "udp://tracker2.com:6969", "time": 1700000002, "status": 1, "ip": "1.2.3.2", "info": []},
+            {"url": "udp://tracker3.com:6969", "time": 1700000003, "status": 1, "ip": "1.2.3.3", "info": []},
+            {"url": "udp://tracker4.com:6969", "time": 1700000004, "status": 1, "ip": "1.2.3.4", "info": []},
+            {"url": "udp://tracker5.com:6969", "time": 1700000005, "status": 1, "ip": "1.2.3.5", "info": []},
+        ]
+        original_deque: deque[HistoryData] = deque(original_data, maxlen=600)
+
+        save_deque_to_disk(original_deque, str(filepath))
+
+        with open(filepath) as f:
+            loaded_data = cast(list[HistoryData], json.load(f))
+
+        restored_deque: deque[HistoryData] = deque(loaded_data, maxlen=600)
+
+        assert list(restored_deque) == original_data
